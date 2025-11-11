@@ -1,0 +1,4 @@
+function main(): i32 {
+  print("Hello from HiLow!");
+  return 0;
+}

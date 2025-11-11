@@ -1,0 +1,9 @@
+function main(): i32 {
+  let a: i32 = 10;
+  let b: i32 = 20;
+  let sum: i32 = a + b;
+  let diff: i32 = b - a;
+  let prod: i32 = a * b;
+  let quot: i32 = b / a;
+  return sum + diff + prod + quot;
+}
