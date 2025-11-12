@@ -1,0 +1,56 @@
+function main(): i32 {
+    print("=== Control Flow Test ===");
+
+    let result: i32 = 0;
+
+    if (true) {
+        result += 1;
+    }
+
+    if (false) {
+        result += 100;
+    } else {
+        result += 2;
+    }
+
+    let i: i32 = 0;
+    while (i < 3) {
+        result += 1;
+        i += 1;
+    }
+
+    for (let j: i32 = 0; j < 2; j += 1) {
+        result += 1;
+    }
+
+    let arr: [i32; 3] = [1, 1, 1];
+    for (val in arr) {
+        result += val;
+    }
+
+    switch (2) {
+        case 1:
+            result += 100;
+            break;
+        case 2:
+            result += 10;
+            break;
+        default:
+            result += 200;
+            break;
+    }
+
+    let matched: i32 = match 3 {
+        1 => 100,
+        2 => 200,
+        3 => 300,
+        _ => 999
+    };
+
+    result += matched;
+
+    print(f"Final result: {result}");
+    print("All control flow works!");
+
+    return result;
+}
