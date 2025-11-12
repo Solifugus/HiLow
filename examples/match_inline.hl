@@ -1,0 +1,24 @@
+function main(): i32 {
+    let x: i32 = 2;
+
+    let msg: i32 = match x {
+        0 => 10,
+        1 => 20,
+        2 => 30,
+        _ => 99
+    };
+
+    print(f"Result: {msg}");
+
+    let y: i32 = 5;
+    let category: i32 = match y {
+        1 => 111,
+        2 => 222,
+        3 => 333,
+        _ => 444
+    };
+
+    print(f"Category: {category}");
+
+    return msg + category;
+}

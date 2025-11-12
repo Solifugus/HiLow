@@ -1240,6 +1240,34 @@ impl CodeGenerator {
                 }
             }
 
+            Expression::Match { expr, arms } => {
+                use crate::ast::MatchPattern;
+
+                // Generate match as a statement expression with switch
+                self.emit_no_indent("({ int32_t __match_result; switch (");
+                self.generate_expression(expr)?;
+                self.emit_no_indent(") {");
+
+                for (i, arm) in arms.iter().enumerate() {
+                    match &arm.pattern {
+                        MatchPattern::Literal(lit_expr) => {
+                            self.emit_no_indent(" case ");
+                            self.generate_expression(lit_expr)?;
+                            self.emit_no_indent(": __match_result = ");
+                            self.generate_expression(&arm.body)?;
+                            self.emit_no_indent("; break;");
+                        }
+                        MatchPattern::Wildcard => {
+                            self.emit_no_indent(" default: __match_result = ");
+                            self.generate_expression(&arm.body)?;
+                            self.emit_no_indent("; break;");
+                        }
+                    }
+                }
+
+                self.emit_no_indent(" } __match_result; })");
+            }
+
             Expression::FunctionExpression { params, return_type, body } => {
                 use std::collections::HashSet;
 

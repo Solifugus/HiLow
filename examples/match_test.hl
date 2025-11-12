@@ -1,0 +1,31 @@
+function classify(x: i32): i32 {
+    let result: i32 = match x {
+        0 => 100,
+        1 => 200,
+        2 => 300,
+        _ => 999
+    };
+
+    return result;
+}
+
+function main(): i32 {
+    print("=== Match Expression Test ===");
+
+    let r0: i32 = classify(0);
+    print(f"classify(0) = {r0}");
+
+    let r1: i32 = classify(1);
+    print(f"classify(1) = {r1}");
+
+    let r2: i32 = classify(2);
+    print(f"classify(2) = {r2}");
+
+    let r9: i32 = classify(9);
+    print(f"classify(9) = {r9}");
+
+    let total: i32 = r0 + r1 + r2 + r9;
+    print(f"Total: {total}");
+
+    return total;
+}

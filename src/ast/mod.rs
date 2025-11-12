@@ -166,6 +166,22 @@ pub enum Expression {
         return_type: Option<Type>,
         body: Block,
     },
+    Match {
+        expr: Box<Expression>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: Expression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchPattern {
+    Literal(Expression),
+    Wildcard,
 }
 
 #[derive(Debug, Clone, PartialEq)]

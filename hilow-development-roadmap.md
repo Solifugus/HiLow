@@ -4,7 +4,7 @@ This roadmap outlines the development of the HiLow programming language from ini
 
 **Last Updated**: 2025-11-11
 **Current Phase**: Core Language Complete - Ready for Watch/Verification/Optimization
-**Status**: Phases 0-6 Complete, 7-8-11-12 Partial ✓ (~45% of roadmap)
+**Status**: Phases 0-6, 5.3 Complete, 7-8-11-12 Partial ✓ (~46% of roadmap)
 
 ## Phase 0: Project Foundation ✓ COMPLETE
 
@@ -551,31 +551,44 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 
 ---
 
-## Phase 5.3: Pattern Matching (Basic) (NEW)
+## Phase 5.3: Pattern Matching (Basic) ✓ COMPLETE
 
-**Status**: Not started - after Phase 5.2
-**Rationale**: match keyword exists, just need codegen (like switch but cleaner)
+**Status**: Complete (2025-11-11)
+**Rationale**: match keyword exists, implemented as expression returning values
 
 ### Pattern Matching Features
-- [ ] Basic match expressions (value matching only)
-- [ ] Wildcard pattern (_)
-- [ ] Generate as enhanced switch statement
+- [x] Basic match expressions (value matching only) ✓
+- [x] Wildcard pattern (_) ✓
+- [x] Generate as statement expression with switch ✓
+- [x] Match returns value (expression, not statement) ✓
 
 **Deferred from Phase 5.3:**
-- Range patterns (1..10) → Phase 6
-- Guards (when clauses) → Phase 6
+- Range patterns (1..10) → Future
+- Guards (when clauses) → Future
 - Exhaustiveness checking → Phase 10 (prover)
 
 **Testing:**
-- [ ] Test basic match
-- [ ] Test wildcard
-- [ ] Test vs switch equivalent
+- [x] Test basic match ✓ (match_test.hl)
+- [x] Test wildcard ✓ (default case works)
+- [x] Test match as expression ✓ (match_inline.hl)
+- [x] Test vs switch equivalent ✓ (both work)
 
 **Validation Checkpoint:**
-- [ ] Calculator using match
-- [ ] All tests pass
+- [x] Match expressions work ✓
+- [x] Match returns values correctly ✓
+- [x] All tests pass ✓
 
-**Time Estimate:** 2-3 hours
+**Implementation:**
+- Match as Expression (not Statement like switch)
+- MatchArm with pattern and body expression
+- MatchPattern: Literal or Wildcard
+- Generated as C statement expression: ({ switch(...) result; })
+- Wildcard maps to default case
+
+**Examples Working:**
+- match x { 0 => 10, 1 => 20, _ => 99 }
+- Inline: let result = match value { ... };
+- Returns 1599 (100+200+300+999) in match_test.hl
 
 ---
 
@@ -1392,6 +1405,7 @@ This roadmap is ambitious but realistic with a small dedicated team or active co
 - ✅ **Phase 5.0**: Objects and Prototypes (Basic) (2025-11-11)
 - ✅ **Phase 5.1**: Complete String Methods (2025-11-11)
 - ✅ **Phase 5.2**: Array Methods and Dynamic Arrays (2025-11-11)
+- ✅ **Phase 5.3**: Pattern Matching (Basic) (2025-11-11)
 - ✅ **Phase 6**: Functions and Closures (2025-11-11)
 - ⚡ **Phase 7**: Defer Statement (2025-11-11) - Stack/heap deferred
 - ⚡ **Phase 8**: Nothing Type (2025-11-11) - Time/money deferred

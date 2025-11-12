@@ -803,6 +803,40 @@ impl Parser {
                     body,
                 })
             }
+            TokenKind::Match => {
+                self.advance();
+                let expr = Box::new(self.parse_expression()?);
+                self.expect(TokenKind::LeftBrace)?;
+
+                let mut arms = Vec::new();
+
+                while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+                    // Parse pattern
+                    let pattern = if self.peek().kind == TokenKind::Identifier("_".to_string()) {
+                        self.advance();
+                        crate::ast::MatchPattern::Wildcard
+                    } else {
+                        let pattern_expr = self.parse_primary()?;
+                        crate::ast::MatchPattern::Literal(pattern_expr)
+                    };
+
+                    self.expect(TokenKind::Arrow)?;
+
+                    // Parse body expression
+                    let body = self.parse_expression()?;
+
+                    arms.push(crate::ast::MatchArm { pattern, body });
+
+                    // Comma is optional before closing brace
+                    if !self.match_token(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+
+                self.expect(TokenKind::RightBrace)?;
+
+                Ok(Expression::Match { expr, arms })
+            }
             TokenKind::Nothing => {
                 self.advance();
                 Ok(Expression::NothingLiteral)
