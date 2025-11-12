@@ -1,0 +1,32 @@
+function calculate(op: i32, a: i32, b: i32): i32 {
+    let result: i32 = 0;
+
+    switch (op) {
+        case 1:
+            result = a + b;
+            break;
+        case 2:
+            result = a - b;
+            break;
+        case 3:
+            result = a * b;
+            break;
+        case 4:
+            result = a / b;
+            break;
+        default:
+            result = 0;
+            break;
+    }
+
+    return result;
+}
+
+function main(): i32 {
+    let add: i32 = calculate(1, 10, 5);
+    let sub: i32 = calculate(2, 10, 5);
+    let mul: i32 = calculate(3, 10, 5);
+    let div: i32 = calculate(4, 10, 5);
+
+    return add + sub + mul + div;
+}

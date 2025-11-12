@@ -336,6 +336,44 @@ impl CodeGenerator {
                 self.emit("}");
             }
 
+            Statement::Break => {
+                self.emit("break;");
+            }
+
+            Statement::Continue => {
+                self.emit("continue;");
+            }
+
+            Statement::Switch { expr, cases, default } => {
+                self.emit_no_indent(&self.indent());
+                self.emit_no_indent("switch (");
+                self.generate_expression(expr)?;
+                self.emit_no_indent(") {\n");
+
+                self.indent_level += 1;
+
+                for case in cases {
+                    self.emit_no_indent(&self.indent());
+                    self.emit_no_indent("case ");
+                    self.generate_expression(&case.value)?;
+                    self.emit_no_indent(":\n");
+
+                    self.indent_level += 1;
+                    self.generate_block(&case.body)?;
+                    self.indent_level -= 1;
+                }
+
+                if let Some(default_block) = default {
+                    self.emit("default:");
+                    self.indent_level += 1;
+                    self.generate_block(default_block)?;
+                    self.indent_level -= 1;
+                }
+
+                self.indent_level -= 1;
+                self.emit("}");
+            }
+
             Statement::Block(block) => {
                 self.emit("{");
                 self.indent_level += 1;

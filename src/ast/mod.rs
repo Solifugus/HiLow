@@ -42,7 +42,20 @@ pub enum Statement {
         iterable: Expression,
         body: Block,
     },
+    Break,
+    Continue,
+    Switch {
+        expr: Expression,
+        cases: Vec<SwitchCase>,
+        default: Option<Block>,
+    },
     Block(Block),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    pub value: Expression,
+    pub body: Block,
 }
 
 #[derive(Debug, Clone, PartialEq)]

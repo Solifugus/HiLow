@@ -29,6 +29,17 @@ impl Parser {
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
             TokenKind::For => self.parse_for(),
+            TokenKind::Break => {
+                self.advance();
+                self.consume_semicolon()?;
+                Ok(Statement::Break)
+            }
+            TokenKind::Continue => {
+                self.advance();
+                self.consume_semicolon()?;
+                Ok(Statement::Continue)
+            }
+            TokenKind::Switch => self.parse_switch(),
             TokenKind::LeftBrace => self.parse_block_statement(),
             _ => {
                 let expr = self.parse_expression()?;
@@ -219,6 +230,63 @@ impl Parser {
         })
     }
 
+    fn parse_switch(&mut self) -> Result<Statement, String> {
+        use crate::ast::SwitchCase;
+
+        self.expect(TokenKind::Switch)?;
+        self.expect(TokenKind::LeftParen)?;
+        let expr = self.parse_expression()?;
+        self.expect(TokenKind::RightParen)?;
+        self.expect(TokenKind::LeftBrace)?;
+
+        let mut cases = Vec::new();
+        let mut default = None;
+
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            if self.match_token(&TokenKind::Case) {
+                let value = self.parse_expression()?;
+                self.expect(TokenKind::Colon)?;
+
+                let mut case_statements = Vec::new();
+                while !self.check(&TokenKind::Case)
+                    && !self.check(&TokenKind::Default)
+                    && !self.check(&TokenKind::RightBrace) {
+                    case_statements.push(self.parse_statement()?);
+                }
+
+                cases.push(SwitchCase {
+                    value,
+                    body: Block {
+                        statements: case_statements,
+                    },
+                });
+            } else if self.match_token(&TokenKind::Default) {
+                self.expect(TokenKind::Colon)?;
+
+                let mut default_statements = Vec::new();
+                while !self.check(&TokenKind::Case)
+                    && !self.check(&TokenKind::Default)
+                    && !self.check(&TokenKind::RightBrace) {
+                    default_statements.push(self.parse_statement()?);
+                }
+
+                default = Some(Block {
+                    statements: default_statements,
+                });
+            } else {
+                return Err(format!("Expected 'case' or 'default' in switch statement, got {:?}", self.peek().kind));
+            }
+        }
+
+        self.expect(TokenKind::RightBrace)?;
+
+        Ok(Statement::Switch {
+            expr,
+            cases,
+            default,
+        })
+    }
+
     fn parse_block_statement(&mut self) -> Result<Statement, String> {
         Ok(Statement::Block(self.parse_block()?))
     }
@@ -298,6 +366,34 @@ impl Parser {
             return Ok(Expression::Assignment {
                 target: Box::new(expr),
                 value: Box::new(value),
+            });
+        }
+
+        // Handle compound assignments: +=, -=, *=, /=, %=
+        let op = if self.match_token(&TokenKind::PlusEqual) {
+            Some(BinaryOp::Add)
+        } else if self.match_token(&TokenKind::MinusEqual) {
+            Some(BinaryOp::Subtract)
+        } else if self.match_token(&TokenKind::StarEqual) {
+            Some(BinaryOp::Multiply)
+        } else if self.match_token(&TokenKind::SlashEqual) {
+            Some(BinaryOp::Divide)
+        } else if self.match_token(&TokenKind::PercentEqual) {
+            Some(BinaryOp::Modulo)
+        } else {
+            None
+        };
+
+        if let Some(binary_op) = op {
+            let value = self.parse_assignment()?;
+            // Transform `a += b` into `a = a + b`
+            return Ok(Expression::Assignment {
+                target: Box::new(expr.clone()),
+                value: Box::new(Expression::Binary {
+                    left: Box::new(expr),
+                    op: binary_op,
+                    right: Box::new(value),
+                }),
             });
         }
 
