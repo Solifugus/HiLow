@@ -1,8 +1,15 @@
 use crate::ast::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::process::Command;
+
+#[derive(Clone)]
+struct LambdaInfo {
+    name: String,
+    captured_vars: HashSet<String>,
+    context_struct: String,
+}
 
 pub struct CodeGenerator {
     output: String,
@@ -10,6 +17,7 @@ pub struct CodeGenerator {
     variables: HashMap<String, String>,
     lambda_counter: usize,
     lambda_functions: Vec<String>,
+    lambda_info: Vec<LambdaInfo>,
 }
 
 impl CodeGenerator {
@@ -20,6 +28,7 @@ impl CodeGenerator {
             variables: HashMap::new(),
             lambda_counter: 0,
             lambda_functions: Vec::new(),
+            lambda_info: Vec::new(),
         }
     }
 
@@ -211,8 +220,9 @@ impl CodeGenerator {
         self.emit("");
 
         // Second pass: Generate actual function definitions
-        // Copy the lambda_functions from temp_gen so they're available for reference
+        // Copy the lambda_functions and lambda_info from temp_gen
         self.lambda_functions = temp_gen.lambda_functions.clone();
+        self.lambda_info = temp_gen.lambda_info.clone();
         for stmt in &program.statements {
             self.generate_statement(stmt)?;
         }
@@ -1028,9 +1038,19 @@ impl CodeGenerator {
             }
 
             Expression::FunctionExpression { params, return_type, body } => {
+                use std::collections::HashSet;
+
                 // Generate a unique lambda function name
                 let lambda_name = format!("__lambda_{}", self.lambda_counter);
+                let context_name = format!("__context_{}", self.lambda_counter);
                 self.lambda_counter += 1;
+
+                // Detect captured variables
+                let mut param_names = HashSet::new();
+                for param in params {
+                    param_names.insert(param.name.clone());
+                }
+                let captured_vars = body.find_free_variables(&param_names);
 
                 // Build the function signature
                 let ret_type = return_type
@@ -1039,6 +1059,15 @@ impl CodeGenerator {
                     .unwrap_or_else(|| "void".to_string());
 
                 let mut func_def = String::new();
+
+                // Generate global variables for captured variables (simplified approach)
+                if !captured_vars.is_empty() {
+                    for var_name in &captured_vars {
+                        func_def.push_str(&format!("int32_t __captured_{};\n", var_name));
+                    }
+                    func_def.push_str("\n");
+                }
+
                 func_def.push_str(&ret_type);
                 func_def.push_str(" ");
                 func_def.push_str(&lambda_name);
@@ -1054,6 +1083,14 @@ impl CodeGenerator {
                 }
 
                 func_def.push_str(") {\n");
+
+                // For captured variables, use #define to alias them to globals
+                // This way assignments work correctly
+                if !captured_vars.is_empty() {
+                    for var_name in &captured_vars {
+                        func_def.push_str(&format!("#define {} __captured_{}\n", var_name, var_name));
+                    }
+                }
 
                 // Save current output and indent to generate body
                 let saved_output = self.output.clone();
@@ -1072,12 +1109,36 @@ impl CodeGenerator {
                 self.indent_level = saved_indent;
 
                 func_def.push_str(&body_code);
+
+                // Undefine the captured variable aliases
+                if !captured_vars.is_empty() {
+                    for var_name in &captured_vars {
+                        func_def.push_str(&format!("#undef {}\n", var_name));
+                    }
+                }
+
                 func_def.push_str("}\n\n");
 
                 self.lambda_functions.push(func_def);
 
-                // In the expression, just use the function name (function pointer)
-                self.emit_no_indent(&lambda_name);
+                // Store lambda info for later use
+                self.lambda_info.push(LambdaInfo {
+                    name: lambda_name.clone(),
+                    captured_vars: captured_vars.clone(),
+                    context_struct: context_name.clone(),
+                });
+
+                // Set captured variables before emitting the function reference
+                if !captured_vars.is_empty() {
+                    self.emit_no_indent("({");
+                    for var_name in &captured_vars {
+                        self.emit_no_indent(&format!("__captured_{} = {}; ", var_name, var_name));
+                    }
+                    self.emit_no_indent(&format!("{}; ", lambda_name));
+                    self.emit_no_indent("})");
+                } else {
+                    self.emit_no_indent(&lambda_name);
+                }
             }
         }
 

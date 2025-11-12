@@ -1,0 +1,86 @@
+function test_function_expressions(): i32 {
+    print("=== Function Expressions ===");
+
+    let add: function = function(a: i32, b: i32): i32 {
+        return a + b;
+    };
+
+    let result: i32 = add(10, 20);
+    print(f"add(10, 20) = {result}");
+
+    return result;
+}
+
+function apply_op(x: i32, y: i32, op: function): i32 {
+    return op(x, y);
+}
+
+function test_higher_order(): i32 {
+    print("=== Higher-Order Functions ===");
+
+    let multiply: function = function(a: i32, b: i32): i32 {
+        return a * b;
+    };
+
+    let result: i32 = apply_op(7, 6, multiply);
+    print(f"apply_op(7, 6, multiply) = {result}");
+
+    return result;
+}
+
+function test_closures(): i32 {
+    print("=== Closures with Capture ===");
+
+    let base: i32 = 100;
+
+    let add_base: function = function(x: i32, dummy: i32): i32 {
+        return x + base;
+    };
+
+    let r1: i32 = add_base(5, 0);
+    let r2: i32 = add_base(10, 0);
+
+    print(f"add_base(5) = {r1}");
+    print(f"add_base(10) = {r2}");
+
+    return r1 + r2;
+}
+
+function test_closure_mutation(): i32 {
+    print("=== Closures with Mutation ===");
+
+    let counter: i32 = 0;
+
+    let inc: function = function(amount: i32, dummy: i32): i32 {
+        counter = counter + amount;
+        return counter;
+    };
+
+    let r1: i32 = inc(5, 0);
+    let r2: i32 = inc(10, 0);
+    let r3: i32 = inc(15, 0);
+
+    print(f"After +5: {r1}");
+    print(f"After +10: {r2}");
+    print(f"After +15: {r3}");
+
+    return r3;
+}
+
+function main(): i32 {
+    print("========================================");
+    print("  Phase 6: Functions and Closures Test");
+    print("========================================");
+
+    let t1: i32 = test_function_expressions();
+    let t2: i32 = test_higher_order();
+    let t3: i32 = test_closures();
+    let t4: i32 = test_closure_mutation();
+
+    let total: i32 = t1 + t2 + t3 + t4;
+    print(f"Total: {total}");
+
+    print("Phase 6 validation complete!");
+
+    return total;
+}

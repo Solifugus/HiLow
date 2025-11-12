@@ -1,4 +1,5 @@
 use std::fmt;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FStringPart {
@@ -239,5 +240,169 @@ impl fmt::Display for Type {
             }
             Type::Object => write!(f, "object"),
         }
+    }
+}
+
+// Helper functions for variable analysis
+impl Expression {
+    pub fn find_free_variables(&self, bound_vars: &HashSet<String>) -> HashSet<String> {
+        let mut free = HashSet::new();
+
+        match self {
+            Expression::Identifier(name) => {
+                if !bound_vars.contains(name) {
+                    free.insert(name.clone());
+                }
+            }
+            Expression::Binary { left, right, .. } => {
+                free.extend(left.find_free_variables(bound_vars));
+                free.extend(right.find_free_variables(bound_vars));
+            }
+            Expression::Unary { operand, .. } => {
+                free.extend(operand.find_free_variables(bound_vars));
+            }
+            Expression::Call { callee, args } => {
+                free.extend(callee.find_free_variables(bound_vars));
+                for arg in args {
+                    free.extend(arg.find_free_variables(bound_vars));
+                }
+            }
+            Expression::Assignment { target, value } => {
+                free.extend(target.find_free_variables(bound_vars));
+                free.extend(value.find_free_variables(bound_vars));
+            }
+            Expression::Index { array, index } => {
+                free.extend(array.find_free_variables(bound_vars));
+                free.extend(index.find_free_variables(bound_vars));
+            }
+            Expression::PropertyAccess { object, .. } => {
+                free.extend(object.find_free_variables(bound_vars));
+            }
+            Expression::MethodCall { object, args, .. } => {
+                free.extend(object.find_free_variables(bound_vars));
+                for arg in args {
+                    free.extend(arg.find_free_variables(bound_vars));
+                }
+            }
+            Expression::ArrayLiteral { elements } => {
+                for elem in elements {
+                    free.extend(elem.find_free_variables(bound_vars));
+                }
+            }
+            Expression::ObjectLiteral { properties } => {
+                for prop in properties {
+                    free.extend(prop.value.find_free_variables(bound_vars));
+                }
+            }
+            Expression::FString { parts } => {
+                for part in parts {
+                    if let FStringPart::Expression(expr) = part {
+                        free.extend(expr.find_free_variables(bound_vars));
+                    }
+                }
+            }
+            Expression::FunctionExpression { params, body, .. } => {
+                // Create new bound set including parameters
+                let mut new_bound = bound_vars.clone();
+                for param in params {
+                    new_bound.insert(param.name.clone());
+                }
+                free.extend(body.find_free_variables(&new_bound));
+            }
+            _ => {}
+        }
+
+        free
+    }
+}
+
+impl Block {
+    pub fn find_free_variables(&self, bound_vars: &HashSet<String>) -> HashSet<String> {
+        let mut free = HashSet::new();
+        let mut local_bound = bound_vars.clone();
+
+        for stmt in &self.statements {
+            free.extend(stmt.find_free_variables(&local_bound));
+
+            // Add variables declared in this block to bound set
+            if let Statement::VariableDecl { name, .. } = stmt {
+                local_bound.insert(name.clone());
+            }
+        }
+
+        free
+    }
+}
+
+impl Statement {
+    pub fn find_free_variables(&self, bound_vars: &HashSet<String>) -> HashSet<String> {
+        let mut free = HashSet::new();
+
+        match self {
+            Statement::VariableDecl { initializer, .. } => {
+                if let Some(init) = initializer {
+                    free.extend(init.find_free_variables(bound_vars));
+                }
+            }
+            Statement::Return { value } => {
+                if let Some(val) = value {
+                    free.extend(val.find_free_variables(bound_vars));
+                }
+            }
+            Statement::Expression(expr) => {
+                free.extend(expr.find_free_variables(bound_vars));
+            }
+            Statement::If { condition, then_branch, else_branch } => {
+                free.extend(condition.find_free_variables(bound_vars));
+                free.extend(then_branch.find_free_variables(bound_vars));
+                if let Some(else_stmt) = else_branch {
+                    free.extend(else_stmt.find_free_variables(bound_vars));
+                }
+            }
+            Statement::While { condition, body } => {
+                free.extend(condition.find_free_variables(bound_vars));
+                free.extend(body.find_free_variables(bound_vars));
+            }
+            Statement::For { init, condition, increment, body } => {
+                let mut new_bound = bound_vars.clone();
+                if let Some(init_stmt) = init {
+                    if let Statement::VariableDecl { name, initializer, .. } = init_stmt.as_ref() {
+                        if let Some(init_expr) = initializer {
+                            free.extend(init_expr.find_free_variables(&new_bound));
+                        }
+                        new_bound.insert(name.clone());
+                    }
+                }
+                if let Some(cond) = condition {
+                    free.extend(cond.find_free_variables(&new_bound));
+                }
+                if let Some(inc) = increment {
+                    free.extend(inc.find_free_variables(&new_bound));
+                }
+                free.extend(body.find_free_variables(&new_bound));
+            }
+            Statement::ForIn { variable, iterable, body } => {
+                free.extend(iterable.find_free_variables(bound_vars));
+                let mut new_bound = bound_vars.clone();
+                new_bound.insert(variable.clone());
+                free.extend(body.find_free_variables(&new_bound));
+            }
+            Statement::Switch { expr, cases, default } => {
+                free.extend(expr.find_free_variables(bound_vars));
+                for case in cases {
+                    free.extend(case.value.find_free_variables(bound_vars));
+                    free.extend(case.body.find_free_variables(bound_vars));
+                }
+                if let Some(def) = default {
+                    free.extend(def.find_free_variables(bound_vars));
+                }
+            }
+            Statement::Block(block) => {
+                free.extend(block.find_free_variables(bound_vars));
+            }
+            _ => {}
+        }
+
+        free
     }
 }

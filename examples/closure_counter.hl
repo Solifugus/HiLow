@@ -1,0 +1,19 @@
+function main(): i32 {
+    let count: i32 = 0;
+
+    let increment: function = function(x: i32, dummy: i32): i32 {
+        count = count + 1;
+        return count;
+    };
+
+    let r1: i32 = increment(0, 0);
+    print(f"Call 1: {r1}");
+
+    let r2: i32 = increment(0, 0);
+    print(f"Call 2: {r2}");
+
+    let r3: i32 = increment(0, 0);
+    print(f"Call 3: {r3}");
+
+    return r3;
+}
