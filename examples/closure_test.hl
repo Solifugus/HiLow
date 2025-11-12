@@ -1,0 +1,12 @@
+function main(): i32 {
+    let multiplier: i32 = 10;
+
+    let scale: function = function(x: i32, dummy: i32): i32 {
+        return x * multiplier;
+    };
+
+    let result: i32 = scale(5, 0);
+    print(f"Result: {result}");
+
+    return result;
+}

@@ -1,0 +1,22 @@
+function apply_twice(x: i32, f: function): i32 {
+    let result: i32 = f(x, x);
+    return f(result, result);
+}
+
+function main(): i32 {
+    let add: function = function(a: i32, b: i32): i32 {
+        return a + b;
+    };
+
+    let mul: function = function(a: i32, b: i32): i32 {
+        return a * b;
+    };
+
+    let result1: i32 = apply_twice(2, add);
+    print(f"apply_twice(2, add) = {result1}");
+
+    let result2: i32 = apply_twice(3, mul);
+    print(f"apply_twice(3, mul) = {result2}");
+
+    return result1 + result2;
+}

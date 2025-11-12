@@ -143,20 +143,17 @@ char* str_replace(const char* str, const char* from, const char* to) {
     return result;
 }
 
-int32_t apply(int32_t x, int32_t y, void* f);
-int32_t main();
-
-int32_t apply(int32_t x, int32_t y, void* f) {
-    return f(x, y);
+int32_t __lambda_0(int32_t x, int32_t dummy) {
+    return (x * multiplier);
 }
 
+int32_t main();
+
 int32_t main() {
-    void* add = __lambda_0;
-    void* mul = __lambda_1;
-    int32_t sum = add(5, 3);
-    int32_t product = mul(5, 3);
-    printf("Sum: %d\n", sum);
-    printf("Product: %d\n", product);
-    return (sum + product);
+    int32_t multiplier = 10;
+    void* scale = __lambda_0;
+    int32_t result = ((int32_t(*)(int32_t, int32_t))scale)(5, 0);
+    printf("Result: %d\n", result);
+    return result;
 }
 

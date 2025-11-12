@@ -1,0 +1,120 @@
+function demo_arrays(): i32 {
+    print("=== ARRAYS ===");
+
+    let fixed: [i32; 5] = [10, 20, 30, 40, 50];
+    print(f"Fixed array: {fixed[0]}, {fixed[1]}, {fixed[2]}");
+
+    let dynamic: [i32];
+    dynamic.push(100);
+    dynamic.push(200);
+    dynamic.push(300);
+    print(f"Dynamic array length: {dynamic.length}");
+
+    let sum: i32 = 0;
+    for (num in fixed) {
+        sum += num;
+    }
+    print(f"Sum of fixed array: {sum}");
+
+    return sum;
+}
+
+function demo_strings(): i32 {
+    print("");
+    print("=== STRINGS ===");
+
+    let text: string = "  Hello HiLow World  ";
+    print(f"Original: '{text}'");
+
+    let trimmed: string = text.trim();
+    print(f"Trimmed: '{trimmed}'");
+
+    let upper: string = trimmed.toUpperCase();
+    print(f"Uppercase: '{upper}'");
+
+    let lower: string = upper.toLowerCase();
+    print(f"Lowercase: '{lower}'");
+
+    let replaced: string = lower.replace("hilow", "AWESOME");
+    print(f"Replaced: '{replaced}'");
+
+    let words: [string] = trimmed.split(" ");
+    print(f"Split into {words.length} words");
+
+    let joined: string = words.join("-");
+    print(f"Joined: '{joined}'");
+
+    return trimmed.length;
+}
+
+function demo_objects(): i32 {
+    print("");
+    print("=== OBJECTS ===");
+
+    let point = {x: 10, y: 20};
+    print(f"Point: ({point.x}, {point.y})");
+
+    point.x += 15;
+    point.y *= 2;
+    print(f"Modified: ({point.x}, {point.y})");
+
+    return point.x + point.y;
+}
+
+function demo_control_flow(): i32 {
+    print("");
+    print("=== CONTROL FLOW ===");
+
+    let result: i32 = 0;
+
+    let i: i32 = 0;
+    while (i < 5) {
+        if (i % 2 ?= 0) {
+            i += 1;
+            continue;
+        }
+        result += i;
+        i += 1;
+    }
+    print(f"While loop result: {result}");
+
+    let choice: i32 = 2;
+    switch (choice) {
+        case 1:
+            result += 10;
+            break;
+        case 2:
+            result += 20;
+            break;
+        default:
+            result += 5;
+            break;
+    }
+    print(f"After switch: {result}");
+
+    return result;
+}
+
+function main(): i32 {
+    print("========================================");
+    print("   HiLow Language Feature Showcase");
+    print("========================================");
+
+    let array_sum: i32 = demo_arrays();
+    let string_len: i32 = demo_strings();
+    let object_sum: i32 = demo_objects();
+    let control_result: i32 = demo_control_flow();
+
+    print("");
+    print("=== SUMMARY ===");
+    print(f"Array operations: {array_sum}");
+    print(f"String operations: {string_len}");
+    print(f"Object operations: {object_sum}");
+    print(f"Control flow: {control_result}");
+
+    let total: i32 = array_sum + string_len + object_sum + control_result;
+    print(f"Total: {total}");
+    print("All features demonstrated successfully!");
+
+    return total;
+}

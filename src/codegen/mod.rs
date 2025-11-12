@@ -189,12 +189,19 @@ impl CodeGenerator {
         self.emit("}");
         self.emit("");
 
-        // Emit any lambda functions that were generated
-        for lambda_func in &self.lambda_functions.clone() {
+        // First pass: Process all statements to collect lambda functions
+        // We need to do this to know what lambdas to forward-declare
+        let mut temp_gen = CodeGenerator::new();
+        for stmt in &program.statements {
+            temp_gen.generate_statement(stmt)?;
+        }
+
+        // Now emit the collected lambda functions
+        for lambda_func in &temp_gen.lambda_functions {
             self.output.push_str(lambda_func);
         }
 
-        // Generate forward declarations
+        // Generate forward declarations for regular functions
         for stmt in &program.statements {
             if let Statement::FunctionDecl { name, params, return_type, .. } = stmt {
                 self.generate_function_declaration(name, params, return_type)?;
@@ -203,7 +210,9 @@ impl CodeGenerator {
 
         self.emit("");
 
-        // Generate function definitions
+        // Second pass: Generate actual function definitions
+        // Copy the lambda_functions from temp_gen so they're available for reference
+        self.lambda_functions = temp_gen.lambda_functions.clone();
         for stmt in &program.statements {
             self.generate_statement(stmt)?;
         }
@@ -769,15 +778,47 @@ impl CodeGenerator {
                     }
                 }
 
-                self.generate_expression(callee)?;
-                self.emit_no_indent("(");
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        self.emit_no_indent(", ");
+                // Check if callee is a function pointer variable (void*)
+                let is_function_ptr = if let Expression::Identifier(name) = callee.as_ref() {
+                    self.variables.get(name)
+                        .map(|t| t == "void*")
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if is_function_ptr {
+                    // Cast void* to function pointer and call
+                    // For now, assume signature is int32_t(*)(int32_t, int32_t)
+                    self.emit_no_indent("((int32_t(*)(");
+                    for (i, _arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.emit_no_indent(", ");
+                        }
+                        self.emit_no_indent("int32_t");
                     }
-                    self.generate_expression(arg)?;
+                    self.emit_no_indent("))");
+                    self.generate_expression(callee)?;
+                    self.emit_no_indent(")(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.emit_no_indent(", ");
+                        }
+                        self.generate_expression(arg)?;
+                    }
+                    self.emit_no_indent(")");
+                } else {
+                    // Regular function call
+                    self.generate_expression(callee)?;
+                    self.emit_no_indent("(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.emit_no_indent(", ");
+                        }
+                        self.generate_expression(arg)?;
+                    }
+                    self.emit_no_indent(")");
                 }
-                self.emit_no_indent(")");
             }
 
             Expression::Assignment { target, value } => {
@@ -1068,10 +1109,13 @@ impl CodeGenerator {
                     format!("{}*", self.type_to_c(element_type))
                 }
             }
-            Type::Function { .. } => {
-                // Function pointers in C are complex
-                // For now, use void* and cast as needed
-                "void*".to_string()
+            Type::Function { params, return_type } => {
+                // Generate proper function pointer typedef
+                // For simplicity, we'll use a generic function pointer signature
+                // In C: int32_t (*name)(int32_t, int32_t)
+                // But for variables, we can't include the name, so we use typedef
+                // For now, simplified: assume all function pointers take (i32, i32) -> i32
+                "void*".to_string()  // Will cast at call site
             },
             Type::Object => "void*".to_string(),
         }
