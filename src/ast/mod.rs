@@ -19,11 +19,17 @@ pub enum Statement {
         params: Vec<Parameter>,
         return_type: Option<Type>,
         body: Block,
+        is_export: bool,
     },
     VariableDecl {
         name: String,
         var_type: Option<Type>,
         initializer: Option<Expression>,
+        is_export: bool,
+    },
+    Import {
+        names: Vec<String>,
+        module: String,
     },
     Return {
         value: Option<Expression>,
@@ -403,6 +409,12 @@ impl Statement {
             }
             Statement::Block(block) => {
                 free.extend(block.find_free_variables(bound_vars));
+            }
+            Statement::Import { .. } => {
+                // Imports don't reference variables
+            }
+            Statement::Defer { statement } => {
+                free.extend(statement.find_free_variables(bound_vars));
             }
             _ => {}
         }

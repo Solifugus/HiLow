@@ -23,8 +23,18 @@ impl Parser {
 
     fn parse_statement(&mut self) -> Result<Statement, String> {
         match &self.peek().kind {
-            TokenKind::Function => self.parse_function_decl(),
-            TokenKind::Let => self.parse_variable_decl(),
+            TokenKind::Export => {
+                self.advance();
+                // After export, we expect function or let
+                match &self.peek().kind {
+                    TokenKind::Function => self.parse_function_decl_with_export(true),
+                    TokenKind::Let => self.parse_variable_decl_with_export(true),
+                    _ => Err("Expected 'function' or 'let' after 'export'".to_string()),
+                }
+            }
+            TokenKind::Import => self.parse_import(),
+            TokenKind::Function => self.parse_function_decl_with_export(false),
+            TokenKind::Let => self.parse_variable_decl_with_export(false),
             TokenKind::Return => self.parse_return(),
             TokenKind::If => self.parse_if(),
             TokenKind::While => self.parse_while(),
@@ -56,7 +66,37 @@ impl Parser {
         }
     }
 
+    fn parse_import(&mut self) -> Result<Statement, String> {
+        self.expect(TokenKind::Import)?;
+        self.expect(TokenKind::LeftBrace)?;
+
+        let mut names = Vec::new();
+        loop {
+            names.push(self.expect_identifier()?);
+            if !self.match_token(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.expect(TokenKind::RightBrace)?;
+        self.expect(TokenKind::From)?;
+
+        let module = if let TokenKind::StringLiteral(s) = &self.advance().kind {
+            s.clone()
+        } else {
+            return Err("Expected string literal for module path".to_string());
+        };
+
+        self.consume_semicolon()?;
+
+        Ok(Statement::Import { names, module })
+    }
+
     fn parse_function_decl(&mut self) -> Result<Statement, String> {
+        self.parse_function_decl_with_export(false)
+    }
+
+    fn parse_function_decl_with_export(&mut self, is_export: bool) -> Result<Statement, String> {
         self.expect(TokenKind::Function)?;
 
         let name = self.expect_identifier()?;
@@ -96,10 +136,15 @@ impl Parser {
             params,
             return_type,
             body,
+            is_export,
         })
     }
 
     fn parse_variable_decl(&mut self) -> Result<Statement, String> {
+        self.parse_variable_decl_with_export(false)
+    }
+
+    fn parse_variable_decl_with_export(&mut self, is_export: bool) -> Result<Statement, String> {
         self.expect(TokenKind::Let)?;
 
         let name = self.expect_identifier()?;
@@ -122,6 +167,7 @@ impl Parser {
             name,
             var_type,
             initializer,
+            is_export,
         })
     }
 

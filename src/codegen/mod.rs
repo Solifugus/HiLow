@@ -231,7 +231,7 @@ impl CodeGenerator {
 
         // Generate forward declarations for regular functions
         for stmt in &program.statements {
-            if let Statement::FunctionDecl { name, params, return_type, .. } = stmt {
+            if let Statement::FunctionDecl { name, params, return_type, is_export: _, .. } = stmt {
                 self.generate_function_declaration(name, params, return_type)?;
             }
         }
@@ -287,6 +287,7 @@ impl CodeGenerator {
                 params,
                 return_type,
                 body,
+                is_export: _,
             } => {
                 let ret_type = return_type
                     .as_ref()
@@ -326,6 +327,7 @@ impl CodeGenerator {
                 name,
                 var_type,
                 initializer,
+                is_export: _,
             } => {
                 // Special handling for dynamic arrays (no size)
                 if let Some(Type::Array { element_type, size: None }) = var_type {
@@ -500,6 +502,7 @@ impl CodeGenerator {
                             name,
                             var_type,
                             initializer,
+                            is_export: _,
                         } => {
                             let c_type = var_type
                                 .as_ref()
@@ -616,6 +619,11 @@ impl CodeGenerator {
 
                 self.indent_level -= 1;
                 self.emit("}");
+            }
+
+            Statement::Import { .. } => {
+                // Import statements don't generate code (handled at link time)
+                // For now, we're single-file, so ignore
             }
 
             Statement::Block(block) => {

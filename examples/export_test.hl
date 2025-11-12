@@ -1,0 +1,20 @@
+export function add(a: i32, b: i32): i32 {
+    return a + b;
+}
+
+export let PI: i32 = 3;
+
+function helper(): i32 {
+    return 42;
+}
+
+function main(): i32 {
+    let sum: i32 = add(10, 20);
+    let answer: i32 = helper();
+
+    print(f"Sum: {sum}");
+    print(f"PI: {PI}");
+    print(f"Answer: {answer}");
+
+    return sum;
+}

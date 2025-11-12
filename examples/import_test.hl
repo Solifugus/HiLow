@@ -1,0 +1,6 @@
+import { add, multiply } from "./math";
+
+function main(): i32 {
+    print("Import statement parsed successfully");
+    return 0;
+}
