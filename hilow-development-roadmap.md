@@ -196,9 +196,11 @@ This roadmap outlines the development of the HiLow programming language from ini
 2. ✅ Array literals ([1, 2, 3])
 3. ✅ For-in loops (for item in array)
 4. ✅ Fixed-size array declarations ([i32; 10])
-5. ✅ Bubble sort validation program
-6. ✅ Matrix multiplication validation program
-7. ✅ All tests passing (100%)
+5. ✅ Type casting with 'as' operator (2025-11-11)
+6. ✅ Scientific notation (1e-5) (2025-11-11)
+7. ✅ Bubble sort validation program
+8. ✅ Matrix multiplication validation program
+9. ✅ All tests passing (100%)
 
 **Deferred to Later Phases:**
 - Type casting syntax → Phase 3
@@ -550,6 +552,8 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 11. ✅ .reduce(func, initial) → accumulate values (2025-11-11)
 12. ✅ .forEach(func) → iterate with side effects (2025-11-11)
 13. ✅ .reverse() → reverse in-place (2025-11-11)
+14. ✅ .contains(value) → boolean check (2025-11-11)
+15. ✅ .find(predicate) → first matching element (2025-11-11)
 
 **Functional Programming Complete:**
 - Full JavaScript-style array API

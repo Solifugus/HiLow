@@ -1,0 +1,29 @@
+function is_target(x: i32, dummy: i32): i32 {
+    if (x > 20) {
+        return 1;
+    }
+    return 0;
+}
+
+function main(): i32 {
+    print("=== Array Search Methods ===");
+
+    let nums: [i32];
+    nums.push(10);
+    nums.push(20);
+    nums.push(30);
+    nums.push(40);
+
+    let has_30: i32 = nums.contains(30);
+    print(f"Contains 30: {has_30}");
+
+    let has_99: i32 = nums.contains(99);
+    print(f"Contains 99: {has_99}");
+
+    let found: i32 = nums.find(is_target);
+    print(f"First > 20: {found}");
+
+    print("Array search methods work!");
+
+    return found;
+}

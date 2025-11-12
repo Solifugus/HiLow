@@ -190,6 +190,25 @@ impl CodeGenerator {
         self.emit("    }");
         self.emit("}");
         self.emit("");
+        self.emit("int32_t array_contains_i32(DynamicArray* arr, int32_t value) {");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        if (((int32_t*)arr->data)[i] == value) {");
+        self.emit("            return 1;");
+        self.emit("        }");
+        self.emit("    }");
+        self.emit("    return 0;");
+        self.emit("}");
+        self.emit("");
+        self.emit("int32_t array_find_i32(DynamicArray* arr, int32_t(*func)(int32_t, int32_t)) {");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        int32_t val = ((int32_t*)arr->data)[i];");
+        self.emit("        if (func(val, 0)) {");
+        self.emit("            return val;");
+        self.emit("        }");
+        self.emit("    }");
+        self.emit("    return 0;");
+        self.emit("}");
+        self.emit("");
 
         // Generate string helper functions
         self.emit("// String helper functions");
@@ -1218,6 +1237,20 @@ impl CodeGenerator {
                     }
                     "forEach" if args.len() == 1 => {
                         self.emit_no_indent("array_forEach_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "contains" if args.len() == 1 => {
+                        self.emit_no_indent("array_contains_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "find" if args.len() == 1 => {
+                        self.emit_no_indent("array_find_i32(");
                         self.generate_expression(object)?;
                         self.emit_no_indent(", ");
                         self.generate_expression(&args[0])?;
