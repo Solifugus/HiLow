@@ -1240,6 +1240,14 @@ impl CodeGenerator {
                 }
             }
 
+            Expression::Cast { expr, target_type } => {
+                self.emit_no_indent("(");
+                self.emit_no_indent(&self.type_to_c(target_type));
+                self.emit_no_indent(")(");
+                self.generate_expression(expr)?;
+                self.emit_no_indent(")");
+            }
+
             Expression::Match { expr, arms } => {
                 use crate::ast::MatchPattern;
 

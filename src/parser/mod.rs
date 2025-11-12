@@ -752,6 +752,13 @@ impl Parser {
                         property,
                     };
                 }
+            } else if self.match_token(&TokenKind::As) {
+                // Type cast: expr as Type
+                let target_type = self.parse_type()?;
+                expr = Expression::Cast {
+                    expr: Box::new(expr),
+                    target_type,
+                };
             } else {
                 break;
             }

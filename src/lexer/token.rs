@@ -48,6 +48,7 @@ pub enum TokenKind {
     Requires,
     Ensures,
     When,
+    As,
 
     // Literals
     IntegerLiteral(i64),
@@ -157,6 +158,7 @@ pub fn keyword(s: &str) -> Option<TokenKind> {
         "requires" => Some(TokenKind::Requires),
         "ensures" => Some(TokenKind::Ensures),
         "when" => Some(TokenKind::When),
+        "as" => Some(TokenKind::As),
         "true" => Some(TokenKind::BooleanLiteral(true)),
         "false" => Some(TokenKind::BooleanLiteral(false)),
         _ => None,

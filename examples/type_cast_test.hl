@@ -1,0 +1,23 @@
+function main(): i32 {
+    print("=== Type Casting Test ===");
+
+    let f: f64 = 3.14159;
+    let i: i32 = f as i32;
+    print(f"Float 3.14159 as i32: {i}");
+
+    let big: i64 = 1000000;
+    let small: i16 = big as i16;
+    print("Cast i64 to i16");
+
+    let byte: u8 = 255;
+    let num: i32 = byte as i32;
+    print(f"u8(255) as i32: {num}");
+
+    let x: i32 = 10;
+    let y: f32 = x as f32;
+    print("i32 to f32 cast works");
+
+    print("All type casts work!");
+
+    return i;
+}

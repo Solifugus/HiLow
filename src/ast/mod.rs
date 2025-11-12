@@ -170,6 +170,10 @@ pub enum Expression {
         expr: Box<Expression>,
         arms: Vec<MatchArm>,
     },
+    Cast {
+        expr: Box<Expression>,
+        target_type: Type,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
