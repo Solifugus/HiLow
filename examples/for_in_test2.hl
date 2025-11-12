@@ -1,0 +1,14 @@
+function test(): i32 {
+    let arr: [i32; 5] = [1, 2, 3, 4, 5];
+    let sum: i32 = 0;
+
+    for (num in arr) {
+        sum = sum + num;
+    }
+
+    return sum;
+}
+
+function main(): i32 {
+    return test();
+}

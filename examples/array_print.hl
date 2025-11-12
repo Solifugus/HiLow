@@ -1,0 +1,14 @@
+function main(): i32 {
+    let arr: [i32] = [10, 20, 30, 40, 50];
+    let first: i32 = arr[0];
+    let second: i32 = arr[1];
+    let third: i32 = arr[2];
+
+    let i: i32 = 0;
+    while (i < 5) {
+        let val: i32 = arr[i];
+        i = i + 1;
+    }
+
+    return first + second + third;
+}

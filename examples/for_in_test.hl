@@ -1,0 +1,10 @@
+function main(): i32 {
+    let numbers: [i32] = [10, 20, 30, 40, 50];
+    let sum: i32 = 0;
+
+    for (num in numbers) {
+        sum = sum + num;
+    }
+
+    return sum;
+}

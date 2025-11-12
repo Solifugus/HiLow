@@ -37,6 +37,11 @@ pub enum Statement {
         increment: Option<Expression>,
         body: Block,
     },
+    ForIn {
+        variable: String,
+        iterable: Expression,
+        body: Block,
+    },
     Block(Block),
 }
 
@@ -102,6 +107,13 @@ pub enum Expression {
     Assignment {
         target: Box<Expression>,
         value: Box<Expression>,
+    },
+    ArrayLiteral {
+        elements: Vec<Expression>,
+    },
+    Index {
+        array: Box<Expression>,
+        index: Box<Expression>,
     },
 }
 

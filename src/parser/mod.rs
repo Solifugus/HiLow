@@ -161,6 +161,29 @@ impl Parser {
         self.expect(TokenKind::For)?;
         self.expect(TokenKind::LeftParen)?;
 
+        // Check if this is a for-in loop
+        // Save position in case we need to backtrack
+        let checkpoint = self.current;
+
+        // Try to parse as for-in loop: for (item in array)
+        if let Ok(var_name) = self.expect_identifier() {
+            if self.match_token(&TokenKind::In) {
+                // This is a for-in loop
+                let iterable = self.parse_expression()?;
+                self.expect(TokenKind::RightParen)?;
+                let body = self.parse_block()?;
+
+                return Ok(Statement::ForIn {
+                    variable: var_name,
+                    iterable,
+                    body,
+                });
+            }
+        }
+
+        // Not a for-in loop, restore position and parse as C-style for loop
+        self.current = checkpoint;
+
         let init = if self.check(&TokenKind::Semicolon) {
             None
         } else if self.check(&TokenKind::Let) {
@@ -512,44 +535,84 @@ impl Parser {
     fn parse_call(&mut self) -> Result<Expression, String> {
         let mut expr = self.parse_primary()?;
 
-        while self.match_token(&TokenKind::LeftParen) {
-            let mut args = Vec::new();
+        loop {
+            if self.match_token(&TokenKind::LeftParen) {
+                let mut args = Vec::new();
 
-            if !self.check(&TokenKind::RightParen) {
-                loop {
-                    args.push(self.parse_expression()?);
-                    if !self.match_token(&TokenKind::Comma) {
-                        break;
+                if !self.check(&TokenKind::RightParen) {
+                    loop {
+                        args.push(self.parse_expression()?);
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
                     }
                 }
+
+                self.expect(TokenKind::RightParen)?;
+
+                expr = Expression::Call {
+                    callee: Box::new(expr),
+                    args,
+                };
+            } else if self.match_token(&TokenKind::LeftBracket) {
+                let index = self.parse_expression()?;
+                self.expect(TokenKind::RightBracket)?;
+
+                expr = Expression::Index {
+                    array: Box::new(expr),
+                    index: Box::new(index),
+                };
+            } else {
+                break;
             }
-
-            self.expect(TokenKind::RightParen)?;
-
-            expr = Expression::Call {
-                callee: Box::new(expr),
-                args,
-            };
         }
 
         Ok(expr)
     }
 
     fn parse_primary(&mut self) -> Result<Expression, String> {
-        let token = self.advance();
+        let token = self.peek();
 
-        match token.kind {
-            TokenKind::IntegerLiteral(n) => Ok(Expression::IntegerLiteral(n)),
-            TokenKind::FloatLiteral(f) => Ok(Expression::FloatLiteral(f)),
-            TokenKind::StringLiteral(s) => Ok(Expression::StringLiteral(s)),
-            TokenKind::BooleanLiteral(b) => Ok(Expression::BooleanLiteral(b)),
-            TokenKind::Identifier(name) => Ok(Expression::Identifier(name)),
+        match &token.kind {
+            TokenKind::IntegerLiteral(_) | TokenKind::FloatLiteral(_)
+            | TokenKind::StringLiteral(_) | TokenKind::BooleanLiteral(_)
+            | TokenKind::Identifier(_) => {
+                let token = self.advance();
+                match token.kind {
+                    TokenKind::IntegerLiteral(n) => Ok(Expression::IntegerLiteral(n)),
+                    TokenKind::FloatLiteral(f) => Ok(Expression::FloatLiteral(f)),
+                    TokenKind::StringLiteral(s) => Ok(Expression::StringLiteral(s)),
+                    TokenKind::BooleanLiteral(b) => Ok(Expression::BooleanLiteral(b)),
+                    TokenKind::Identifier(name) => Ok(Expression::Identifier(name)),
+                    _ => unreachable!(),
+                }
+            }
             TokenKind::LeftParen => {
+                self.advance();
                 let expr = self.parse_expression()?;
                 self.expect(TokenKind::RightParen)?;
                 Ok(expr)
             }
-            _ => Err(format!("Unexpected token: {:?}", token.kind)),
+            TokenKind::LeftBracket => {
+                self.advance();
+                let mut elements = Vec::new();
+
+                if !self.check(&TokenKind::RightBracket) {
+                    loop {
+                        elements.push(self.parse_expression()?);
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+
+                self.expect(TokenKind::RightBracket)?;
+                Ok(Expression::ArrayLiteral { elements })
+            }
+            _ => {
+                let t = self.advance();
+                Err(format!("Unexpected token: {:?}", t.kind))
+            }
         }
     }
 

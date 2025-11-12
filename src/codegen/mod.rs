@@ -137,36 +137,55 @@ impl CodeGenerator {
                 var_type,
                 initializer,
             } => {
-                let c_type = if let Some(t) = var_type {
-                    self.type_to_c(t)
-                } else {
-                    // Try to infer from initializer
-                    if let Some(Expression::IntegerLiteral(_)) = initializer {
-                        "int32_t".to_string()
-                    } else if let Some(Expression::FloatLiteral(_)) = initializer {
-                        "double".to_string()
-                    } else if let Some(Expression::StringLiteral(_)) = initializer {
-                        "char*".to_string()
-                    } else if let Some(Expression::BooleanLiteral(_)) = initializer {
-                        "bool".to_string()
-                    } else {
-                        return Err("Cannot infer type for variable".to_string());
+                // Special handling for fixed-size arrays
+                if let Some(Type::Array { element_type, size: Some(size) }) = var_type {
+                    let elem_c_type = self.type_to_c(element_type);
+                    self.variables.insert(name.clone(), format!("{}*", elem_c_type));
+
+                    self.emit_no_indent(&self.indent());
+                    self.emit_no_indent(&elem_c_type);
+                    self.emit_no_indent(" ");
+                    self.emit_no_indent(name);
+                    self.emit_no_indent(&format!("[{}]", size));
+
+                    if let Some(init) = initializer {
+                        self.emit_no_indent(" = ");
+                        self.generate_expression(init)?;
                     }
-                };
 
-                self.variables.insert(name.clone(), c_type.clone());
+                    self.output.push_str(";\n");
+                } else {
+                    let c_type = if let Some(t) = var_type {
+                        self.type_to_c(t)
+                    } else {
+                        // Try to infer from initializer
+                        if let Some(Expression::IntegerLiteral(_)) = initializer {
+                            "int32_t".to_string()
+                        } else if let Some(Expression::FloatLiteral(_)) = initializer {
+                            "double".to_string()
+                        } else if let Some(Expression::StringLiteral(_)) = initializer {
+                            "char*".to_string()
+                        } else if let Some(Expression::BooleanLiteral(_)) = initializer {
+                            "bool".to_string()
+                        } else {
+                            return Err("Cannot infer type for variable".to_string());
+                        }
+                    };
 
-                self.emit_no_indent(&self.indent());
-                self.emit_no_indent(&c_type);
-                self.emit_no_indent(" ");
-                self.emit_no_indent(name);
+                    self.variables.insert(name.clone(), c_type.clone());
 
-                if let Some(init) = initializer {
-                    self.emit_no_indent(" = ");
-                    self.generate_expression(init)?;
+                    self.emit_no_indent(&self.indent());
+                    self.emit_no_indent(&c_type);
+                    self.emit_no_indent(" ");
+                    self.emit_no_indent(name);
+
+                    if let Some(init) = initializer {
+                        self.emit_no_indent(" = ");
+                        self.generate_expression(init)?;
+                    }
+
+                    self.output.push_str(";\n");
                 }
-
-                self.output.push_str(";\n");
             }
 
             Statement::Return { value } => {
@@ -283,6 +302,40 @@ impl CodeGenerator {
                 self.emit("}");
             }
 
+            Statement::ForIn { variable, iterable, body } => {
+                // For now, we'll generate a C-style for loop that iterates over the array
+                // This requires the array to be stored in a variable
+                // We'll use a temporary index variable
+                let index_var = format!("__idx_{}", variable);
+
+                self.emit_no_indent(&self.indent());
+                self.emit_no_indent(&format!("for (int32_t {} = 0; {} < ", index_var, index_var));
+
+                // We need to know the array size - for now we'll use a macro-style approach
+                // that requires the array to be in a variable
+                self.emit_no_indent("sizeof(");
+                self.generate_expression(iterable)?;
+                self.emit_no_indent(")/sizeof((");
+                self.generate_expression(iterable)?;
+                self.emit_no_indent(")[0]); ");
+
+                self.emit_no_indent(&format!("{}++) {{\n", index_var));
+
+                self.indent_level += 1;
+
+                // Declare the loop variable
+                self.emit(&format!("int32_t {} = (", variable));
+                self.emit_no_indent(&self.indent());
+                self.generate_expression(iterable)?;
+                self.emit_no_indent(&format!(")[{}];\n", index_var));
+
+                // Generate loop body
+                self.generate_block(body)?;
+
+                self.indent_level -= 1;
+                self.emit("}");
+            }
+
             Statement::Block(block) => {
                 self.emit("{");
                 self.indent_level += 1;
@@ -380,6 +433,24 @@ impl CodeGenerator {
                 self.generate_expression(target)?;
                 self.emit_no_indent(" = ");
                 self.generate_expression(value)?;
+            }
+
+            Expression::ArrayLiteral { elements } => {
+                self.emit_no_indent("{");
+                for (i, elem) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.emit_no_indent(", ");
+                    }
+                    self.generate_expression(elem)?;
+                }
+                self.emit_no_indent("}");
+            }
+
+            Expression::Index { array, index } => {
+                self.generate_expression(array)?;
+                self.emit_no_indent("[");
+                self.generate_expression(index)?;
+                self.emit_no_indent("]");
             }
         }
 

@@ -1,0 +1,7 @@
+function main(): i32 {
+    let arr: [i32] = [1, 2, 3, 4, 5];
+    let first: i32 = arr[0];
+    let third: i32 = arr[2];
+    let sum: i32 = first + third;
+    return sum;
+}
