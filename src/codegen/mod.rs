@@ -39,6 +39,7 @@ impl CodeGenerator {
 
     pub fn generate(&mut self, program: &Program) -> Result<String, String> {
         // Generate C preamble
+        self.emit("#define _GNU_SOURCE");
         self.emit("#include <stdio.h>");
         self.emit("#include <stdlib.h>");
         self.emit("#include <stdint.h>");
@@ -74,6 +75,48 @@ impl CodeGenerator {
         self.emit("    char* result = malloc(len + 1);");
         self.emit("    strncpy(result, str, len);");
         self.emit("    result[len] = '\\0';");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* str_char_at(const char* str, int32_t index) {");
+        self.emit("    if (index < 0 || index >= strlen(str)) return strdup(\"\");");
+        self.emit("    char* result = malloc(2);");
+        self.emit("    result[0] = str[index];");
+        self.emit("    result[1] = '\\0';");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* str_substring(const char* str, int32_t start, int32_t end) {");
+        self.emit("    int len = strlen(str);");
+        self.emit("    if (start < 0) start = 0;");
+        self.emit("    if (end > len) end = len;");
+        self.emit("    if (start >= end) return strdup(\"\");");
+        self.emit("    int sublen = end - start;");
+        self.emit("    char* result = malloc(sublen + 1);");
+        self.emit("    strncpy(result, str + start, sublen);");
+        self.emit("    result[sublen] = '\\0';");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* str_concat(const char* s1, const char* s2) {");
+        self.emit("    int len = strlen(s1) + strlen(s2);");
+        self.emit("    char* result = malloc(len + 1);");
+        self.emit("    strcpy(result, s1);");
+        self.emit("    strcat(result, s2);");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* str_replace(const char* str, const char* from, const char* to) {");
+        self.emit("    char* pos = strstr(str, from);");
+        self.emit("    if (!pos) return strdup(str);");
+        self.emit("    int from_len = strlen(from);");
+        self.emit("    int to_len = strlen(to);");
+        self.emit("    int prefix_len = pos - str;");
+        self.emit("    int suffix_len = strlen(pos + from_len);");
+        self.emit("    char* result = malloc(prefix_len + to_len + suffix_len + 1);");
+        self.emit("    strncpy(result, str, prefix_len);");
+        self.emit("    strcpy(result + prefix_len, to);");
+        self.emit("    strcpy(result + prefix_len + to_len, pos + from_len);");
         self.emit("    return result;");
         self.emit("}");
         self.emit("");
@@ -740,6 +783,38 @@ impl CodeGenerator {
                     "trim" if args.is_empty() => {
                         self.emit_no_indent("str_trim(");
                         self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
+                    "charAt" if args.len() == 1 => {
+                        self.emit_no_indent("str_char_at(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "substring" if args.len() == 2 => {
+                        self.emit_no_indent("str_substring(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                    }
+                    "concat" if args.len() == 1 => {
+                        self.emit_no_indent("str_concat(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "replace" if args.len() == 2 => {
+                        self.emit_no_indent("str_replace(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
                         self.emit_no_indent(")");
                     }
                     _ => {

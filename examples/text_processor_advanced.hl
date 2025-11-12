@@ -1,0 +1,45 @@
+function process_line(line: string): i32 {
+    let trimmed: string = line.trim();
+
+    if (trimmed.length ?= 0) {
+        return 0;
+    }
+
+    let normalized: string = trimmed.toLowerCase();
+
+    let has_hello: i32 = normalized.indexOf("hello");
+    let has_world: i32 = normalized.indexOf("world");
+
+    if (has_hello >= 0) {
+        print(f"Found 'hello' at position {has_hello}");
+    }
+
+    if (has_world >= 0) {
+        print(f"Found 'world' at position {has_world}");
+    }
+
+    let cleaned: string = normalized.replace("hello", "greetings");
+    print(f"Processed: {cleaned}");
+
+    return cleaned.length;
+}
+
+function main(): i32 {
+    let line1: string = "  Hello World  ";
+    let line2: string = "HELLO THERE";
+    let line3: string = "world of programming";
+
+    print("=== Processing Line 1 ===");
+    let len1: i32 = process_line(line1);
+
+    print("=== Processing Line 2 ===");
+    let len2: i32 = process_line(line2);
+
+    print("=== Processing Line 3 ===");
+    let len3: i32 = process_line(line3);
+
+    let total: i32 = len1 + len2 + len3;
+    print(f"Total processed characters: {total}");
+
+    return total;
+}

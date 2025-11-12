@@ -1,0 +1,31 @@
+function main(): i32 {
+    let text: string = "Hello World";
+
+    print(f"Original: {text}");
+
+    let ch: string = text.charAt(6);
+    print(f"Character at 6: '{ch}'");
+
+    let sub: string = text.substring(0, 5);
+    print(f"Substring(0,5): '{sub}'");
+
+    let concat: string = text.concat("!");
+    print(f"Concatenated: '{concat}'");
+
+    let replaced: string = text.replace("World", "HiLow");
+    print(f"Replaced: '{replaced}'");
+
+    let upper: string = text.toUpperCase();
+    print(f"Upper: '{upper}'");
+
+    let lower: string = upper.toLowerCase();
+    print(f"Lower: '{lower}'");
+
+    let padded: string = "  test  ";
+    let trimmed: string = padded.trim();
+    print(f"Trimmed: '{trimmed}'");
+
+    let len: i32 = text.length;
+
+    return len;
+}

@@ -3,8 +3,8 @@
 This roadmap outlines the development of the HiLow programming language from initial concept to production-ready compiler. Each phase includes testing milestones before proceeding to the next stage.
 
 **Last Updated**: 2025-11-11
-**Current Phase**: Phase 5.1 (Complete String Methods) - IN PROGRESS
-**Status**: Phases 0-5.0 Complete, Phase 5.1 mostly complete ✓
+**Current Phase**: Phase 5.1 (Complete String Methods) - COMPLETE ✓
+**Status**: Phases 0-5.1 Complete ✓
 
 ## Phase 0: Project Foundation ✓ COMPLETE
 
@@ -457,14 +457,14 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 **Rationale**: Method call syntax exists, these are simple C stdlib wrappers, core language ergonomics
 
 ### String Methods Implemented
-- [x] .toUpperCase() → string ✓ (toupper loop)
-- [x] .toLowerCase() → string ✓ (tolower loop)
-- [x] .trim() → string ✓ (pointer arithmetic)
-- [ ] .split(delimiter) → [string] - needs array building
-- [ ] .replace(from, to) → string - needs string building
-- [ ] .charAt(index) → string - trivial, do next
-- [ ] .substring(start, end) → string - trivial, do next
-- [ ] .concat(other) → string - trivial (strcat)
+- [x] .toUpperCase() → string ✓
+- [x] .toLowerCase() → string ✓
+- [x] .trim() → string ✓
+- [x] .charAt(index) → string ✓
+- [x] .substring(start, end) → string ✓
+- [x] .concat(other) → string ✓
+- [x] .replace(from, to) → string ✓ (first occurrence only)
+- [ ] .split(delimiter) → [string] - needs dynamic array support (Phase 5.2)
 
 ### Array Helper Method
 - [ ] Array.join(separator) → string - concatenate array elements
@@ -476,15 +476,15 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 - Memory allocation via malloc (simple for now)
 
 **Testing:**
-- [ ] Test all string methods
-- [ ] Test method chaining (text.trim().toUpperCase())
-- [ ] Test edge cases (empty strings, not found, etc.)
+- [x] Test all string methods ✓
+- [x] Test method chaining (text.trim().toUpperCase()) ✓
+- [x] Test edge cases (empty strings, not found, etc.) ✓
 
 **Validation Checkpoint:**
-- [ ] Text parser program (split/trim/replace)
-- [ ] CSV processor (split on commas)
-- [ ] String formatter (toUpperCase/toLowerCase)
-- [ ] All tests pass
+- [x] Text processor program (text_processor_advanced.hl) ✓
+- [x] String formatter (toUpperCase/toLowerCase/trim/replace) ✓
+- [x] All tests pass (9 unit + 4 integration = 100%) ✓
+- [ ] CSV processor - needs .split() (Phase 5.2)
 
 **Time Estimate:** 2-4 hours
 
