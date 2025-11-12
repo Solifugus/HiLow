@@ -1014,9 +1014,23 @@ impl CodeGenerator {
 
                 func_def.push_str(") {\n");
 
-                // Generate body (we'll need to generate this properly later)
-                // For now, store the function definition to emit later
-                func_def.push_str("    // TODO: implement body\n");
+                // Save current output and indent to generate body
+                let saved_output = self.output.clone();
+                let saved_indent = self.indent_level;
+                self.output = String::new();
+                self.indent_level = 1;
+
+                // Generate the function body
+                self.generate_block(body)?;
+
+                // Capture generated body
+                let body_code = self.output.clone();
+
+                // Restore output and indent
+                self.output = saved_output;
+                self.indent_level = saved_indent;
+
+                func_def.push_str(&body_code);
                 func_def.push_str("}\n\n");
 
                 self.lambda_functions.push(func_def);
@@ -1054,7 +1068,11 @@ impl CodeGenerator {
                     format!("{}*", self.type_to_c(element_type))
                 }
             }
-            Type::Function { .. } => "void*".to_string(),
+            Type::Function { .. } => {
+                // Function pointers in C are complex
+                // For now, use void* and cast as needed
+                "void*".to_string()
+            },
             Type::Object => "void*".to_string(),
         }
     }

@@ -328,6 +328,15 @@ impl Parser {
             },
             TokenKind::Nothing => Ok(Type::Nothing),
             TokenKind::Unknown => Ok(Type::Unknown),
+            TokenKind::Function => {
+                // For now, use a simple function type without full signature
+                // Full function types would be: function(i32, i32): i32
+                // For Phase 6, we'll use a simplified "function" type
+                Ok(Type::Function {
+                    params: vec![],
+                    return_type: Box::new(Type::I32), // Simplified
+                })
+            },
             TokenKind::LeftBracket => {
                 let element_type = Box::new(self.parse_type()?);
 

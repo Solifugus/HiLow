@@ -1,0 +1,21 @@
+function apply(x: i32, y: i32, f: function): i32 {
+    return f(x, y);
+}
+
+function main(): i32 {
+    let add: function = function(a: i32, b: i32): i32 {
+        return a + b;
+    };
+
+    let mul: function = function(a: i32, b: i32): i32 {
+        return a * b;
+    };
+
+    let sum: i32 = add(5, 3);
+    let product: i32 = mul(5, 3);
+
+    print(f"Sum: {sum}");
+    print(f"Product: {product}");
+
+    return sum + product;
+}
