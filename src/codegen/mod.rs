@@ -174,6 +174,22 @@ impl CodeGenerator {
         self.emit("    return result;");
         self.emit("}");
         self.emit("");
+        self.emit("int32_t array_reduce_i32(DynamicArray* arr, int32_t(*func)(int32_t, int32_t), int32_t initial) {");
+        self.emit("    int32_t result = initial;");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        int32_t val = ((int32_t*)arr->data)[i];");
+        self.emit("        result = func(result, val);");
+        self.emit("    }");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("void array_forEach_i32(DynamicArray* arr, int32_t(*func)(int32_t, int32_t)) {");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        int32_t val = ((int32_t*)arr->data)[i];");
+        self.emit("        func(val, 0);");
+        self.emit("    }");
+        self.emit("}");
+        self.emit("");
 
         // Generate string helper functions
         self.emit("// String helper functions");
@@ -1186,6 +1202,22 @@ impl CodeGenerator {
                     }
                     "filter" if args.len() == 1 => {
                         self.emit_no_indent("array_filter_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "reduce" if args.len() == 2 => {
+                        self.emit_no_indent("array_reduce_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                    }
+                    "forEach" if args.len() == 1 => {
+                        self.emit_no_indent("array_forEach_i32(");
                         self.generate_expression(object)?;
                         self.emit_no_indent(", ");
                         self.generate_expression(&args[0])?;
