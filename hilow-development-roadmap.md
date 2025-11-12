@@ -240,16 +240,19 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [x] Test nested switch ✓ (nested_switch.hl returns 66)
 
 ### Pattern Matching
-- [x] Parse match syntax (keyword exists)
-- [ ] Implement range patterns (1..10)
-- [ ] Implement wildcard pattern (_)
-- [x] Implement guards (when clauses) - keyword exists
-- [ ] Generate efficient code
+- [x] Parse match syntax ✓ (Phase 5.3)
+- [x] Implement wildcard pattern (_) ✓ (Phase 5.3)
+- [x] Generate code (statement expression) ✓ (Phase 5.3)
+- [ ] Implement range patterns (1..10) - deferred
+- [ ] Implement guards (when clauses) - deferred
+- [ ] Pattern exhaustiveness checking - deferred to Phase 10
 
 **Testing:**
-- [ ] Test all pattern types
-- [ ] Test pattern exhaustiveness
-- [ ] Test guard conditions
+- [x] Test basic value patterns ✓ (match_test.hl)
+- [x] Test wildcard ✓ (match_inline.hl)
+- [ ] Test range patterns - not implemented
+- [ ] Test guards - not implemented
+- [ ] Test exhaustiveness - deferred to prover
 
 ### For Loops
 - [x] C-style for loops ✓
@@ -325,14 +328,14 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [x] Implement .indexOf(substr) method ✓
 - [x] Implement .compare(other) method ✓
 - [x] Implement .slice(start) method ✓ (basic version)
-- [ ] Implement .slice(start, end) - PHASE 5.1
-- [ ] Implement .split(delimiter) → [string] - PHASE 5.1
-- [ ] Implement .replace(from, to) → string - PHASE 5.1
-- [ ] Implement .toUpperCase() → string - PHASE 5.1
-- [ ] Implement .toLowerCase() → string - PHASE 5.1
-- [ ] Implement .trim() → string - PHASE 5.1
-- [ ] Implement .charAt(index) → string - PHASE 5.1
-- [ ] Implement .substring(start, end) → string - PHASE 5.1
+- [x] Implement .substring(start, end) → string ✓ (Phase 5.1)
+- [x] Implement .split(delimiter) → [string] ✓ (Phase 5.2)
+- [x] Implement .replace(from, to) → string ✓ (Phase 5.1)
+- [x] Implement .toUpperCase() → string ✓ (Phase 5.1)
+- [x] Implement .toLowerCase() → string ✓ (Phase 5.1)
+- [x] Implement .trim() → string ✓ (Phase 5.1)
+- [x] Implement .charAt(index) → string ✓ (Phase 5.1)
+- [x] Implement .concat(other) → string ✓ (Phase 5.1)
 
 **Testing:**
 - [x] Test basic string operations ✓
@@ -510,6 +513,11 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 - [x] Array resizing with realloc ✓
 - [x] .split() for strings → [string] ✓
 - [x] .join(separator) for arrays → string ✓
+- [x] .map(func) → transform ✓
+- [x] .filter(func) → filter ✓
+- [x] .reduce(func, initial) → accumulate ✓
+- [x] .forEach(func) → iterate ✓
+- [x] .reverse() → reverse in-place ✓
 
 **Implementation Notes:**
 - DynamicArray struct generated in preamble
@@ -964,11 +972,16 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 - [ ] Module linking - deferred
 - [ ] Multi-file compilation - deferred
 
+**Accomplishments:**
+- [x] Export/import parsing ✓ (export_test.hl, import_test.hl)
+- [x] AST support for is_export flag ✓
+- [x] Import statement AST variant ✓
+
 **Testing:**
-- [ ] Test basic imports
-- [ ] Test multiple imports
-- [ ] Test circular imports (should fail)
-- [ ] Test module not found errors
+- [x] Test export parsing ✓ (export_test.hl)
+- [x] Test import parsing ✓ (import_test.hl)
+- [ ] Test multi-file compilation - deferred
+- [ ] Test module resolution - deferred
 
 ### Module Compilation
 - [ ] Compile modules separately
