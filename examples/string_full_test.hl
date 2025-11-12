@@ -1,0 +1,24 @@
+function main(): i32 {
+    let greeting: string = "Hello";
+    let target: string = "World";
+
+    print(f"Text 1: {greeting}");
+    print(f"Text 2: {target}");
+
+    let len1: i32 = string_length(greeting);
+    let len2: i32 = string_length(target);
+
+    print(f"Length of '{greeting}': {len1}");
+    print(f"Length of '{target}': {len2}");
+
+    let pos: i32 = string_index_of("Hello World", "World");
+    print(f"Position of 'World' in 'Hello World': {pos}");
+
+    let cmp: i32 = string_compare("abc", "abc");
+    print(f"Compare 'abc' with 'abc': {cmp}");
+
+    let cmp2: i32 = string_compare("abc", "def");
+    print(f"Compare 'abc' with 'def': {cmp2}");
+
+    return len1 + len2;
+}

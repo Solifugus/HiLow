@@ -46,6 +46,11 @@ impl CodeGenerator {
         self.emit("#include <string.h>");
         self.emit("");
 
+        // Emit any lambda functions that were generated
+        for lambda_func in &self.lambda_functions.clone() {
+            self.output.push_str(lambda_func);
+        }
+
         // Generate forward declarations
         for stmt in &program.statements {
             if let Statement::FunctionDecl { name, params, return_type, .. } = stmt {
@@ -491,8 +496,47 @@ impl CodeGenerator {
             }
 
             Expression::Call { callee, args } => {
-                // Special case for print function
+                // Special cases for built-in functions
                 if let Expression::Identifier(name) = callee.as_ref() {
+                    // String operations
+                    if name == "string_length" && args.len() == 1 {
+                        self.emit_no_indent("strlen(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    if name == "string_index_of" && args.len() == 2 {
+                        // Generate C code for indexOf using strstr
+                        self.emit_no_indent("({char* __p = strstr(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent("); __p ? (int32_t)(__p - (char*)(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")) : -1; })");
+                        return Ok(());
+                    }
+
+                    if name == "string_concat" && args.len() == 2 {
+                        // Simple concatenation using strcat (unsafe but works for demo)
+                        self.emit_no_indent("strcat(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    if name == "string_compare" && args.len() == 2 {
+                        self.emit_no_indent("strcmp(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
                     if name == "print" {
                         self.emit_no_indent("printf(");
                         for (i, arg) in args.iter().enumerate() {
@@ -520,7 +564,25 @@ impl CodeGenerator {
                                                 format_str.push_str(&text.replace("%", "%%"));
                                             }
                                             FStringPart::Expression(expr) => {
-                                                format_str.push_str("%d");
+                                                // Try to determine format specifier from expression type
+                                                let format_spec = match expr.as_ref() {
+                                                    Expression::StringLiteral(_) => "%s",
+                                                    Expression::Identifier(name) => {
+                                                        // Check if it's a string variable
+                                                        if let Some(var_type) = self.variables.get(name) {
+                                                            if var_type.contains("char*") {
+                                                                "%s"
+                                                            } else {
+                                                                "%d"
+                                                            }
+                                                        } else {
+                                                            "%d"
+                                                        }
+                                                    }
+                                                    Expression::FloatLiteral(_) => "%f",
+                                                    _ => "%d",
+                                                };
+                                                format_str.push_str(format_spec);
                                                 fstring_args.push(expr);
                                             }
                                         }

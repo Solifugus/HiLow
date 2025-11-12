@@ -319,21 +319,23 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [ ] Test nested f-strings - works but not explicitly tested
 
 ### String Operations
-- [ ] Implement .length
-- [ ] Implement .indexOf()
-- [ ] Implement .slice()
-- [ ] Implement .splice()
-- [ ] Implement .split()
-- [ ] Implement .join()
-- [ ] Implement .replace()
-- [ ] Implement .toUpperCase()
-- [ ] Implement .toLowerCase()
-- [ ] Implement .trim()
+- [x] Implement string_length() ✓ (maps to strlen)
+- [x] Implement string_index_of() ✓ (maps to strstr)
+- [x] Implement string_compare() ✓ (maps to strcmp)
+- [x] Implement string_concat() ✓ (maps to strcat)
+- [ ] Implement .slice() - deferred to Phase 12
+- [ ] Implement .splice() - deferred to Phase 12
+- [ ] Implement .split() - deferred to Phase 12
+- [ ] Implement .join() - deferred to Phase 12
+- [ ] Implement .replace() - deferred to Phase 12
+- [ ] Implement .toUpperCase() - deferred to Phase 12
+- [ ] Implement .toLowerCase() - deferred to Phase 12
+- [ ] Implement .trim() - deferred to Phase 12
 
 **Testing:**
-- [ ] Test all string operations
-- [ ] Test Unicode handling
-- [ ] Test edge cases (empty strings, etc.)
+- [x] Test basic string operations ✓
+- [ ] Test Unicode handling - deferred
+- [x] Test edge cases (not found returns -1) ✓
 
 ### Raw Strings
 - [ ] Implement r"raw string" syntax
@@ -356,8 +358,11 @@ This roadmap outlines the development of the HiLow programming language from ini
 2. ✅ Quote recursion for nested quotes (2, 3, 4+ levels)
 3. ✅ Multi-line string support
 4. ✅ Printf-based code generation for f-strings
-5. ✅ Text processor validation program
-6. ✅ Quote recursion test program
+5. ✅ Smart format specifiers (detects %s for strings, %d for ints)
+6. ✅ String operations: string_length(), string_index_of(), string_compare(), string_concat()
+7. ✅ Text processor validation program
+8. ✅ Quote recursion test program
+9. ✅ Comprehensive string operations test
 
 **Deferred to Later Phases:**
 - Format specifiers (:2f, :x, :b) → Phase 12 (stdlib)

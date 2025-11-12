@@ -1,0 +1,15 @@
+function main(): i32 {
+    let text: string = "Hello World";
+    let len: i32 = string_length(text);
+
+    print(text);
+    print(f"Length: {len}");
+
+    let pos: i32 = string_index_of(text, "World");
+    print(f"Position of 'World': {pos}");
+
+    let not_found: i32 = string_index_of(text, "xyz");
+    print(f"Position of 'xyz': {not_found}");
+
+    return len;
+}
