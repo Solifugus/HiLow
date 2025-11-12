@@ -288,9 +288,11 @@ impl Lexer {
     }
 
     fn read_string(&mut self, start_line: usize, start_column: usize) -> Result<Token, String> {
+        use crate::lexer::token::FStringPart;
+
         // Check for prefix (f, r, rf)
         let is_fstring = self.peek_string("f\"") || self.peek_string("rf\"");
-        let is_raw = self.peek_string("r\"") || self.peek_string("rf\"");
+        let _is_raw = self.peek_string("r\"") || self.peek_string("rf\"");
 
         // Skip prefix
         if self.current() == 'r' {
@@ -311,33 +313,107 @@ impl Lexer {
             self.advance();
         }
 
-        let mut value = String::new();
+        if is_fstring {
+            // Parse f-string with interpolation
+            let mut parts = Vec::new();
+            let mut current_text = String::new();
 
-        // Read until we find matching closing quotes
-        while !self.is_at_end() {
-            // Check if we have closing quotes
-            if self.peek_quotes_ahead() == quote_count {
-                // Consume closing quotes
-                for _ in 0..quote_count {
-                    self.advance();
+            while !self.is_at_end() {
+                // Check if we have closing quotes
+                if self.peek_quotes_ahead() == quote_count {
+                    // Add any remaining text
+                    if !current_text.is_empty() {
+                        parts.push(FStringPart::Text(current_text.clone()));
+                    }
+
+                    // Consume closing quotes
+                    for _ in 0..quote_count {
+                        self.advance();
+                    }
+
+                    let lexeme = format!("f\"...\"");
+                    return Ok(Token::new(TokenKind::FStringLiteral(parts), lexeme, start_line, start_column));
                 }
 
-                let lexeme = format!("\"{}\"", value);
-                return Ok(Token::new(TokenKind::StringLiteral(value), lexeme, start_line, start_column));
+                let ch = self.current();
+
+                if ch == '{' {
+                    // Save current text part
+                    if !current_text.is_empty() {
+                        parts.push(FStringPart::Text(current_text.clone()));
+                        current_text.clear();
+                    }
+
+                    // Skip the '{'
+                    self.advance();
+
+                    // Read the expression until we find '}'
+                    let mut expr = String::new();
+                    let mut brace_depth = 1;
+
+                    while !self.is_at_end() && brace_depth > 0 {
+                        let expr_ch = self.current();
+                        if expr_ch == '{' {
+                            brace_depth += 1;
+                        } else if expr_ch == '}' {
+                            brace_depth -= 1;
+                            if brace_depth == 0 {
+                                break;
+                            }
+                        }
+                        expr.push(expr_ch);
+                        self.advance();
+                    }
+
+                    if self.is_at_end() {
+                        return Err(format!("Unterminated expression in f-string at {}:{}", start_line, start_column));
+                    }
+
+                    // Skip the closing '}'
+                    self.advance();
+
+                    parts.push(FStringPart::Expression(expr.trim().to_string()));
+                } else {
+                    if ch == '\n' {
+                        self.line += 1;
+                        self.column = 0;
+                    }
+                    current_text.push(ch);
+                    self.advance();
+                }
             }
 
-            let ch = self.current();
+            Err(format!("Unterminated f-string at {}:{}", start_line, start_column))
+        } else {
+            // Regular string
+            let mut value = String::new();
 
-            if ch == '\n' {
-                self.line += 1;
-                self.column = 0;
+            // Read until we find matching closing quotes
+            while !self.is_at_end() {
+                // Check if we have closing quotes
+                if self.peek_quotes_ahead() == quote_count {
+                    // Consume closing quotes
+                    for _ in 0..quote_count {
+                        self.advance();
+                    }
+
+                    let lexeme = format!("\"{}\"", value);
+                    return Ok(Token::new(TokenKind::StringLiteral(value), lexeme, start_line, start_column));
+                }
+
+                let ch = self.current();
+
+                if ch == '\n' {
+                    self.line += 1;
+                    self.column = 0;
+                }
+
+                value.push(ch);
+                self.advance();
             }
 
-            value.push(ch);
-            self.advance();
+            Err(format!("Unterminated string at {}:{}", start_line, start_column))
         }
-
-        Err(format!("Unterminated string at {}:{}", start_line, start_column))
     }
 
     fn count_quotes(&self) -> usize {

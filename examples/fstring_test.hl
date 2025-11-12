@@ -1,0 +1,12 @@
+function main(): i32 {
+    let name: i32 = 42;
+    let age: i32 = 30;
+    let sum: i32 = name + age;
+
+    print(f"Value: {name}");
+    print(f"Age: {age}");
+    print(f"Sum: {sum}");
+    print(f"Math: {10 + 20}");
+
+    return sum;
+}

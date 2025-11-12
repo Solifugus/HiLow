@@ -1,0 +1,11 @@
+function main(): i32 {
+    let simple: string = "Hello World";
+    let nested: string = ""He said "hello" to me"";
+    let triple: string = """She replied ""ok"" quickly""";
+
+    print(simple);
+    print(nested);
+    print(triple);
+
+    return 0;
+}

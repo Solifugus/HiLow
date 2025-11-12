@@ -1,6 +1,12 @@
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FStringPart {
+    Text(String),
+    Expression(Box<Expression>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Statement>,
 }
@@ -102,6 +108,9 @@ pub enum Expression {
     IntegerLiteral(i64),
     FloatLiteral(f64),
     StringLiteral(String),
+    FString {
+        parts: Vec<FStringPart>,
+    },
     BooleanLiteral(bool),
     Identifier(String),
     Binary {

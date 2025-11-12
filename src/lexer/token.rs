@@ -9,6 +9,12 @@ pub struct Token {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FStringPart {
+    Text(String),
+    Expression(String), // The expression as a string to be parsed later
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Keywords
     Function,
@@ -47,6 +53,7 @@ pub enum TokenKind {
     IntegerLiteral(i64),
     FloatLiteral(f64),
     StringLiteral(String),
+    FStringLiteral(Vec<FStringPart>),
     BooleanLiteral(bool),
 
     // Identifiers

@@ -1,0 +1,38 @@
+function process_scores(scores: [i32; 5]): i32 {
+    let total: i32 = 0;
+    let count: i32 = 0;
+
+    for (score in scores) {
+        total += score;
+        count += 1;
+    }
+
+    let average: i32 = total / count;
+
+    print(f"Total scores: {total}");
+    print(f"Number of scores: {count}");
+    print(f"Average score: {average}");
+
+    return average;
+}
+
+function generate_report(name: i32, id: i32, avg: i32): i32 {
+    print(f"===== Student Report =====");
+    print(f"Student ID: {id}");
+    print(f"Name Code: {name}");
+    print(f"Average: {avg}");
+    print(f"==========================");
+
+    return 1;
+}
+
+function main(): i32 {
+    let scores: [i32; 5] = [85, 92, 78, 95, 88];
+    let student_name: i32 = 12345;
+    let student_id: i32 = 67890;
+
+    let avg: i32 = process_scores(scores);
+    generate_report(student_name, student_id, avg);
+
+    return avg;
+}

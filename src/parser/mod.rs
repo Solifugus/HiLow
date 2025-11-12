@@ -672,7 +672,7 @@ impl Parser {
         match &token.kind {
             TokenKind::IntegerLiteral(_) | TokenKind::FloatLiteral(_)
             | TokenKind::StringLiteral(_) | TokenKind::BooleanLiteral(_)
-            | TokenKind::Identifier(_) => {
+            | TokenKind::Identifier(_) | TokenKind::FStringLiteral(_) => {
                 let token = self.advance();
                 match token.kind {
                     TokenKind::IntegerLiteral(n) => Ok(Expression::IntegerLiteral(n)),
@@ -680,6 +680,29 @@ impl Parser {
                     TokenKind::StringLiteral(s) => Ok(Expression::StringLiteral(s)),
                     TokenKind::BooleanLiteral(b) => Ok(Expression::BooleanLiteral(b)),
                     TokenKind::Identifier(name) => Ok(Expression::Identifier(name)),
+                    TokenKind::FStringLiteral(lexer_parts) => {
+                        // Convert lexer FStringParts to AST FStringParts
+                        use crate::ast::FStringPart as AstFStringPart;
+                        use crate::lexer::token::FStringPart as LexerFStringPart;
+
+                        let mut ast_parts = Vec::new();
+                        for part in lexer_parts {
+                            match part {
+                                LexerFStringPart::Text(text) => {
+                                    ast_parts.push(AstFStringPart::Text(text));
+                                }
+                                LexerFStringPart::Expression(expr_str) => {
+                                    // Parse the expression string
+                                    let mut lexer = crate::lexer::Lexer::new(&expr_str);
+                                    let tokens = lexer.tokenize().map_err(|e| format!("Error lexing f-string expression: {}", e))?;
+                                    let mut parser = Parser::new(tokens);
+                                    let expr = parser.parse_expression()?;
+                                    ast_parts.push(AstFStringPart::Expression(Box::new(expr)));
+                                }
+                            }
+                        }
+                        Ok(Expression::FString { parts: ast_parts })
+                    }
                     _ => unreachable!(),
                 }
             }

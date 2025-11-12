@@ -407,6 +407,48 @@ impl CodeGenerator {
                 self.emit_no_indent(&format!("\"{}\"", s.escape_default()));
             }
 
+            Expression::FString { parts } => {
+                use crate::ast::FStringPart;
+
+                // For f-strings, we'll generate a format string and printf call
+                // First pass: build the format string and collect arguments
+                let mut format_str = String::new();
+                let mut args = Vec::new();
+
+                for part in parts {
+                    match part {
+                        FStringPart::Text(text) => {
+                            // Escape % signs for printf
+                            format_str.push_str(&text.replace("%", "%%"));
+                        }
+                        FStringPart::Expression(expr) => {
+                            // Simple type inference for format specifier
+                            // This is a simplification - a real implementation would use proper type checking
+                            format_str.push_str("%d"); // Default to integer for now
+                            args.push(expr);
+                        }
+                    }
+                }
+
+                // Generate the printf-style expression
+                // We'll use a compound literal (string expression) in C
+                self.emit_no_indent("(");
+                self.emit_no_indent(&format!("\"{}\"", format_str));
+
+                // For now, if we have expressions, we'll need to use sprintf or similar
+                // Let's generate a simple concatenation for basic cases
+                if !args.is_empty() {
+                    self.emit_no_indent(", ");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.emit_no_indent(", ");
+                        }
+                        self.generate_expression(arg)?;
+                    }
+                }
+                self.emit_no_indent(")");
+            }
+
             Expression::BooleanLiteral(b) => {
                 self.emit_no_indent(if *b { "true" } else { "false" });
             }
@@ -443,12 +485,42 @@ impl CodeGenerator {
                             }
 
                             // Generate format string for print
-                            if let Expression::StringLiteral(_) = arg {
-                                self.emit_no_indent("\"%s\\n\"");
-                                self.emit_no_indent(", ");
-                                self.generate_expression(arg)?;
-                            } else {
-                                self.generate_expression(arg)?;
+                            match arg {
+                                Expression::StringLiteral(_) => {
+                                    self.emit_no_indent("\"%s\\n\"");
+                                    self.emit_no_indent(", ");
+                                    self.generate_expression(arg)?;
+                                }
+                                Expression::FString { parts } => {
+                                    use crate::ast::FStringPart;
+
+                                    // Build format string for the f-string
+                                    let mut format_str = String::new();
+                                    let mut fstring_args = Vec::new();
+
+                                    for part in parts {
+                                        match part {
+                                            FStringPart::Text(text) => {
+                                                format_str.push_str(&text.replace("%", "%%"));
+                                            }
+                                            FStringPart::Expression(expr) => {
+                                                format_str.push_str("%d");
+                                                fstring_args.push(expr);
+                                            }
+                                        }
+                                    }
+
+                                    format_str.push_str("\\n");
+                                    self.emit_no_indent(&format!("\"{}\"", format_str));
+
+                                    for expr in fstring_args {
+                                        self.emit_no_indent(", ");
+                                        self.generate_expression(expr)?;
+                                    }
+                                }
+                                _ => {
+                                    self.generate_expression(arg)?;
+                                }
                             }
                         }
                         self.emit_no_indent(")");
