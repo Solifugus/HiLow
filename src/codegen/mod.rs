@@ -57,6 +57,7 @@ impl CodeGenerator {
         self.emit("#include <stdbool.h>");
         self.emit("#include <string.h>");
         self.emit("#include <ctype.h>");
+        self.emit("#include <math.h>");
         self.emit("");
 
         // Generate unknown type structure
@@ -786,6 +787,56 @@ impl CodeGenerator {
                         self.generate_expression(&args[0])?;
                         self.emit_no_indent(", ");
                         self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    // Math functions
+                    if name == "abs" && args.len() == 1 {
+                        self.emit_no_indent("abs(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    if name == "min" && args.len() == 2 {
+                        self.emit_no_indent("(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(" < ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(" ? ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(" : ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    if name == "max" && args.len() == 2 {
+                        self.emit_no_indent("(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(" > ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(" ? ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(" : ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    if name == "pow" && args.len() == 2 {
+                        self.emit_no_indent("(int32_t)pow(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                        return Ok(());
+                    }
+
+                    if name == "sqrt" && args.len() == 1 {
+                        self.emit_no_indent("(int32_t)sqrt(");
+                        self.generate_expression(&args[0])?;
                         self.emit_no_indent(")");
                         return Ok(());
                     }

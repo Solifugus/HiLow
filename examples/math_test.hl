@@ -1,0 +1,21 @@
+function main(): i32 {
+    print("=== Math Functions ===");
+
+    let neg: i32 = -15;
+    let pos: i32 = abs(neg);
+    print(f"abs(-15) = {pos}");
+
+    let minimum: i32 = min(10, 20);
+    print(f"min(10, 20) = {minimum}");
+
+    let maximum: i32 = max(10, 20);
+    print(f"max(10, 20) = {maximum}");
+
+    let power: i32 = pow(2, 10);
+    print(f"pow(2, 10) = {power}");
+
+    let root: i32 = sqrt(100);
+    print(f"sqrt(100) = {root}");
+
+    return power;
+}
