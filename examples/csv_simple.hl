@@ -1,0 +1,43 @@
+function test_split_join(): i32 {
+    let text: string = "one,two,three,four";
+    let parts: [string] = text.split(",");
+
+    print(f"Split into {parts.length} parts");
+
+    let rejoined: string = parts.join("-");
+    print(f"Rejoined: {rejoined}");
+
+    return parts.length;
+}
+
+function test_stack(): i32 {
+    let numbers: [i32];
+
+    numbers.push(100);
+    numbers.push(200);
+    numbers.push(300);
+
+    print(f"Pushed 3 numbers, length: {numbers.length}");
+
+    let a: i32 = numbers.pop();
+    let b: i32 = numbers.pop();
+
+    print(f"Popped {a} and {b}");
+    print(f"Remaining: {numbers.length}");
+
+    return a + b;
+}
+
+function main(): i32 {
+    print("=== Split/Join Test ===");
+    let parts: i32 = test_split_join();
+
+    print("");
+    print("=== Stack Test ===");
+    let stack_sum: i32 = test_stack();
+
+    print("");
+    print(f"Total: {parts} + {stack_sum} = {parts + stack_sum}");
+
+    return parts + stack_sum;
+}

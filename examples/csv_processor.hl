@@ -1,0 +1,60 @@
+function process_csv_line(line: string): i32 {
+    let trimmed: string = line.trim();
+    let fields: [string] = trimmed.split(",");
+
+    print(f"Processing {fields.length} fields:");
+
+    let i: i32 = 0;
+    let total: i32 = 0;
+
+    while (i < fields.length) {
+        let field: [string] = fields;
+        let item_ptr: string = ((string*) field->data)[i];
+        let item_trimmed: string = item_ptr.trim();
+
+        print(f"  Field {i}: {item_trimmed}");
+
+        i += 1;
+    }
+
+    let joined: string = fields.join(" | ");
+    print(f"Joined: {joined}");
+
+    return fields.length;
+}
+
+function test_dynamic_stack(): i32 {
+    let stack: [i32];
+
+    stack.push(10);
+    stack.push(20);
+    stack.push(30);
+
+    print(f"Stack has {stack.length} items");
+
+    let sum: i32 = 0;
+    let count: i32 = stack.length;
+    let i: i32 = 0;
+    while (i < count) {
+        let val: i32 = stack.pop();
+        sum += val;
+        print(f"Popped: {val}");
+        i += 1;
+    }
+
+    print(f"Sum: {sum}");
+
+    return sum;
+}
+
+function main(): i32 {
+    print("=== CSV Processing ===");
+    let csv: string = "apple, banana, cherry, date";
+    let field_count: i32 = process_csv_line(csv);
+
+    print("");
+    print("=== Dynamic Stack ===");
+    let stack_sum: i32 = test_dynamic_stack();
+
+    return field_count + stack_sum;
+}

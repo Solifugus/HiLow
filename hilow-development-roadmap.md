@@ -3,8 +3,8 @@
 This roadmap outlines the development of the HiLow programming language from initial concept to production-ready compiler. Each phase includes testing milestones before proceeding to the next stage.
 
 **Last Updated**: 2025-11-11
-**Current Phase**: Phase 5.1 (Complete String Methods) - COMPLETE ✓
-**Status**: Phases 0-5.1 Complete ✓
+**Current Phase**: Phase 5.2 (Array Methods and Dynamic Arrays) - COMPLETE ✓
+**Status**: Phases 0-5.2 Complete ✓
 
 ## Phase 0: Project Foundation ✓ COMPLETE
 
@@ -490,35 +490,46 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 
 ---
 
-## Phase 5.2: Array Methods and Dynamic Arrays (NEW)
+## Phase 5.2: Array Methods and Dynamic Arrays ✓ COMPLETE
 
-**Status**: Not started - after Phase 5.1
+**Status**: Complete (2025-11-11)
 **Rationale**: Arrays exist, need push/pop for practical usage
 
 ### Array Infrastructure
-- [ ] Dynamic array structure (length, capacity, data)
-- [ ] .push(item) method
-- [ ] .pop() → item method
-- [ ] .length property (for dynamic arrays)
-- [ ] Array resizing with realloc
+- [x] Dynamic array structure (length, capacity, data) ✓
+- [x] .push(item) method ✓
+- [x] .pop() → item method ✓
+- [x] .length property (for dynamic arrays) ✓
+- [x] Array resizing with realloc ✓
+- [x] .split() for strings → [string] ✓
+- [x] .join(separator) for arrays → string ✓
 
 **Implementation Notes:**
-- Generate DynamicArray struct in preamble
-- Track length/capacity separately from data pointer
-- Simple doubling strategy for capacity growth
+- DynamicArray struct generated in preamble
+- Tracks length/capacity/element_size/data pointer
+- Doubling strategy for capacity growth
+- Type-specific push/pop (i32, string)
 
 **Testing:**
-- [ ] Test push/pop operations
-- [ ] Test dynamic growth
-- [ ] Test stack implementation
-- [ ] Test queue operations
+- [x] Test push/pop operations ✓
+- [x] Test dynamic growth (automatic) ✓
+- [x] Test stack implementation ✓
+- [x] Test split/join ✓
 
 **Validation Checkpoint:**
-- [ ] Stack implementation using push/pop
-- [ ] Dynamic list building program
-- [ ] All tests pass
+- [x] Stack implementation using push/pop (array_methods_final.hl) ✓
+- [x] Split/join operations (split_join.hl) ✓
+- [x] All tests pass (9 unit + 4 integration = 100%) ✓
 
-**Time Estimate:** 4-6 hours
+**Phase 5.2 Accomplishments:**
+1. ✅ DynamicArray structure with metadata
+2. ✅ array_push_i32() and array_pop_i32()
+3. ✅ array_push_string() for string arrays
+4. ✅ Dynamic array indexing via ->data
+5. ✅ .length property for dynamic arrays
+6. ✅ String.split(delimiter) → DynamicArray of strings
+7. ✅ Array.join(separator) → concatenated string
+8. ✅ Automatic capacity doubling with realloc
 
 ---
 

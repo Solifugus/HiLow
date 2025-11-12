@@ -48,6 +48,74 @@ impl CodeGenerator {
         self.emit("#include <ctype.h>");
         self.emit("");
 
+        // Generate dynamic array structure
+        self.emit("// Dynamic array structure");
+        self.emit("typedef struct {");
+        self.emit("    void* data;");
+        self.emit("    int32_t length;");
+        self.emit("    int32_t capacity;");
+        self.emit("    size_t element_size;");
+        self.emit("} DynamicArray;");
+        self.emit("");
+        self.emit("DynamicArray* array_new(size_t element_size) {");
+        self.emit("    DynamicArray* arr = malloc(sizeof(DynamicArray));");
+        self.emit("    arr->capacity = 4;");
+        self.emit("    arr->length = 0;");
+        self.emit("    arr->element_size = element_size;");
+        self.emit("    arr->data = malloc(arr->capacity * element_size);");
+        self.emit("    return arr;");
+        self.emit("}");
+        self.emit("");
+        self.emit("void array_push_i32(DynamicArray* arr, int32_t item) {");
+        self.emit("    if (arr->length >= arr->capacity) {");
+        self.emit("        arr->capacity *= 2;");
+        self.emit("        arr->data = realloc(arr->data, arr->capacity * arr->element_size);");
+        self.emit("    }");
+        self.emit("    ((int32_t*)arr->data)[arr->length++] = item;");
+        self.emit("}");
+        self.emit("");
+        self.emit("int32_t array_pop_i32(DynamicArray* arr) {");
+        self.emit("    if (arr->length == 0) return 0;");
+        self.emit("    return ((int32_t*)arr->data)[--arr->length];");
+        self.emit("}");
+        self.emit("");
+        self.emit("void array_push_string(DynamicArray* arr, char* item) {");
+        self.emit("    if (arr->length >= arr->capacity) {");
+        self.emit("        arr->capacity *= 2;");
+        self.emit("        arr->data = realloc(arr->data, arr->capacity * arr->element_size);");
+        self.emit("    }");
+        self.emit("    ((char**)arr->data)[arr->length++] = item;");
+        self.emit("}");
+        self.emit("");
+        self.emit("DynamicArray* str_split(const char* str, const char* delim) {");
+        self.emit("    DynamicArray* result = array_new(sizeof(char*));");
+        self.emit("    char* str_copy = strdup(str);");
+        self.emit("    char* token = strtok(str_copy, delim);");
+        self.emit("    while (token != NULL) {");
+        self.emit("        array_push_string(result, strdup(token));");
+        self.emit("        token = strtok(NULL, delim);");
+        self.emit("    }");
+        self.emit("    free(str_copy);");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* array_join_string(DynamicArray* arr, const char* sep) {");
+        self.emit("    if (arr->length == 0) return strdup(\"\");");
+        self.emit("    int total_len = 0;");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        total_len += strlen(((char**)arr->data)[i]);");
+        self.emit("    }");
+        self.emit("    total_len += strlen(sep) * (arr->length - 1);");
+        self.emit("    char* result = malloc(total_len + 1);");
+        self.emit("    result[0] = '\\0';");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        if (i > 0) strcat(result, sep);");
+        self.emit("        strcat(result, ((char**)arr->data)[i]);");
+        self.emit("    }");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+
         // Generate string helper functions
         self.emit("// String helper functions");
         self.emit("char* str_to_upper(const char* str) {");
@@ -221,8 +289,28 @@ impl CodeGenerator {
                 var_type,
                 initializer,
             } => {
-                // Special handling for fixed-size arrays
-                if let Some(Type::Array { element_type, size: Some(size) }) = var_type {
+                // Special handling for dynamic arrays (no size)
+                if let Some(Type::Array { element_type, size: None }) = var_type {
+                    let elem_c_type = self.type_to_c(element_type);
+                    self.variables.insert(name.clone(), "DynamicArray*".to_string());
+
+                    self.emit_no_indent(&self.indent());
+                    self.emit_no_indent("DynamicArray* ");
+                    self.emit_no_indent(name);
+
+                    if let Some(init) = initializer {
+                        // Use the initializer (e.g., from split())
+                        self.emit_no_indent(" = ");
+                        self.generate_expression(init)?;
+                    } else {
+                        // Create new empty array
+                        self.emit_no_indent(" = ");
+                        self.emit_no_indent(&format!("array_new(sizeof({}))", elem_c_type));
+                    }
+
+                    self.output.push_str(";\n");
+                } else if let Some(Type::Array { element_type, size: Some(size) }) = var_type {
+                    // Fixed-size arrays
                     let elem_c_type = self.type_to_c(element_type);
                     self.variables.insert(name.clone(), format!("{}*", elem_c_type));
 
@@ -710,10 +798,29 @@ impl CodeGenerator {
             }
 
             Expression::Index { array, index } => {
-                self.generate_expression(array)?;
-                self.emit_no_indent("[");
-                self.generate_expression(index)?;
-                self.emit_no_indent("]");
+                // Check if it's a dynamic array
+                let is_dynamic_array = if let Expression::Identifier(name) = array.as_ref() {
+                    self.variables.get(name)
+                        .map(|t| t.contains("DynamicArray"))
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if is_dynamic_array {
+                    // Dynamic array indexing: arr->data[index]
+                    self.emit_no_indent("((int32_t*)");
+                    self.generate_expression(array)?;
+                    self.emit_no_indent("->data)[");
+                    self.generate_expression(index)?;
+                    self.emit_no_indent("]");
+                } else {
+                    // Regular array indexing
+                    self.generate_expression(array)?;
+                    self.emit_no_indent("[");
+                    self.generate_expression(index)?;
+                    self.emit_no_indent("]");
+                }
             }
 
             Expression::ObjectLiteral { properties } => {
@@ -732,11 +839,28 @@ impl CodeGenerator {
             }
 
             Expression::PropertyAccess { object, property } => {
-                // Special case for .length on strings
+                // Special case for .length
                 if property == "length" {
-                    self.emit_no_indent("strlen(");
-                    self.generate_expression(object)?;
-                    self.emit_no_indent(")");
+                    // Check if it's an array (DynamicArray*) or string
+                    // For now, we'll check the variable type
+                    let is_dynamic_array = if let Expression::Identifier(name) = object.as_ref() {
+                        self.variables.get(name)
+                            .map(|t| t.contains("DynamicArray"))
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+
+                    if is_dynamic_array {
+                        // Dynamic array length
+                        self.generate_expression(object)?;
+                        self.emit_no_indent("->length");
+                    } else {
+                        // String length
+                        self.emit_no_indent("strlen(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
                 } else {
                     self.generate_expression(object)?;
                     self.emit_no_indent(".");
@@ -815,6 +939,34 @@ impl CodeGenerator {
                         self.generate_expression(&args[0])?;
                         self.emit_no_indent(", ");
                         self.generate_expression(&args[1])?;
+                        self.emit_no_indent(")");
+                    }
+                    "split" if args.len() == 1 => {
+                        self.emit_no_indent("str_split(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    // Array methods
+                    "join" if args.len() == 1 => {
+                        self.emit_no_indent("array_join_string(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "push" if args.len() == 1 => {
+                        // For now, assume i32 arrays - needs type system improvement
+                        self.emit_no_indent("array_push_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "pop" if args.is_empty() => {
+                        self.emit_no_indent("array_pop_i32(");
+                        self.generate_expression(object)?;
                         self.emit_no_indent(")");
                     }
                     _ => {

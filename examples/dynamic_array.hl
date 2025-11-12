@@ -1,0 +1,26 @@
+function main(): i32 {
+    let arr: [i32];
+
+    arr.push(10);
+    arr.push(20);
+    arr.push(30);
+    arr.push(40);
+    arr.push(50);
+
+    print(f"Array length: {arr.length}");
+
+    let sum: i32 = 0;
+    let i: i32 = 0;
+    while (i < arr.length) {
+        sum += arr[i];
+        i += 1;
+    }
+
+    print(f"Sum: {sum}");
+
+    let last: i32 = arr.pop();
+    print(f"Popped: {last}");
+    print(f"New length: {arr.length}");
+
+    return arr.length;
+}

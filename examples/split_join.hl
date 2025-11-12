@@ -1,0 +1,15 @@
+function main(): i32 {
+    let text: string = "apple,banana,cherry";
+
+    print(f"Original: {text}");
+
+    let parts: [string] = text.split(",");
+
+    print(f"Split into {parts.length} parts");
+
+    let joined: string = parts.join(" | ");
+
+    print(f"Joined: {joined}");
+
+    return parts.length;
+}
