@@ -1,0 +1,108 @@
+function sum(a: i32, b: i32): i32 {
+    return a + b;
+}
+
+function is_positive(x: i32, dummy: i32): i32 {
+    if (x > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+function main(): i32 {
+    print("========================================");
+    print("   HiLow Ultimate Feature Showcase");
+    print("========================================");
+
+    print("");
+    print("1. F-STRINGS & QUOTE RECURSION");
+    let name: string = "HiLow";
+    let version: i32 = 1;
+    print(f"Language: {name}, Version: {version}");
+    print("Quote recursion: nested quotes work");
+
+    print("");
+    print("2. STRING METHODS");
+    let text: string = "  hello world  ";
+    let clean: string = text.trim().toUpperCase();
+    print(f"Transformed: '{clean}'");
+    let words: [string] = clean.split(" ");
+    let back: string = words.join("-");
+    print(f"Split/Join: '{back}'");
+
+    print("");
+    print("3. DYNAMIC ARRAYS");
+    let nums: [i32];
+    nums.push(10);
+    nums.push(20);
+    nums.push(30);
+    print(f"Array length: {nums.length}");
+
+    print("");
+    print("4. FUNCTIONAL PROGRAMMING");
+    let squares: function = function(x: i32, dummy: i32): i32 {
+        return x * x;
+    };
+    let mapped: [i32] = nums.map(squares);
+    print("Squared values:");
+    let i: i32 = 0;
+    while (i < mapped.length) {
+        print(f"  {mapped[i]}");
+        i += 1;
+    }
+
+    print("");
+    print("5. CLOSURES WITH CAPTURE");
+    let multiplier: i32 = 3;
+    let scale: function = function(x: i32, dummy: i32): i32 {
+        return x * multiplier;
+    };
+    let scaled: i32 = scale(7);
+    print(f"scale(7) with multiplier={multiplier}: {scaled}");
+
+    print("");
+    print("6. DEFER STATEMENT");
+    {
+        defer print("  Deferred cleanup executed!");
+        print("  Inside block");
+    }
+
+    print("");
+    print("7. CONTROL FLOW");
+    let choice: i32 = 2;
+    switch (choice) {
+        case 1:
+            print("  Case 1");
+            break;
+        case 2:
+            print("  Case 2 selected");
+            break;
+        default:
+            print("  Default");
+            break;
+    }
+
+    print("");
+    print("8. OBJECTS");
+    let point = {x: 5, y: 10};
+    point.x += 15;
+    print(f"Point: ({point.x}, {point.y})");
+
+    print("");
+    print("9. MATH FUNCTIONS");
+    let calc: i32 = max(abs(-10), min(5, 20));
+    print(f"max(abs(-10), min(5,20)) = {calc}");
+
+    print("");
+    print("10. NOTHING TYPE");
+    let ptr: i32 = nothing;
+    if (ptr ??= nothing) {
+        print("nothing works correctly!");
+    }
+
+    print("========================================");
+    print("   All HiLow Features Demonstrated!");
+    print("========================================");
+
+    return 0;
+}

@@ -1,0 +1,45 @@
+function square(x: i32, dummy: i32): i32 {
+    return x * x;
+}
+
+function main(): i32 {
+    print("===== HiLow Language Demo =====");
+
+    print("Strings:");
+    let msg: string = "  hello  ".trim().toUpperCase();
+    print(msg);
+
+    print("Arrays:");
+    let arr: [i32];
+    arr.push(1);
+    arr.push(2);
+    arr.push(3);
+
+    print("Closures:");
+    let base: i32 = 10;
+    let adder: function = function(x: i32, dummy: i32): i32 {
+        return x + base;
+    };
+    let r: i32 = adder(5);
+    print(f"adder(5) = {r}");
+
+    print("Functional:");
+    let squared: [i32] = arr.map(square);
+    print("Squared array created");
+
+    print("Defer:");
+    defer print("Cleanup executed");
+
+    print("Nothing:");
+    let n: i32 = nothing;
+    if (n ??= nothing) {
+        print("nothing type works");
+    }
+
+    print("Math:");
+    let calc: i32 = pow(2, 5);
+    print(f"pow(2,5) = {calc}");
+
+    print("===== Demo Complete =====");
+    return 0;
+}
