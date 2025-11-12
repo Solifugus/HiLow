@@ -658,6 +658,14 @@ impl Parser {
                     array: Box::new(expr),
                     index: Box::new(index),
                 };
+            } else if self.match_token(&TokenKind::Dot) {
+                // Property access
+                let property = self.expect_identifier()?;
+
+                expr = Expression::PropertyAccess {
+                    object: Box::new(expr),
+                    property,
+                };
             } else {
                 break;
             }
@@ -727,6 +735,29 @@ impl Parser {
 
                 self.expect(TokenKind::RightBracket)?;
                 Ok(Expression::ArrayLiteral { elements })
+            }
+            TokenKind::LeftBrace => {
+                self.advance();
+                let mut properties = Vec::new();
+
+                while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+                    // Parse property key
+                    let key = self.expect_identifier()?;
+                    self.expect(TokenKind::Colon)?;
+
+                    // Parse property value
+                    let value = self.parse_expression()?;
+
+                    properties.push(crate::ast::Property { key, value });
+
+                    // Check for comma (optional before closing brace)
+                    if !self.match_token(&TokenKind::Comma) {
+                        break;
+                    }
+                }
+
+                self.expect(TokenKind::RightBrace)?;
+                Ok(Expression::ObjectLiteral { properties })
             }
             _ => {
                 let t = self.advance();

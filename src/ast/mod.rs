@@ -101,6 +101,7 @@ pub enum Type {
         params: Vec<Type>,
         return_type: Box<Type>,
     },
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +138,19 @@ pub enum Expression {
         array: Box<Expression>,
         index: Box<Expression>,
     },
+    ObjectLiteral {
+        properties: Vec<Property>,
+    },
+    PropertyAccess {
+        object: Box<Expression>,
+        property: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Property {
+    pub key: String,
+    pub value: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,6 +227,7 @@ impl fmt::Display for Type {
                 }
                 write!(f, "): {}", return_type)
             }
+            Type::Object => write!(f, "object"),
         }
     }
 }

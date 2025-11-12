@@ -1,0 +1,25 @@
+function calculate_rectangle_area(width: i32, height: i32): i32 {
+    return width * height;
+}
+
+function calculate_circle_area(radius: i32): i32 {
+    return 3 * radius * radius;
+}
+
+function main(): i32 {
+    let rect = {width: 10, height: 5};
+    let circle = {radius: 7};
+
+    let rect_area: i32 = calculate_rectangle_area(rect.width, rect.height);
+    let circle_area: i32 = calculate_circle_area(circle.radius);
+
+    print(f"Rectangle: {rect.width}x{rect.height}");
+    print(f"Rectangle area: {rect_area}");
+    print(f"Circle radius: {circle.radius}");
+    print(f"Circle area (approx): {circle_area}");
+
+    let total: i32 = rect_area + circle_area;
+    print(f"Total area: {total}");
+
+    return total;
+}

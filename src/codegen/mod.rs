@@ -167,6 +167,18 @@ impl CodeGenerator {
                             "char*".to_string()
                         } else if let Some(Expression::BooleanLiteral(_)) = initializer {
                             "bool".to_string()
+                        } else if let Some(Expression::ObjectLiteral { properties }) = initializer {
+                            // Generate struct type from object literal
+                            let mut struct_def = "struct { ".to_string();
+                            for (i, prop) in properties.iter().enumerate() {
+                                if i > 0 {
+                                    struct_def.push_str("; ");
+                                }
+                                struct_def.push_str("int32_t ");
+                                struct_def.push_str(&prop.key);
+                            }
+                            struct_def.push_str("; }");
+                            struct_def
                         } else {
                             return Err("Cannot infer type for variable".to_string());
                         }
@@ -562,6 +574,27 @@ impl CodeGenerator {
                 self.generate_expression(index)?;
                 self.emit_no_indent("]");
             }
+
+            Expression::ObjectLiteral { properties } => {
+                // For objects in C, we'll generate a compound literal with a struct
+                self.emit_no_indent("{");
+                for (i, prop) in properties.iter().enumerate() {
+                    if i > 0 {
+                        self.emit_no_indent(", ");
+                    }
+                    self.emit_no_indent(".");
+                    self.emit_no_indent(&prop.key);
+                    self.emit_no_indent(" = ");
+                    self.generate_expression(&prop.value)?;
+                }
+                self.emit_no_indent("}");
+            }
+
+            Expression::PropertyAccess { object, property } => {
+                self.generate_expression(object)?;
+                self.emit_no_indent(".");
+                self.emit_no_indent(property);
+            }
         }
 
         Ok(())
@@ -593,6 +626,7 @@ impl CodeGenerator {
                 }
             }
             Type::Function { .. } => "void*".to_string(),
+            Type::Object => "void*".to_string(),
         }
     }
 

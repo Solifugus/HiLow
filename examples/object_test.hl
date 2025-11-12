@@ -1,0 +1,13 @@
+function main(): i32 {
+    let point = {x: 10, y: 20};
+
+    let px: i32 = point.x;
+    let py: i32 = point.y;
+    let sum: i32 = px + py;
+
+    print(f"Point x: {px}");
+    print(f"Point y: {py}");
+    print(f"Sum: {sum}");
+
+    return sum;
+}
