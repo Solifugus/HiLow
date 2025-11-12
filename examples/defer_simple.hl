@@ -1,0 +1,18 @@
+function main(): i32 {
+    print("Start");
+
+    defer print("Defer 1");
+    defer print("Defer 2");
+    defer print("Defer 3");
+
+    print("Middle");
+
+    {
+        defer print("Inner defer");
+        print("Inside block");
+    }
+
+    print("End");
+
+    return 42;
+}

@@ -1,0 +1,27 @@
+function test_early_return(x: i32): i32 {
+    defer print("Defer: cleanup");
+
+    print(f"Testing with x={x}");
+
+    if (x < 0) {
+        print("Early return!");
+        return -1;
+    }
+
+    print("Normal path");
+    return x * 2;
+}
+
+function main(): i32 {
+    print("=== Test 1: Normal Return ===");
+    let r1: i32 = test_early_return(5);
+
+    print("");
+    print("=== Test 2: Early Return ===");
+    let r2: i32 = test_early_return(-3);
+
+    print("");
+    print("Results shown above");
+
+    return r1;
+}

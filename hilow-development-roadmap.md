@@ -3,8 +3,8 @@
 This roadmap outlines the development of the HiLow programming language from initial concept to production-ready compiler. Each phase includes testing milestones before proceeding to the next stage.
 
 **Last Updated**: 2025-11-11
-**Current Phase**: Phase 6 (Functions and Closures) - COMPLETE ✓
-**Status**: Phases 0-6 Complete ✓ (~40% of roadmap)
+**Current Phase**: Phase 7 (Memory Management) - Defer Complete, Stack/Heap Deferred
+**Status**: Phases 0-6 Complete, Phase 7 Partial ✓ (~42% of roadmap)
 
 ## Phase 0: Project Foundation ✓ COMPLETE
 
@@ -659,41 +659,39 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 
 ---
 
-## Phase 7: Memory Management
+## Phase 7: Memory Management ✓ PARTIAL (Defer Complete)
 
-### Stack Allocation
-- [ ] Implement stack keyword
-- [ ] Automatic cleanup at scope exit
-- [ ] Track variable lifetimes
-
-**Testing:**
-- [ ] Test stack allocation
-- [ ] Test automatic cleanup
-- [ ] Test nested scopes
-
-### Heap Allocation
-- [ ] Implement heap keyword
-- [ ] Implement alloc() function
-- [ ] Manual deallocation (= nothing)
-- [ ] Memory leak detection in tests
-
-**Testing:**
-- [ ] Test heap allocation
-- [ ] Test deallocation
-- [ ] Test use-after-free detection
-- [ ] Test memory leaks
+**Status**: Defer statement complete (2025-11-11), stack/heap/pointers deferred
 
 ### Defer Statement
-- [ ] Parse defer syntax
-- [ ] Generate cleanup code
-- [ ] Multiple defers execute in reverse order
-- [ ] Defer with early returns
+- [x] Parse defer syntax ✓
+- [x] Generate cleanup code ✓
+- [x] Multiple defers execute in reverse order ✓
+- [x] Defer with early returns ✓
+- [x] Defer with scope exit ✓
 
 **Testing:**
-- [ ] Test defer execution
-- [ ] Test defer order
-- [ ] Test defer with returns
-- [ ] Test defer with errors
+- [x] Test defer execution ✓ (defer_simple.hl)
+- [x] Test defer order ✓ (executes 3,2,1 in reverse)
+- [x] Test defer with returns ✓ (defer_return.hl)
+- [x] Test nested defer scopes ✓ (defer_test.hl)
+
+### Stack Allocation
+- [ ] Implement stack keyword - deferred (C backend makes all stack by default)
+- [ ] Automatic cleanup at scope exit - works via defer
+- [ ] Track variable lifetimes - partial (defer provides this)
+
+### Heap Allocation
+- [ ] Implement heap keyword - deferred
+- [ ] Implement alloc() function - deferred
+- [ ] Manual deallocation (= nothing) - deferred
+- [ ] Memory leak detection in tests - deferred
+
+**Stack/Heap Rationale for Deferral:**
+- C backend already uses stack for local variables
+- Heap is used for dynamic arrays (malloc)
+- Explicit stack/heap keywords less critical with C backend
+- Can be added when switching to LLVM backend
 
 ### Pointers
 - [ ] Implement pointer types (*T)

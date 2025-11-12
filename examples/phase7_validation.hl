@@ -1,0 +1,58 @@
+function test_defer_order(): i32 {
+    print("=== Defer Execution Order ===");
+
+    defer print("Step 3: Last defer");
+    print("Step 1: First statement");
+    defer print("Step 2: First defer");
+
+    return 1;
+}
+
+function test_defer_scope(): i32 {
+    print("=== Defer Scope Test ===");
+
+    let x: i32 = 0;
+
+    {
+        defer x = x + 1;
+        defer x = x + 10;
+        print("Inside inner block");
+    }
+
+    print(f"After inner block: x={x}");
+
+    defer x = x + 100;
+
+    return x;
+}
+
+function test_defer_return(val: i32): i32 {
+    defer print("Defer executed");
+
+    if (val < 0) {
+        print("Early return path");
+        return -1;
+    }
+
+    print("Normal return path");
+    return val;
+}
+
+function main(): i32 {
+    test_defer_order();
+    print("");
+
+    let result: i32 = test_defer_scope();
+    print("");
+
+    print("=== Defer with Early Return ===");
+    test_defer_return(5);
+    print("");
+
+    print("=== Defer with Normal Return ===");
+    test_defer_return(-2);
+    print("");
+
+    print("Phase 7 defer validation complete!");
+    return result;
+}

@@ -39,6 +39,13 @@ impl Parser {
                 self.consume_semicolon()?;
                 Ok(Statement::Continue)
             }
+            TokenKind::Defer => {
+                self.advance();
+                let stmt = self.parse_statement()?;
+                Ok(Statement::Defer {
+                    statement: Box::new(stmt),
+                })
+            }
             TokenKind::Switch => self.parse_switch(),
             TokenKind::LeftBrace => self.parse_block_statement(),
             _ => {

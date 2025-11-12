@@ -18,6 +18,7 @@ pub struct CodeGenerator {
     lambda_counter: usize,
     lambda_functions: Vec<String>,
     lambda_info: Vec<LambdaInfo>,
+    defer_stack: Vec<Vec<Statement>>,
 }
 
 impl CodeGenerator {
@@ -29,6 +30,7 @@ impl CodeGenerator {
             lambda_counter: 0,
             lambda_functions: Vec::new(),
             lambda_info: Vec::new(),
+            defer_stack: vec![Vec::new()],
         }
     }
 
@@ -392,6 +394,20 @@ impl CodeGenerator {
             }
 
             Statement::Return { value } => {
+                // Execute all defers before returning
+                // Collect all defers from all scopes
+                let mut all_defers = Vec::new();
+                for scope in &self.defer_stack {
+                    for defer_stmt in scope {
+                        all_defers.push(defer_stmt.clone());
+                    }
+                }
+
+                // Execute defers in reverse order
+                for defer_stmt in all_defers.iter().rev() {
+                    self.generate_statement(defer_stmt)?;
+                }
+
                 self.emit_no_indent(&self.indent());
                 self.emit_no_indent("return");
 
@@ -547,6 +563,14 @@ impl CodeGenerator {
                 self.emit("continue;");
             }
 
+            Statement::Defer { statement } => {
+                // Add to current defer stack
+                if let Some(current_scope) = self.defer_stack.last_mut() {
+                    current_scope.push(statement.as_ref().clone());
+                }
+                // Don't emit anything here - defers execute at scope exit
+            }
+
             Statement::Switch { expr, cases, default } => {
                 self.emit_no_indent(&self.indent());
                 self.emit_no_indent("switch (");
@@ -590,9 +614,20 @@ impl CodeGenerator {
     }
 
     fn generate_block(&mut self, block: &Block) -> Result<(), String> {
+        // Push new defer scope
+        self.defer_stack.push(Vec::new());
+
         for stmt in &block.statements {
             self.generate_statement(stmt)?;
         }
+
+        // Execute defers in reverse order
+        if let Some(defers) = self.defer_stack.pop() {
+            for defer_stmt in defers.iter().rev() {
+                self.generate_statement(defer_stmt)?;
+            }
+        }
+
         Ok(())
     }
 

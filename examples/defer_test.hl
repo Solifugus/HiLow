@@ -1,0 +1,23 @@
+function test_defer(): i32 {
+    let x: i32 = 10;
+
+    {
+        let y: i32 = 20;
+        defer print("Defer 1: cleanup y");
+        defer print("Defer 2: more cleanup");
+        defer print("Defer 3: final cleanup");
+
+        print(f"Inside block: x={x}, y={y}");
+    }
+
+    print("After block");
+
+    return x;
+}
+
+function main(): i32 {
+    print("=== Defer Test ===");
+    let result: i32 = test_defer();
+    print(f"Result: {result}");
+    return result;
+}

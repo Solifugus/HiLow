@@ -56,6 +56,9 @@ pub enum Statement {
         cases: Vec<SwitchCase>,
         default: Option<Block>,
     },
+    Defer {
+        statement: Box<Statement>,
+    },
     Block(Block),
 }
 
