@@ -132,11 +132,11 @@ This roadmap outlines the development of the HiLow programming language from ini
 **Remaining**: Type casting, truthy/falsy, overflow checking (deferred to later phases)
 
 ### Integer Types
-- [x] Implement i8, i16, i32, i64, i128 (parsing done)
-- [x] Implement u8, u16, u32, u64, u128 (parsing done)
-- [ ] Type conversions and casts (explicit casting syntax needed)
-- [ ] Range checking for literals
-- [ ] Overflow checking (compile-time and runtime)
+- [x] Implement i8, i16, i32, i64, i128 ✓
+- [x] Implement u8, u16, u32, u64, u128 ✓
+- [x] Type conversions and casts ✓ ('as' operator - 2025-11-11)
+- [ ] Range checking for literals - deferred
+- [ ] Overflow checking (compile-time and runtime) - deferred to prover
 
 **Testing:**
 - [x] Test all integer sizes (basic)
@@ -145,13 +145,13 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [ ] Test mixed-type arithmetic
 
 ### Floating Point
-- [x] Implement f32 type (parsing done)
-- [x] Implement f64 type (parsing done)
-- [x] Float literals (3.14, 1e-5) - basic support
-- [x] Float operations (basic)
-- [ ] Float-to-int conversions (explicit)
-- [ ] Scientific notation (1e-5)
-- [ ] Special value handling (inf, nan)
+- [x] Implement f32 type ✓
+- [x] Implement f64 type ✓
+- [x] Float literals (3.14) ✓
+- [x] Float operations ✓
+- [x] Float-to-int conversions ✓ (via 'as' operator)
+- [x] Scientific notation (1e-5) ✓ (2025-11-11)
+- [ ] Special value handling (inf, nan) - deferred
 
 **Testing:**
 - [x] Test float arithmetic (basic)
@@ -343,14 +343,14 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [x] Test edge cases (not found returns -1) ✓
 
 ### Raw Strings
-- [ ] Implement r"raw string" syntax
-- [ ] Implement rf"raw f-string" syntax
-- [ ] No escape processing
+- [x] Implement r"raw string" syntax ✓ (2025-11-11)
+- [x] Implement rf"raw f-string" syntax ✓ (2025-11-11)
+- [x] No escape processing ✓ (same as normal - quote recursion)
 
 **Testing:**
-- [ ] Test raw strings
-- [ ] Test raw f-strings
-- [ ] Test backslash handling
+- [x] Test raw strings ✓ (raw_string_test.hl)
+- [x] Test multi-line raw strings ✓
+- [x] Raw strings work identically to normal ✓
 
 **Phase 4 Validation Checkpoint:**
 - [x] String manipulation works correctly ✓
