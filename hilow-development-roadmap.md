@@ -166,8 +166,8 @@ This roadmap outlines the development of the HiLow programming language from ini
 
 **Testing:**
 - [x] Test boolean operations (basic)
-- [ ] Test short-circuit evaluation
-- [ ] Test truthy/falsy values
+- [x] Test short-circuit evaluation ✓ (short_circuit.hl)
+- [ ] Test truthy/falsy values - deferred to Phase 3
 
 ### Arrays
 - [x] Fixed-size array syntax parsing ([i32; 10])
@@ -237,7 +237,7 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [x] Test simple switch ✓
 - [x] Test multiple cases ✓
 - [x] Test default case ✓
-- [ ] Test nested switch (working, not explicitly tested)
+- [x] Test nested switch ✓ (nested_switch.hl returns 66)
 
 ### Pattern Matching
 - [x] Parse match syntax (keyword exists)
@@ -394,8 +394,8 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 **Testing:**
 - [x] Test object creation ✓
 - [x] Test property access ✓
-- [ ] Test property assignment
-- [ ] Test nested objects
+- [x] Test property assignment ✓ (object_assignment.hl)
+- [ ] Test nested objects - has codegen issues (deferred)
 
 ### Prototype System
 - [ ] Implement proto property - deferred to Phase 6
@@ -477,8 +477,10 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 
 **Testing:**
 - [x] Test all string methods ✓
-- [x] Test method chaining (text.trim().toUpperCase()) ✓
+- [x] Test method chaining ✓ (method_chaining.hl)
 - [x] Test edge cases (empty strings, not found, etc.) ✓
+- [x] Test multi-line strings ✓ (multiline_string.hl)
+- [x] Test compound operators with arrays ✓ (compound_array.hl)
 
 **Validation Checkpoint:**
 - [x] Text processor program (text_processor_advanced.hl) ✓

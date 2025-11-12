@@ -1,0 +1,17 @@
+function main(): i32 {
+    let point = {x: 10, y: 20};
+
+    print(f"Initial: ({point.x}, {point.y})");
+
+    point.x = 30;
+    point.y = 40;
+
+    print(f"After assignment: ({point.x}, {point.y})");
+
+    point.x = point.x + 5;
+    point.y = point.y * 2;
+
+    print(f"After math: ({point.x}, {point.y})");
+
+    return point.x + point.y;
+}

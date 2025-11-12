@@ -1,0 +1,14 @@
+function main(): i32 {
+    let text: string = "  Hello World  ";
+
+    let result: string = text.trim().toUpperCase();
+    print(f"Chained: {result}");
+
+    let result2: string = "test".toUpperCase().concat("!");
+    print(f"Chained 2: {result2}");
+
+    let result3: string = "  spaces  ".trim().replace("spaces", "REPLACED");
+    print(f"Chained 3: {result3}");
+
+    return result.length;
+}

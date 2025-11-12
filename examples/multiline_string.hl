@@ -1,0 +1,13 @@
+function main(): i32 {
+    let poem: string = "Roses are red
+Violets are blue
+HiLow compiles
+And runs it through";
+
+    print(poem);
+
+    let len: i32 = poem.length;
+    print(f"Length: {len}");
+
+    return len;
+}

@@ -1,0 +1,13 @@
+function main(): i32 {
+    let arr: [i32; 5] = [1, 2, 3, 4, 5];
+
+    arr[0] += 10;
+    arr[1] *= 2;
+    arr[2] -= 1;
+
+    print(f"arr[0] = {arr[0]}");
+    print(f"arr[1] = {arr[1]}");
+    print(f"arr[2] = {arr[2]}");
+
+    return arr[0] + arr[1] + arr[2];
+}

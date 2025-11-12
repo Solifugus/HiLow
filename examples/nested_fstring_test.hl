@@ -1,0 +1,9 @@
+function main(): i32 {
+    let x: i32 = 5;
+    let y: i32 = 10;
+
+    print(f"Simple: {x}");
+    print(f"Expression: {x + y}");
+
+    return x + y;
+}
