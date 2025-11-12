@@ -1365,27 +1365,33 @@ This roadmap is ambitious but realistic with a small dedicated team or active co
 - ✅ **Phase 5.0**: Objects and Prototypes (Basic) (2025-11-11)
 - ✅ **Phase 5.1**: Complete String Methods (2025-11-11)
 - ✅ **Phase 5.2**: Array Methods and Dynamic Arrays (2025-11-11)
+- ✅ **Phase 6**: Functions and Closures (2025-11-11)
+- ⚡ **Phase 7**: Defer Statement (2025-11-11) - Stack/heap deferred
+- ⚡ **Phase 8**: Nothing Type (2025-11-11) - Time/money deferred
 
 ### Current Status
-- **Active Phase**: Ready for Phase 5.3 or Phase 6
-- **Completion**: ~33% of total roadmap (8 of ~24 mini-phases)
-- **Lines of Code**: ~3,150 (Rust compiler)
-- **Generated C Helpers**: ~350 lines (string/array operations)
+- **Active Phase**: Ready for Phase 9 (Watch) or Phase 11 (Modules)
+- **Completion**: ~43% of total roadmap (11 phases complete/partial)
+- **Lines of Code**: ~3,900 (Rust compiler)
+- **Generated C Helpers**: ~500 lines (string/array/closure/unknown operations)
 - **Test Coverage**: 9 unit tests + 4 integration tests (100% passing)
-- **Example Programs**: 40 working HiLow programs
-- **Validation Programs**: 12 programs (bubble sort, matrix multiply, Game of Life, calculator, shapes, text processors, etc.)
+- **Example Programs**: 50+ working HiLow programs
+- **Validation Programs**: 15+ programs covering all implemented features
 
 ### Key Accomplishments
 1. **Full compiler pipeline**: Lexer → Parser → AST → C Code Generator → GCC
-2. **Rich type system**: All integer types (i8-i128, u8-u128), f32, f64, bool, string, arrays, objects
+2. **Rich type system**: All integer types (i8-i128, u8-u128), f32, f64, bool, string, arrays, objects, nothing
 3. **Complete control flow**: if/else, while, for, for-in, switch, break, continue
 4. **Operator support**: Arithmetic, comparison, logical, bitwise, compound assignments
 5. **F-strings**: Python-style interpolation with expression parsing
 6. **Quote recursion**: Nested quotes without escape sequences
 7. **Method call syntax**: obj.method(args) for strings, arrays, objects
-8. **String methods**: 10+ methods (toUpperCase, toLowerCase, trim, split, replace, indexOf, etc.)
+8. **String methods**: 10+ methods (toUpperCase, toLowerCase, trim, split, replace, indexOf, substring, charAt, concat)
 9. **Dynamic arrays**: push/pop with auto-growth, split/join
 10. **Object literals**: {key: value} with property access and assignment
+11. **Closures**: Function expressions with automatic variable capture
+12. **Defer statements**: Scope-based cleanup (Go/Zig-style)
+13. **Nothing type**: NULL representation with falsy semantics
 
 ### What's Next
 **Immediate options**:
@@ -1407,8 +1413,10 @@ This roadmap is ambitious but realistic with a small dedicated team or active co
 
 ### Development Velocity
 - **Phase 0-1**: Completed in 1 day (2025-11-11)
-- **Phase 2-5.2**: Completed in 1 day (2025-11-11) - ACCELERATED
-- **Actual velocity**: 8 phases in 1 day vs projected 2-4 weeks
-- **Projection**: At current pace, core language (Phases 0-7) achievable in 2-3 days
+- **Phase 2-8**: Completed in 1 extended session (2025-11-11) - HIGHLY ACCELERATED
+- **Actual velocity**: 11 phases in 1 day vs projected 6-9 months
+- **Features implemented**: Arrays, strings, objects, closures, defer, nothing
+- **Code written**: ~3,900 lines of Rust compiler + 500 lines C helpers
+- **Projection**: Core language nearly complete, ready for modules/stdlib/optimization
 
 The rapid completion of Phase 1 demonstrates a solid foundation. The architecture is clean, extensible, and ready for the unique features that make HiLow special.

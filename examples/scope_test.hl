@@ -1,0 +1,19 @@
+function test1(): i32 {
+    let a: i32 = 10;
+    let b: i32 = 20;
+    return a + b;
+}
+
+function test2(): i32 {
+    let c: i32 = 30;
+    let d: i32 = 40;
+    return c + d;
+}
+
+function main(): i32 {
+    let r1: i32 = test1();
+    let r2: i32 = test2();
+    print(f"r1={r1}");
+    print(f"r2={r2}");
+    return r1 + r2;
+}
