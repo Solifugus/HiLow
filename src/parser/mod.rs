@@ -659,13 +659,37 @@ impl Parser {
                     index: Box::new(index),
                 };
             } else if self.match_token(&TokenKind::Dot) {
-                // Property access
+                // Property access or method call
                 let property = self.expect_identifier()?;
 
-                expr = Expression::PropertyAccess {
-                    object: Box::new(expr),
-                    property,
-                };
+                // Check if this is a method call (property followed by parentheses)
+                if self.check(&TokenKind::LeftParen) {
+                    self.advance(); // consume '('
+                    let mut args = Vec::new();
+
+                    if !self.check(&TokenKind::RightParen) {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            if !self.match_token(&TokenKind::Comma) {
+                                break;
+                            }
+                        }
+                    }
+
+                    self.expect(TokenKind::RightParen)?;
+
+                    expr = Expression::MethodCall {
+                        object: Box::new(expr),
+                        method: property,
+                        args,
+                    };
+                } else {
+                    // Just property access
+                    expr = Expression::PropertyAccess {
+                        object: Box::new(expr),
+                        property,
+                    };
+                }
             } else {
                 break;
             }

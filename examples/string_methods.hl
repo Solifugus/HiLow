@@ -1,0 +1,21 @@
+function main(): i32 {
+    let text: string = "Hello World";
+
+    let len: i32 = text.length;
+    print(f"Text: {text}");
+    print(f"Length: {len}");
+
+    let pos: i32 = text.indexOf("World");
+    print(f"Position of 'World': {pos}");
+
+    let not_found: i32 = text.indexOf("xyz");
+    print(f"Position of 'xyz': {not_found}");
+
+    let literal_len: i32 = "Testing".length;
+    print(f"Literal length: {literal_len}");
+
+    let literal_pos: i32 = "Hello World".indexOf("World");
+    print(f"Literal indexOf: {literal_pos}");
+
+    return len + pos;
+}

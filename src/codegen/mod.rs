@@ -657,9 +657,56 @@ impl CodeGenerator {
             }
 
             Expression::PropertyAccess { object, property } => {
-                self.generate_expression(object)?;
-                self.emit_no_indent(".");
-                self.emit_no_indent(property);
+                // Special case for .length on strings
+                if property == "length" {
+                    self.emit_no_indent("strlen(");
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(")");
+                } else {
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(".");
+                    self.emit_no_indent(property);
+                }
+            }
+
+            Expression::MethodCall { object, method, args } => {
+                // Handle string methods
+                if method == "indexOf" && args.len() == 1 {
+                    self.emit_no_indent("({char* __p = strstr(");
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(", ");
+                    self.generate_expression(&args[0])?;
+                    self.emit_no_indent("); __p ? (int32_t)(__p - (char*)(");
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(")) : -1; })");
+                } else if method == "slice" && args.len() >= 1 && args.len() <= 2 {
+                    // slice(start) or slice(start, end)
+                    // For now, we'll generate a simple substring
+                    self.emit_no_indent("({char* __s = (char*)(");
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(") + ");
+                    self.generate_expression(&args[0])?;
+                    self.emit_no_indent("; __s; })");
+                } else if method == "compare" && args.len() == 1 {
+                    self.emit_no_indent("strcmp(");
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(", ");
+                    self.generate_expression(&args[0])?;
+                    self.emit_no_indent(")");
+                } else {
+                    // Generic method call (for objects)
+                    self.generate_expression(object)?;
+                    self.emit_no_indent(".");
+                    self.emit_no_indent(method);
+                    self.emit_no_indent("(");
+                    for (i, arg) in args.iter().enumerate() {
+                        if i > 0 {
+                            self.emit_no_indent(", ");
+                        }
+                        self.generate_expression(arg)?;
+                    }
+                    self.emit_no_indent(")");
+                }
             }
 
             Expression::FunctionExpression { params, return_type, body } => {

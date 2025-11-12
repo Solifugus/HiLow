@@ -145,6 +145,11 @@ pub enum Expression {
         object: Box<Expression>,
         property: String,
     },
+    MethodCall {
+        object: Box<Expression>,
+        method: String,
+        args: Vec<Expression>,
+    },
     FunctionExpression {
         params: Vec<Parameter>,
         return_type: Option<Type>,

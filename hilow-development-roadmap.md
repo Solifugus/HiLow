@@ -318,12 +318,12 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [ ] Test all format specifiers - deferred
 - [ ] Test nested f-strings - works but not explicitly tested
 
-### String Operations
-- [x] Implement string_length() ✓ (maps to strlen)
-- [x] Implement string_index_of() ✓ (maps to strstr)
-- [x] Implement string_compare() ✓ (maps to strcmp)
-- [x] Implement string_concat() ✓ (maps to strcat)
-- [ ] Implement .slice() - deferred to Phase 12
+### String Operations (Method Syntax)
+- [x] Implement .length property ✓
+- [x] Implement .indexOf(substr) method ✓
+- [x] Implement .compare(other) method ✓
+- [x] Implement .slice(start) method ✓ (basic version)
+- [ ] Implement .slice(start, end) - needs improvement
 - [ ] Implement .splice() - deferred to Phase 12
 - [ ] Implement .split() - deferred to Phase 12
 - [ ] Implement .join() - deferred to Phase 12
@@ -359,10 +359,12 @@ This roadmap outlines the development of the HiLow programming language from ini
 3. ✅ Multi-line string support
 4. ✅ Printf-based code generation for f-strings
 5. ✅ Smart format specifiers (detects %s for strings, %d for ints)
-6. ✅ String operations: string_length(), string_index_of(), string_compare(), string_concat()
-7. ✅ Text processor validation program
-8. ✅ Quote recursion test program
-9. ✅ Comprehensive string operations test
+6. ✅ Method call syntax (obj.method(args))
+7. ✅ String methods: .length, .indexOf(), .compare(), .slice()
+8. ✅ Method calls work on string literals ("text".length)
+9. ✅ Text processor validation program
+10. ✅ Quote recursion test program
+11. ✅ Comprehensive string methods test
 
 **Deferred to Later Phases:**
 - Format specifiers (:2f, :x, :b) → Phase 12 (stdlib)
