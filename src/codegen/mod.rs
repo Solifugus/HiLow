@@ -144,6 +144,36 @@ impl CodeGenerator {
         self.emit("    return result;");
         self.emit("}");
         self.emit("");
+        self.emit("void array_reverse_i32(DynamicArray* arr) {");
+        self.emit("    int32_t* data = (int32_t*)arr->data;");
+        self.emit("    for (int i = 0; i < arr->length / 2; i++) {");
+        self.emit("        int32_t temp = data[i];");
+        self.emit("        data[i] = data[arr->length - 1 - i];");
+        self.emit("        data[arr->length - 1 - i] = temp;");
+        self.emit("    }");
+        self.emit("}");
+        self.emit("");
+        self.emit("DynamicArray* array_map_i32(DynamicArray* arr, int32_t(*func)(int32_t, int32_t)) {");
+        self.emit("    DynamicArray* result = array_new(sizeof(int32_t));");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        int32_t val = ((int32_t*)arr->data)[i];");
+        self.emit("        int32_t mapped = func(val, 0);");
+        self.emit("        array_push_i32(result, mapped);");
+        self.emit("    }");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("DynamicArray* array_filter_i32(DynamicArray* arr, int32_t(*func)(int32_t, int32_t)) {");
+        self.emit("    DynamicArray* result = array_new(sizeof(int32_t));");
+        self.emit("    for (int i = 0; i < arr->length; i++) {");
+        self.emit("        int32_t val = ((int32_t*)arr->data)[i];");
+        self.emit("        if (func(val, 0)) {");
+        self.emit("            array_push_i32(result, val);");
+        self.emit("        }");
+        self.emit("    }");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
 
         // Generate string helper functions
         self.emit("// String helper functions");
@@ -1140,6 +1170,25 @@ impl CodeGenerator {
                     "pop" if args.is_empty() => {
                         self.emit_no_indent("array_pop_i32(");
                         self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
+                    "reverse" if args.is_empty() => {
+                        self.emit_no_indent("array_reverse_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
+                    "map" if args.len() == 1 => {
+                        self.emit_no_indent("array_map_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "filter" if args.len() == 1 => {
+                        self.emit_no_indent("array_filter_i32(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
                         self.emit_no_indent(")");
                     }
                     _ => {

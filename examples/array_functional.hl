@@ -1,0 +1,54 @@
+function times_two(x: i32, dummy: i32): i32 {
+    return x * 2;
+}
+
+function is_even(x: i32, dummy: i32): i32 {
+    if (x % 2 ??= 0) {
+        return 1;
+    }
+    return 0;
+}
+
+function main(): i32 {
+    print("=== Array Functional Methods ===");
+
+    let nums: [i32];
+    nums.push(1);
+    nums.push(2);
+    nums.push(3);
+    nums.push(4);
+    nums.push(5);
+
+    print("Original:");
+    let i: i32 = 0;
+    while (i < nums.length) {
+        print(f"  {nums[i]}");
+        i += 1;
+    }
+
+    let doubled: [i32] = nums.map(times_two);
+    print("Doubled:");
+    let j: i32 = 0;
+    while (j < doubled.length) {
+        print(f"  {doubled[j]}");
+        j += 1;
+    }
+
+    let evens: [i32] = nums.filter(is_even);
+    print("Evens only:");
+    let k: i32 = 0;
+    while (k < evens.length) {
+        print(f"  {evens[k]}");
+        k += 1;
+    }
+
+    nums.reverse();
+    print("Reversed:");
+    let m: i32 = 0;
+    while (m < nums.length) {
+        print(f"  {nums[m]}");
+        m += 1;
+    }
+
+    return evens.length;
+}
