@@ -59,6 +59,23 @@ impl CodeGenerator {
         self.emit("#include <ctype.h>");
         self.emit("");
 
+        // Generate unknown type structure
+        self.emit("// Unknown type structure");
+        self.emit("typedef struct {");
+        self.emit("    char* reason;");
+        self.emit("    char** options;");
+        self.emit("    int32_t option_count;");
+        self.emit("} Unknown;");
+        self.emit("");
+        self.emit("Unknown* create_unknown(const char* reason) {");
+        self.emit("    Unknown* u = malloc(sizeof(Unknown));");
+        self.emit("    u->reason = strdup(reason);");
+        self.emit("    u->options = NULL;");
+        self.emit("    u->option_count = 0;");
+        self.emit("    return u;");
+        self.emit("}");
+        self.emit("");
+
         // Generate dynamic array structure
         self.emit("// Dynamic array structure");
         self.emit("typedef struct {");
@@ -691,6 +708,10 @@ impl CodeGenerator {
                 self.emit_no_indent(if *b { "true" } else { "false" });
             }
 
+            Expression::NothingLiteral => {
+                self.emit_no_indent("NULL");
+            }
+
             Expression::Identifier(name) => {
                 self.emit_no_indent(name);
             }
@@ -732,6 +753,13 @@ impl CodeGenerator {
                         self.emit_no_indent("); __p ? (int32_t)(__p - (char*)(");
                         self.generate_expression(&args[0])?;
                         self.emit_no_indent(")) : -1; })");
+                        return Ok(());
+                    }
+
+                    if name == "make_unknown" && args.len() == 1 {
+                        self.emit_no_indent("create_unknown(");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
                         return Ok(());
                     }
 

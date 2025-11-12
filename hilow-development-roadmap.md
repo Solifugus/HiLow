@@ -3,8 +3,8 @@
 This roadmap outlines the development of the HiLow programming language from initial concept to production-ready compiler. Each phase includes testing milestones before proceeding to the next stage.
 
 **Last Updated**: 2025-11-11
-**Current Phase**: Phase 7 (Memory Management) - Defer Complete, Stack/Heap Deferred
-**Status**: Phases 0-6 Complete, Phase 7 Partial ✓ (~42% of roadmap)
+**Current Phase**: Phase 8 (Special Types) - Nothing Complete
+**Status**: Phases 0-6 Complete, Phase 7-8 Partial ✓ (~43% of roadmap)
 
 ## Phase 0: Project Foundation ✓ COMPLETE
 
@@ -712,31 +712,37 @@ Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) beca
 
 ---
 
-## Phase 8: Special Types
+## Phase 8: Special Types ✓ PARTIAL (Nothing Complete, Time/Money Deferred)
+
+**Status**: Nothing type complete (2025-11-11), Unknown partial, Time/Money deferred
 
 ### Nothing Type
-- [ ] Implement nothing type
-- [ ] Uninitialized variables are nothing
-- [ ] nothing is falsy
-- [ ] nothing propagates through property access
+- [x] Implement nothing type ✓ (maps to NULL)
+- [x] nothing as literal value ✓
+- [x] nothing is falsy ✓
+- [x] nothing comparisons with ??= ✓
+- [ ] Uninitialized variables are nothing - partial
+- [ ] nothing propagates through property access - not implemented
 
 **Testing:**
-- [ ] Test nothing semantics
-- [ ] Test nothing checks
-- [ ] Test nothing propagation
+- [x] Test nothing semantics ✓ (nothing_test.hl)
+- [x] Test nothing checks ✓ (ptr ??= nothing)
+- [x] Test nothing falsy ✓ (if (not ptr))
+- [ ] Test nothing propagation - not implemented
 
 ### Unknown Type
-- [ ] Implement unknown type
-- [ ] unknown.reason property
-- [ ] unknown.options property
-- [ ] unknown is falsy
-- [ ] unknown propagates through property access
+- [x] Unknown structure defined ✓ (reason, options fields)
+- [x] create_unknown() helper function ✓
+- [ ] unknown.reason property access - needs work
+- [ ] unknown.options property access - needs work
+- [ ] unknown is falsy - not implemented
+- [ ] Union types (T | unknown) - not implemented
 
 **Testing:**
-- [ ] Test unknown creation
-- [ ] Test unknown properties
-- [ ] Test unknown propagation
-- [ ] Test unknown handling patterns
+- [x] Unknown struct generated ✓
+- [ ] Test unknown.reason - needs union types
+- [ ] Test unknown.options - needs union types
+- [ ] Test unknown propagation - complex
 
 ### Time Type
 - [ ] Implement time type (i64 nanoseconds)

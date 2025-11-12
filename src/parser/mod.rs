@@ -757,6 +757,10 @@ impl Parser {
                     body,
                 })
             }
+            TokenKind::Nothing => {
+                self.advance();
+                Ok(Expression::NothingLiteral)
+            }
             TokenKind::IntegerLiteral(_) | TokenKind::FloatLiteral(_)
             | TokenKind::StringLiteral(_) | TokenKind::BooleanLiteral(_)
             | TokenKind::Identifier(_) | TokenKind::FStringLiteral(_) => {

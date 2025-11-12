@@ -1,0 +1,16 @@
+function main(): i32 {
+    let x: i32 = 10;
+    let ptr: i32 = nothing;
+
+    print("Testing nothing");
+
+    if (ptr ??= nothing) {
+        print("ptr is nothing (correct)");
+    }
+
+    if (not ptr) {
+        print("nothing is falsy (correct)");
+    }
+
+    return x;
+}

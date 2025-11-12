@@ -117,6 +117,7 @@ pub enum Expression {
         parts: Vec<FStringPart>,
     },
     BooleanLiteral(bool),
+    NothingLiteral,
     Identifier(String),
     Binary {
         left: Box<Expression>,
