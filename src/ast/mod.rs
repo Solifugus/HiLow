@@ -145,6 +145,11 @@ pub enum Expression {
         object: Box<Expression>,
         property: String,
     },
+    FunctionExpression {
+        params: Vec<Parameter>,
+        return_type: Option<Type>,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -8,6 +8,8 @@ pub struct CodeGenerator {
     output: String,
     indent_level: usize,
     variables: HashMap<String, String>,
+    lambda_counter: usize,
+    lambda_functions: Vec<String>,
 }
 
 impl CodeGenerator {
@@ -16,6 +18,8 @@ impl CodeGenerator {
             output: String::new(),
             indent_level: 0,
             variables: HashMap::new(),
+            lambda_counter: 0,
+            lambda_functions: Vec::new(),
         }
     }
 
@@ -594,6 +598,45 @@ impl CodeGenerator {
                 self.generate_expression(object)?;
                 self.emit_no_indent(".");
                 self.emit_no_indent(property);
+            }
+
+            Expression::FunctionExpression { params, return_type, body } => {
+                // Generate a unique lambda function name
+                let lambda_name = format!("__lambda_{}", self.lambda_counter);
+                self.lambda_counter += 1;
+
+                // Build the function signature
+                let ret_type = return_type
+                    .as_ref()
+                    .map(|t| self.type_to_c(t))
+                    .unwrap_or_else(|| "void".to_string());
+
+                let mut func_def = String::new();
+                func_def.push_str(&ret_type);
+                func_def.push_str(" ");
+                func_def.push_str(&lambda_name);
+                func_def.push_str("(");
+
+                for (i, param) in params.iter().enumerate() {
+                    if i > 0 {
+                        func_def.push_str(", ");
+                    }
+                    func_def.push_str(&self.type_to_c(&param.param_type));
+                    func_def.push_str(" ");
+                    func_def.push_str(&param.name);
+                }
+
+                func_def.push_str(") {\n");
+
+                // Generate body (we'll need to generate this properly later)
+                // For now, store the function definition to emit later
+                func_def.push_str("    // TODO: implement body\n");
+                func_def.push_str("}\n\n");
+
+                self.lambda_functions.push(func_def);
+
+                // In the expression, just use the function name (function pointer)
+                self.emit_no_indent(&lambda_name);
             }
         }
 

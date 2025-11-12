@@ -678,6 +678,45 @@ impl Parser {
         let token = self.peek();
 
         match &token.kind {
+            TokenKind::Function => {
+                self.advance();
+                // Parse function expression
+                self.expect(TokenKind::LeftParen)?;
+
+                let mut params = Vec::new();
+                if !self.check(&TokenKind::RightParen) {
+                    loop {
+                        let param_name = self.expect_identifier()?;
+                        self.expect(TokenKind::Colon)?;
+                        let param_type = self.parse_type()?;
+
+                        params.push(crate::ast::Parameter {
+                            name: param_name,
+                            param_type,
+                        });
+
+                        if !self.match_token(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+
+                self.expect(TokenKind::RightParen)?;
+
+                let return_type = if self.match_token(&TokenKind::Colon) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+
+                let body = self.parse_block()?;
+
+                Ok(Expression::FunctionExpression {
+                    params,
+                    return_type,
+                    body,
+                })
+            }
             TokenKind::IntegerLiteral(_) | TokenKind::FloatLiteral(_)
             | TokenKind::StringLiteral(_) | TokenKind::BooleanLiteral(_)
             | TokenKind::Identifier(_) | TokenKind::FStringLiteral(_) => {
