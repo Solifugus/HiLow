@@ -53,6 +53,7 @@ pub enum TokenKind {
     IntegerLiteral(i64),
     FloatLiteral(f64),
     StringLiteral(String),
+    RawStringLiteral(String),
     FStringLiteral(Vec<FStringPart>),
     BooleanLiteral(bool),
 

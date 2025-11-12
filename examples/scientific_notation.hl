@@ -1,0 +1,13 @@
+function main(): i32 {
+    print("=== Scientific Notation Test ===");
+
+    let small: f64 = 1e-5;
+    let large: f64 = 1e10;
+    let negative_exp: f64 = 3.14e-2;
+    let positive_exp: f64 = 2.5e3;
+
+    print("Scientific notation parsed successfully");
+    print("1e-5, 1e10, 3.14e-2, 2.5e3");
+
+    return 0;
+}

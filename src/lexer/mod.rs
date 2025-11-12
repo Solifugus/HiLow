@@ -272,8 +272,30 @@ impl Lexer {
             while !self.is_at_end() && self.current().is_numeric() {
                 self.advance();
             }
+        }
 
-            let lexeme: String = self.input[start..self.position].iter().collect();
+        // Check for scientific notation (e or E)
+        if !self.is_at_end() && (self.current() == 'e' || self.current() == 'E') {
+            self.advance(); // consume 'e' or 'E'
+
+            // Optional + or - sign
+            if !self.is_at_end() && (self.current() == '+' || self.current() == '-') {
+                self.advance();
+            }
+
+            // Exponent digits
+            if !self.is_at_end() && self.current().is_numeric() {
+                while !self.is_at_end() && self.current().is_numeric() {
+                    self.advance();
+                }
+            } else {
+                return Err(format!("Invalid scientific notation at {}:{}", start_line, start_column));
+            }
+        }
+
+        // Determine if this is a float
+        let lexeme: String = self.input[start..self.position].iter().collect();
+        if is_float || lexeme.contains('e') || lexeme.contains('E') {
             let value = lexeme.parse::<f64>()
                 .map_err(|_| format!("Invalid float literal '{}' at {}:{}", lexeme, start_line, start_column))?;
 
@@ -292,7 +314,7 @@ impl Lexer {
 
         // Check for prefix (f, r, rf)
         let is_fstring = self.peek_string("f\"") || self.peek_string("rf\"");
-        let _is_raw = self.peek_string("r\"") || self.peek_string("rf\"");
+        let is_raw = self.peek_string("r\"") || self.peek_string("rf\"");
 
         // Skip prefix
         if self.current() == 'r' {
@@ -398,7 +420,12 @@ impl Lexer {
                     }
 
                     let lexeme = format!("\"{}\"", value);
-                    return Ok(Token::new(TokenKind::StringLiteral(value), lexeme, start_line, start_column));
+                    let token_kind = if is_raw {
+                        TokenKind::RawStringLiteral(value)
+                    } else {
+                        TokenKind::StringLiteral(value)
+                    };
+                    return Ok(Token::new(token_kind, lexeme, start_line, start_column));
                 }
 
                 let ch = self.current();

@@ -842,13 +842,14 @@ impl Parser {
                 Ok(Expression::NothingLiteral)
             }
             TokenKind::IntegerLiteral(_) | TokenKind::FloatLiteral(_)
-            | TokenKind::StringLiteral(_) | TokenKind::BooleanLiteral(_)
+            | TokenKind::StringLiteral(_) | TokenKind::RawStringLiteral(_) | TokenKind::BooleanLiteral(_)
             | TokenKind::Identifier(_) | TokenKind::FStringLiteral(_) => {
                 let token = self.advance();
                 match token.kind {
                     TokenKind::IntegerLiteral(n) => Ok(Expression::IntegerLiteral(n)),
                     TokenKind::FloatLiteral(f) => Ok(Expression::FloatLiteral(f)),
                     TokenKind::StringLiteral(s) => Ok(Expression::StringLiteral(s)),
+                    TokenKind::RawStringLiteral(s) => Ok(Expression::StringLiteral(s)), // Treat same as regular string
                     TokenKind::BooleanLiteral(b) => Ok(Expression::BooleanLiteral(b)),
                     TokenKind::Identifier(name) => Ok(Expression::Identifier(name)),
                     TokenKind::FStringLiteral(lexer_parts) => {

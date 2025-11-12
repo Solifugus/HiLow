@@ -1,0 +1,17 @@
+function main(): i32 {
+    print("=== Raw String Test ===");
+
+    let normal: string = "normal string";
+    let raw: string = r"raw string";
+    let raw_multiline: string = r"line 1
+line 2
+line 3";
+
+    print(normal);
+    print(raw);
+    print(raw_multiline);
+
+    print("Raw strings work!");
+
+    return 0;
+}
