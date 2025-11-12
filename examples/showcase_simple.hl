@@ -1,0 +1,54 @@
+function main(): i32 {
+    print("=== HiLow Language Showcase ===");
+
+    print("1. Arrays:");
+    let arr: [i32; 3] = [10, 20, 30];
+    let sum: i32 = arr[0] + arr[1] + arr[2];
+    print(f"  Fixed array sum: {sum}");
+
+    print("2. Dynamic Arrays:");
+    let dyn: [i32];
+    dyn.push(5);
+    dyn.push(15);
+    print(f"  Pushed 2 items, length: {dyn.length}");
+
+    print("3. Strings:");
+    let text: string = "  Hello  ";
+    let clean: string = text.trim().toUpperCase();
+    print(f"  Trimmed and uppercase: '{clean}'");
+
+    print("4. String Methods:");
+    let parts: [string] = "a,b,c".split(",");
+    let back: string = parts.join("-");
+    print(f"  Split and join: '{back}'");
+
+    print("5. Objects:");
+    let point = {x: 100, y: 200};
+    print(f"  Point: ({point.x}, {point.y})");
+
+    print("6. Control Flow:");
+    let val: i32 = 2;
+    switch (val) {
+        case 1:
+            print("  Case 1");
+            break;
+        case 2:
+            print("  Case 2 selected");
+            break;
+        default:
+            print("  Default");
+            break;
+    }
+
+    print("7. Loops:");
+    let total: i32 = 0;
+    let i: i32 = 1;
+    while (i <= 5) {
+        total += i;
+        i += 1;
+    }
+    print(f"  Sum 1-5: {total}");
+
+    print("Showcase complete!");
+    return 0;
+}
