@@ -3,8 +3,8 @@
 This roadmap outlines the development of the HiLow programming language from initial concept to production-ready compiler. Each phase includes testing milestones before proceeding to the next stage.
 
 **Last Updated**: 2025-11-11
-**Current Phase**: Phase 5 (Objects and Prototypes) - COMPLETE ✓
-**Status**: Phases 0, 1, 2 (core), 3, 4, and 5 Complete ✓
+**Current Phase**: Phase 5.1 (Complete String Methods) - IN PROGRESS
+**Status**: Phases 0-5.0 Complete, Phase 5.1 mostly complete ✓
 
 ## Phase 0: Project Foundation ✓ COMPLETE
 
@@ -323,14 +323,14 @@ This roadmap outlines the development of the HiLow programming language from ini
 - [x] Implement .indexOf(substr) method ✓
 - [x] Implement .compare(other) method ✓
 - [x] Implement .slice(start) method ✓ (basic version)
-- [ ] Implement .slice(start, end) - needs improvement
-- [ ] Implement .splice() - deferred to Phase 12
-- [ ] Implement .split() - deferred to Phase 12
-- [ ] Implement .join() - deferred to Phase 12
-- [ ] Implement .replace() - deferred to Phase 12
-- [ ] Implement .toUpperCase() - deferred to Phase 12
-- [ ] Implement .toLowerCase() - deferred to Phase 12
-- [ ] Implement .trim() - deferred to Phase 12
+- [ ] Implement .slice(start, end) - PHASE 5.1
+- [ ] Implement .split(delimiter) → [string] - PHASE 5.1
+- [ ] Implement .replace(from, to) → string - PHASE 5.1
+- [ ] Implement .toUpperCase() → string - PHASE 5.1
+- [ ] Implement .toLowerCase() → string - PHASE 5.1
+- [ ] Implement .trim() → string - PHASE 5.1
+- [ ] Implement .charAt(index) → string - PHASE 5.1
+- [ ] Implement .substring(start, end) → string - PHASE 5.1
 
 **Testing:**
 - [x] Test basic string operations ✓
@@ -366,15 +366,21 @@ This roadmap outlines the development of the HiLow programming language from ini
 10. ✅ Quote recursion test program
 11. ✅ Comprehensive string methods test
 
-**Deferred to Later Phases:**
-- Format specifiers (:2f, :x, :b) → Phase 12 (stdlib)
-- Raw strings (r"text") → Phase 12 (stdlib)
-- String methods (.length, .indexOf, .slice) → Phase 12 (stdlib)
+**String Operations Moved to Phase 5.1:**
+Most string methods moved from Phase 12 to Phase 5.1 (immediate next phase) because:
+- Method call syntax already works
+- All map to simple C stdlib functions
+- No complex dependencies
+- Core language ergonomics, not "stdlib" features
+
+**Still Deferred:**
+- Format specifiers (:2f, :x, :b) → Phase 12 (needs formatter system)
+- Raw strings (r"text") → Phase 12 (needs escape handling)
 - Compile-time format validation → Phase 10 (prover)
 
 ---
 
-## Phase 5: Objects and Prototypes ✓ COMPLETE
+## Phase 5.0: Objects and Prototypes (Basic) ✓ COMPLETE
 
 **Status**: Core features complete (2025-11-11)
 
@@ -445,7 +451,106 @@ This roadmap outlines the development of the HiLow programming language from ini
 
 ---
 
-## Phase 6: Functions and Closures
+## Phase 5.1: Complete String Methods ✓ MOSTLY COMPLETE
+
+**Status**: Core methods complete (2025-11-11)
+**Rationale**: Method call syntax exists, these are simple C stdlib wrappers, core language ergonomics
+
+### String Methods Implemented
+- [x] .toUpperCase() → string ✓ (toupper loop)
+- [x] .toLowerCase() → string ✓ (tolower loop)
+- [x] .trim() → string ✓ (pointer arithmetic)
+- [ ] .split(delimiter) → [string] - needs array building
+- [ ] .replace(from, to) → string - needs string building
+- [ ] .charAt(index) → string - trivial, do next
+- [ ] .substring(start, end) → string - trivial, do next
+- [ ] .concat(other) → string - trivial (strcat)
+
+### Array Helper Method
+- [ ] Array.join(separator) → string - concatenate array elements
+
+**Implementation Notes:**
+- Add C helper functions to generated preamble
+- Map MethodCall expressions to these helpers
+- All use standard C string.h functions
+- Memory allocation via malloc (simple for now)
+
+**Testing:**
+- [ ] Test all string methods
+- [ ] Test method chaining (text.trim().toUpperCase())
+- [ ] Test edge cases (empty strings, not found, etc.)
+
+**Validation Checkpoint:**
+- [ ] Text parser program (split/trim/replace)
+- [ ] CSV processor (split on commas)
+- [ ] String formatter (toUpperCase/toLowerCase)
+- [ ] All tests pass
+
+**Time Estimate:** 2-4 hours
+
+---
+
+## Phase 5.2: Array Methods and Dynamic Arrays (NEW)
+
+**Status**: Not started - after Phase 5.1
+**Rationale**: Arrays exist, need push/pop for practical usage
+
+### Array Infrastructure
+- [ ] Dynamic array structure (length, capacity, data)
+- [ ] .push(item) method
+- [ ] .pop() → item method
+- [ ] .length property (for dynamic arrays)
+- [ ] Array resizing with realloc
+
+**Implementation Notes:**
+- Generate DynamicArray struct in preamble
+- Track length/capacity separately from data pointer
+- Simple doubling strategy for capacity growth
+
+**Testing:**
+- [ ] Test push/pop operations
+- [ ] Test dynamic growth
+- [ ] Test stack implementation
+- [ ] Test queue operations
+
+**Validation Checkpoint:**
+- [ ] Stack implementation using push/pop
+- [ ] Dynamic list building program
+- [ ] All tests pass
+
+**Time Estimate:** 4-6 hours
+
+---
+
+## Phase 5.3: Pattern Matching (Basic) (NEW)
+
+**Status**: Not started - after Phase 5.2
+**Rationale**: match keyword exists, just need codegen (like switch but cleaner)
+
+### Pattern Matching Features
+- [ ] Basic match expressions (value matching only)
+- [ ] Wildcard pattern (_)
+- [ ] Generate as enhanced switch statement
+
+**Deferred from Phase 5.3:**
+- Range patterns (1..10) → Phase 6
+- Guards (when clauses) → Phase 6
+- Exhaustiveness checking → Phase 10 (prover)
+
+**Testing:**
+- [ ] Test basic match
+- [ ] Test wildcard
+- [ ] Test vs switch equivalent
+
+**Validation Checkpoint:**
+- [ ] Calculator using match
+- [ ] All tests pass
+
+**Time Estimate:** 2-3 hours
+
+---
+
+## Phase 6: Functions and Closures (MODIFIED)
 
 ### Function Features
 - [ ] Function expressions

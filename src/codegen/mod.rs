@@ -44,6 +44,38 @@ impl CodeGenerator {
         self.emit("#include <stdint.h>");
         self.emit("#include <stdbool.h>");
         self.emit("#include <string.h>");
+        self.emit("#include <ctype.h>");
+        self.emit("");
+
+        // Generate string helper functions
+        self.emit("// String helper functions");
+        self.emit("char* str_to_upper(const char* str) {");
+        self.emit("    int len = strlen(str);");
+        self.emit("    char* result = malloc(len + 1);");
+        self.emit("    for (int i = 0; i < len; i++) { result[i] = toupper(str[i]); }");
+        self.emit("    result[len] = '\\0';");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* str_to_lower(const char* str) {");
+        self.emit("    int len = strlen(str);");
+        self.emit("    char* result = malloc(len + 1);");
+        self.emit("    for (int i = 0; i < len; i++) { result[i] = tolower(str[i]); }");
+        self.emit("    result[len] = '\\0';");
+        self.emit("    return result;");
+        self.emit("}");
+        self.emit("");
+        self.emit("char* str_trim(const char* str) {");
+        self.emit("    while (*str && isspace(*str)) str++;");
+        self.emit("    if (*str == '\\0') return strdup(\"\");");
+        self.emit("    const char* end = str + strlen(str) - 1;");
+        self.emit("    while (end > str && isspace(*end)) end--;");
+        self.emit("    int len = end - str + 1;");
+        self.emit("    char* result = malloc(len + 1);");
+        self.emit("    strncpy(result, str, len);");
+        self.emit("    result[len] = '\\0';");
+        self.emit("    return result;");
+        self.emit("}");
         self.emit("");
 
         // Emit any lambda functions that were generated
@@ -671,41 +703,59 @@ impl CodeGenerator {
 
             Expression::MethodCall { object, method, args } => {
                 // Handle string methods
-                if method == "indexOf" && args.len() == 1 {
-                    self.emit_no_indent("({char* __p = strstr(");
-                    self.generate_expression(object)?;
-                    self.emit_no_indent(", ");
-                    self.generate_expression(&args[0])?;
-                    self.emit_no_indent("); __p ? (int32_t)(__p - (char*)(");
-                    self.generate_expression(object)?;
-                    self.emit_no_indent(")) : -1; })");
-                } else if method == "slice" && args.len() >= 1 && args.len() <= 2 {
-                    // slice(start) or slice(start, end)
-                    // For now, we'll generate a simple substring
-                    self.emit_no_indent("({char* __s = (char*)(");
-                    self.generate_expression(object)?;
-                    self.emit_no_indent(") + ");
-                    self.generate_expression(&args[0])?;
-                    self.emit_no_indent("; __s; })");
-                } else if method == "compare" && args.len() == 1 {
-                    self.emit_no_indent("strcmp(");
-                    self.generate_expression(object)?;
-                    self.emit_no_indent(", ");
-                    self.generate_expression(&args[0])?;
-                    self.emit_no_indent(")");
-                } else {
-                    // Generic method call (for objects)
-                    self.generate_expression(object)?;
-                    self.emit_no_indent(".");
-                    self.emit_no_indent(method);
-                    self.emit_no_indent("(");
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            self.emit_no_indent(", ");
-                        }
-                        self.generate_expression(arg)?;
+                match method.as_str() {
+                    "indexOf" if args.len() == 1 => {
+                        self.emit_no_indent("({char* __p = strstr(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent("); __p ? (int32_t)(__p - (char*)(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(")) : -1; })");
                     }
-                    self.emit_no_indent(")");
+                    "slice" if args.len() >= 1 && args.len() <= 2 => {
+                        self.emit_no_indent("({char* __s = (char*)(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(") + ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent("; __s; })");
+                    }
+                    "compare" if args.len() == 1 => {
+                        self.emit_no_indent("strcmp(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(", ");
+                        self.generate_expression(&args[0])?;
+                        self.emit_no_indent(")");
+                    }
+                    "toUpperCase" if args.is_empty() => {
+                        self.emit_no_indent("str_to_upper(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
+                    "toLowerCase" if args.is_empty() => {
+                        self.emit_no_indent("str_to_lower(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
+                    "trim" if args.is_empty() => {
+                        self.emit_no_indent("str_trim(");
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(")");
+                    }
+                    _ => {
+                        // Generic method call (for objects)
+                        self.generate_expression(object)?;
+                        self.emit_no_indent(".");
+                        self.emit_no_indent(method);
+                        self.emit_no_indent("(");
+                        for (i, arg) in args.iter().enumerate() {
+                            if i > 0 {
+                                self.emit_no_indent(", ");
+                            }
+                            self.generate_expression(arg)?;
+                        }
+                        self.emit_no_indent(")");
+                    }
                 }
             }
 
