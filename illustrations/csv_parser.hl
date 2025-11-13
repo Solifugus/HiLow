@@ -1,0 +1,32 @@
+function main(): i32 {
+    print("===== CSV Parser Application =====");
+    print("Demonstrates: string.split(), arrays, forEach, closures");
+
+    defer print("CSV processing complete!");
+
+    let csv_data: string = "apple,5,red\nbanana,3,yellow\ncherry,10,red\ngrape,8,green";
+
+    let lines: [string] = csv_data.split("\n");
+    print(f"Found {lines.length} lines");
+
+    let total_quantity: i32 = 0;
+    let line_count: i32 = 0;
+
+    let process: function = function(line: string, idx: i32): i32 {
+        total_quantity = total_quantity + 1;
+        line_count = line_count + 1;
+        return 0;
+    };
+
+    lines.forEach(process);
+
+    print(f"Summary:");
+    print(f"  Total items: {total_quantity}");
+    print(f"  Lines processed: {line_count}");
+
+    let first_line: string = "apple,5,red";
+    let fields: [string] = first_line.split(",");
+    print(f"First line has {fields.length} fields");
+
+    return total_quantity;
+}

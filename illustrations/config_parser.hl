@@ -1,0 +1,48 @@
+function main(): i32 {
+    print("===== Configuration Parser =====");
+    print("Demonstrates: objects, match expressions, property access");
+
+    defer print("Configuration loaded successfully");
+
+    let config = {
+        port: 8080,
+        timeout: 30,
+        max_connections: 100,
+        debug_mode: 1,
+        log_level: 2
+    };
+
+    print("Configuration:");
+    print(f"  Port: {config.port}");
+    print(f"  Timeout: {config.timeout}s");
+    print(f"  Max connections: {config.max_connections}");
+    print(f"  Debug mode: {config.debug_mode}");
+    print(f"  Log level: {config.log_level}");
+
+    let port_type: i32 = match config.port {
+        80 => 1,
+        443 => 2,
+        8080 => 3,
+        _ => 0
+    };
+
+    print(f"Port type code: {port_type}");
+
+    let log_severity: i32 = match config.log_level {
+        0 => 10,
+        1 => 20,
+        2 => 30,
+        3 => 40,
+        _ => 0
+    };
+
+    print(f"Log severity level: {log_severity}");
+
+    config.port = 443;
+    print(f"Updated port to: {config.port}");
+
+    let total: i32 = config.port + config.timeout + config.max_connections;
+    print(f"Configuration checksum: {total}");
+
+    return 0;
+}

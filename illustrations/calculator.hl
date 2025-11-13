@@ -1,0 +1,50 @@
+function main(): i32 {
+    print("===== Calculator with Variables =====");
+    print("Demonstrates: closures, pattern matching, state");
+
+    let memory: i32 = 0;
+
+    let store: function = function(value: i32, dummy: i32): i32 {
+        memory = value;
+        return memory;
+    };
+
+    let recall: function = function(dummy1: i32, dummy2: i32): i32 {
+        return memory;
+    };
+
+    let add_to_memory: function = function(value: i32, dummy: i32): i32 {
+        memory = memory + value;
+        return memory;
+    };
+
+    print("Operation: store(42)");
+    let r1: i32 = store(42, 0);
+    print(f"Memory = {r1}");
+
+    print("Operation: add(10)");
+    let r2: i32 = add_to_memory(10, 0);
+    print(f"Memory = {r2}");
+
+    print("Operation: add(8)");
+    let r3: i32 = add_to_memory(8, 0);
+    print(f"Memory = {r3}");
+
+    print("Operation: recall()");
+    let r4: i32 = recall(0, 0);
+    print(f"Recalled: {r4}");
+
+    let operation: i32 = 1;
+    let result: i32 = match operation {
+        0 => memory,
+        1 => memory * 2,
+        2 => memory / 2,
+        _ => 0
+    };
+
+    print(f"Match operation 1 (double): {result}");
+
+    defer print("Calculator session ended");
+
+    return result;
+}
