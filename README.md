@@ -215,8 +215,22 @@ Key areas for contribution:
 
 ## License
 
-To be determined
+HiLow is licensed under the GNU General Public License v2.0. See [LICENSE](LICENSE) for the full license text.
+
+This means you are free to:
+- Use HiLow for any purpose
+- Study and modify the source code
+- Distribute HiLow
+- Distribute your modifications
+
+Under the condition that:
+- Derivative works must also be licensed under GPL v2
+- Source code must be made available
 
 ## Credits
+
+**Author**: Matthew C. Tedder (Solifugus)
+**License**: GNU GPL v2
+**Repository**: https://github.com/Solifugus/HiLow
 
 Designed and implemented as a bridge between systems and application programming paradigms.
