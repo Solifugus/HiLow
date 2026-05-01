@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 0 — Project Setup and Archive**
+**Current phase: Phase 1b — Equality Operators and Mode Tokens**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
@@ -19,6 +19,22 @@ These two documents are authoritative. When in doubt, consult them in this order
 2. **`docs/development-plan.md`** — the phase-by-phase implementation plan. Defines what each phase implements, what it explicitly does *not* implement, and how to verify completion. The current phase governs what work is in scope.
 
 If these two documents disagree with each other, stop and ask — do not pick one silently.
+
+## Project status tracking
+
+`docs/STATUS.md` is the persistent state record. At the start of every session:
+
+1. Read `docs/STATUS.md` to see what was last done, what's in progress, and what open questions exist
+2. Resolve any open questions before proceeding (or note them in the prompt if they're unresolved)
+
+At the end of every session:
+
+1. Append a new entry to "Recent sessions" with date, phase, what was actually done, judgment calls, surprises
+2. Update "Current state" to reflect where things stand (phase complete? in progress? blocked?)
+3. Add to "Open questions" anything that needs user input before next session can proceed
+4. Add to "Known issues / TODOs" anything deferred or worth revisiting
+
+Keep entries factual. "Implemented X" is better than "Successfully implemented X to a high standard." If something didn't work and was worked around, say so.
 
 ## Discipline rules
 
