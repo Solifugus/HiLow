@@ -1,5 +1,7 @@
 use clap::Parser;
 
+pub mod lexer;
+
 #[derive(Parser)]
 #[command(name = "hilowc")]
 #[command(about = "HiLow Programming Language Compiler")]

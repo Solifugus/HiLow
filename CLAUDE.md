@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 1b — Equality Operators and Mode Tokens**
+**Current phase: Phase 1a — Basic Tokens**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -1,7 +1,7 @@
 use hilowc::lexer::{Lexer, TokenKind};
 
 #[test]
-fn test_integer_literals() {
+fn test_integer_literal_decimal() {
     let input = "42";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2); // number + EOF
@@ -10,7 +10,7 @@ fn test_integer_literals() {
 }
 
 #[test]
-fn test_hex_integer_literals() {
+fn test_integer_literal_hex() {
     let input = "0x1F";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2);
@@ -19,7 +19,7 @@ fn test_hex_integer_literals() {
 }
 
 #[test]
-fn test_binary_integer_literals() {
+fn test_integer_literal_binary() {
     let input = "0b1010";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2);
@@ -28,7 +28,7 @@ fn test_binary_integer_literals() {
 }
 
 #[test]
-fn test_integer_with_underscores() {
+fn test_integer_literal_with_underscores() {
     let input = "1_000";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2);
@@ -37,7 +37,7 @@ fn test_integer_with_underscores() {
 }
 
 #[test]
-fn test_float_literals() {
+fn test_float_literal_simple() {
     let input = "3.14";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2);
@@ -46,7 +46,7 @@ fn test_float_literals() {
 }
 
 #[test]
-fn test_float_scientific_notation_positive() {
+fn test_float_literal_scientific_positive() {
     let input = "2.5e10";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2);
@@ -55,7 +55,7 @@ fn test_float_scientific_notation_positive() {
 }
 
 #[test]
-fn test_float_scientific_notation_negative() {
+fn test_float_literal_scientific_negative() {
     let input = "1.5e-3";
     let tokens = Lexer::new(input).tokens().unwrap();
     assert_eq!(tokens.len(), 2);
@@ -99,289 +99,343 @@ fn test_identifier_snake_case() {
     assert_eq!(tokens[0].lexeme, "snake_case");
 }
 
+// Reserved-for-future keywords should lex as identifiers
 #[test]
-fn test_keyword_let() {
-    let input = "let";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Let);
-    assert_eq!(tokens[0].lexeme, "let");
+fn test_reserved_words_as_identifiers() {
+    let reserved_words = ["class", "interface", "trait", "yield", "enum"];
+
+    for word in reserved_words {
+        let tokens = Lexer::new(word).tokens().unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens[0].kind, TokenKind::Identifier);
+        assert_eq!(tokens[0].lexeme, word);
+    }
 }
 
+// Test all 41 keywords
 #[test]
-fn test_keyword_function() {
-    let input = "function";
+fn test_keyword_and() {
+    let input = "and";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Function);
-    assert_eq!(tokens[0].lexeme, "function");
-}
-
-#[test]
-fn test_keyword_if() {
-    let input = "if";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::If);
-}
-
-#[test]
-fn test_keyword_else() {
-    let input = "else";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Else);
-}
-
-#[test]
-fn test_keyword_for() {
-    let input = "for";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::For);
-}
-
-#[test]
-fn test_keyword_while() {
-    let input = "while";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::While);
-}
-
-#[test]
-fn test_keyword_return() {
-    let input = "return";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Return);
-}
-
-#[test]
-fn test_keyword_break() {
-    let input = "break";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Break);
-}
-
-#[test]
-fn test_keyword_continue() {
-    let input = "continue";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Continue);
-}
-
-#[test]
-fn test_keyword_loop() {
-    let input = "loop";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Loop);
-}
-
-#[test]
-fn test_keyword_match() {
-    let input = "match";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Match);
-}
-
-#[test]
-fn test_keyword_switch() {
-    let input = "switch";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Switch);
-}
-
-#[test]
-fn test_keyword_case() {
-    let input = "case";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Case);
-}
-
-#[test]
-fn test_keyword_default() {
-    let input = "default";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Default);
-}
-
-#[test]
-fn test_keyword_import() {
-    let input = "import";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Import);
-}
-
-#[test]
-fn test_keyword_export() {
-    let input = "export";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Export);
-}
-
-#[test]
-fn test_keyword_defer() {
-    let input = "defer";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Defer);
-}
-
-#[test]
-fn test_keyword_async() {
-    let input = "async";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Async);
-}
-
-#[test]
-fn test_keyword_watch() {
-    let input = "watch";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Watch);
-}
-
-#[test]
-fn test_keyword_shared() {
-    let input = "shared";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Shared);
-}
-
-#[test]
-fn test_keyword_manual() {
-    let input = "manual";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Manual);
+    assert_eq!(tokens[0].kind, TokenKind::And);
 }
 
 #[test]
 fn test_keyword_arena() {
     let input = "arena";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0].kind, TokenKind::Arena);
 }
 
 #[test]
-fn test_keyword_nothing() {
-    let input = "nothing";
+fn test_keyword_async() {
+    let input = "async";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Nothing);
+    assert_eq!(tokens[0].kind, TokenKind::Async);
 }
 
 #[test]
-fn test_keyword_unknown() {
-    let input = "unknown";
+fn test_keyword_break() {
+    let input = "break";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Unknown);
+    assert_eq!(tokens[0].kind, TokenKind::Break);
 }
 
 #[test]
-fn test_keyword_true() {
-    let input = "true";
+fn test_keyword_case() {
+    let input = "case";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::True);
+    assert_eq!(tokens[0].kind, TokenKind::Case);
 }
 
 #[test]
-fn test_keyword_false() {
-    let input = "false";
+fn test_keyword_continue() {
+    let input = "continue";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::False);
+    assert_eq!(tokens[0].kind, TokenKind::Continue);
 }
 
 #[test]
-fn test_keyword_this() {
-    let input = "this";
+fn test_keyword_decreases() {
+    let input = "decreases";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::This);
+    assert_eq!(tokens[0].kind, TokenKind::Decreases);
 }
 
 #[test]
-fn test_keyword_not() {
-    let input = "not";
+fn test_keyword_default() {
+    let input = "default";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Not);
+    assert_eq!(tokens[0].kind, TokenKind::Default);
 }
 
 #[test]
-fn test_keyword_and() {
-    let input = "and";
+fn test_keyword_defer() {
+    let input = "defer";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::And);
+    assert_eq!(tokens[0].kind, TokenKind::Defer);
 }
 
 #[test]
-fn test_keyword_or() {
-    let input = "or";
+fn test_keyword_else() {
+    let input = "else";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Or);
-}
-
-#[test]
-fn test_keyword_requires() {
-    let input = "requires";
-    let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::Requires);
+    assert_eq!(tokens[0].kind, TokenKind::Else);
 }
 
 #[test]
 fn test_keyword_ensures() {
     let input = "ensures";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0].kind, TokenKind::Ensures);
 }
 
 #[test]
-fn test_keyword_when() {
-    let input = "when";
+fn test_keyword_excluding() {
+    let input = "excluding";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
-    assert_eq!(tokens[0].kind, TokenKind::When);
+    assert_eq!(tokens[0].kind, TokenKind::Excluding);
+}
+
+#[test]
+fn test_keyword_export() {
+    let input = "export";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Export);
+}
+
+#[test]
+fn test_keyword_false() {
+    let input = "false";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::False);
+}
+
+#[test]
+fn test_keyword_for() {
+    let input = "for";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::For);
+}
+
+#[test]
+fn test_keyword_from() {
+    let input = "from";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::From);
+}
+
+#[test]
+fn test_keyword_function() {
+    let input = "function";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Function);
+}
+
+#[test]
+fn test_keyword_heap() {
+    let input = "heap";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Heap);
+}
+
+#[test]
+fn test_keyword_high() {
+    let input = "high";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::High);
+}
+
+#[test]
+fn test_keyword_if() {
+    let input = "if";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::If);
+}
+
+#[test]
+fn test_keyword_import() {
+    let input = "import";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Import);
 }
 
 #[test]
 fn test_keyword_in() {
     let input = "in";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0].kind, TokenKind::In);
+}
+
+#[test]
+fn test_keyword_invariant() {
+    let input = "invariant";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Invariant);
 }
 
 #[test]
 fn test_keyword_is() {
     let input = "is";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens.len(), 2);
     assert_eq!(tokens[0].kind, TokenKind::Is);
 }
 
-// Arithmetic operators
+#[test]
+fn test_keyword_let() {
+    let input = "let";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Let);
+}
+
+#[test]
+fn test_keyword_loop() {
+    let input = "loop";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Loop);
+}
+
+#[test]
+fn test_keyword_low() {
+    let input = "low";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Low);
+}
+
+#[test]
+fn test_keyword_manual() {
+    let input = "manual";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Manual);
+}
+
+#[test]
+fn test_keyword_match() {
+    let input = "match";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Match);
+}
+
+#[test]
+fn test_keyword_module() {
+    let input = "module";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Module);
+}
+
+#[test]
+fn test_keyword_not() {
+    let input = "not";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Not);
+}
+
+#[test]
+fn test_keyword_nothing() {
+    let input = "nothing";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Nothing);
+}
+
+#[test]
+fn test_keyword_or() {
+    let input = "or";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Or);
+}
+
+#[test]
+fn test_keyword_program() {
+    let input = "program";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Program);
+}
+
+#[test]
+fn test_keyword_requires() {
+    let input = "requires";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Requires);
+}
+
+#[test]
+fn test_keyword_return() {
+    let input = "return";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Return);
+}
+
+#[test]
+fn test_keyword_shared() {
+    let input = "shared";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Shared);
+}
+
+#[test]
+fn test_keyword_stack() {
+    let input = "stack";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Stack);
+}
+
+#[test]
+fn test_keyword_stealth() {
+    let input = "stealth";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Stealth);
+}
+
+#[test]
+fn test_keyword_switch() {
+    let input = "switch";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Switch);
+}
+
+#[test]
+fn test_keyword_this() {
+    let input = "this";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::This);
+}
+
+#[test]
+fn test_keyword_true() {
+    let input = "true";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::True);
+}
+
+#[test]
+fn test_keyword_unknown() {
+    let input = "unknown";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Unknown);
+}
+
+#[test]
+fn test_keyword_watch() {
+    let input = "watch";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Watch);
+}
+
+#[test]
+fn test_keyword_when() {
+    let input = "when";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::When);
+}
+
+#[test]
+fn test_keyword_while() {
+    let input = "while";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::While);
+}
+
+// Test arithmetic operators
 #[test]
 fn test_operators_arithmetic() {
     let input = "+ - * / %";
@@ -394,7 +448,7 @@ fn test_operators_arithmetic() {
     assert_eq!(tokens[4].kind, TokenKind::Percent);
 }
 
-// Bitwise operators
+// Test bitwise operators
 #[test]
 fn test_operators_bitwise() {
     let input = "& | ^ ~ << >>";
@@ -408,7 +462,7 @@ fn test_operators_bitwise() {
     assert_eq!(tokens[5].kind, TokenKind::RightShift);
 }
 
-// Comparison operators (excluding equality)
+// Test comparison operators (excluding equality)
 #[test]
 fn test_operators_comparison() {
     let input = "< > <= >=";
@@ -420,7 +474,7 @@ fn test_operators_comparison() {
     assert_eq!(tokens[3].kind, TokenKind::GreaterEqual);
 }
 
-// Assignment operators
+// Test assignment operators
 #[test]
 fn test_operators_assignment() {
     let input = "= += -= *= /= %=";
@@ -434,7 +488,7 @@ fn test_operators_assignment() {
     assert_eq!(tokens[5].kind, TokenKind::PercentEqual);
 }
 
-// Range operator
+// Test range operator
 #[test]
 fn test_operator_range() {
     let input = "..";
@@ -444,7 +498,27 @@ fn test_operator_range() {
     assert_eq!(tokens[0].lexeme, "..");
 }
 
-// Line comments
+// Test punctuation
+#[test]
+fn test_punctuation() {
+    let input = "( ) { } [ ] , ; : . ? @";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 13); // 12 punctuation + EOF
+    assert_eq!(tokens[0].kind, TokenKind::LeftParen);
+    assert_eq!(tokens[1].kind, TokenKind::RightParen);
+    assert_eq!(tokens[2].kind, TokenKind::LeftBrace);
+    assert_eq!(tokens[3].kind, TokenKind::RightBrace);
+    assert_eq!(tokens[4].kind, TokenKind::LeftBracket);
+    assert_eq!(tokens[5].kind, TokenKind::RightBracket);
+    assert_eq!(tokens[6].kind, TokenKind::Comma);
+    assert_eq!(tokens[7].kind, TokenKind::Semicolon);
+    assert_eq!(tokens[8].kind, TokenKind::Colon);
+    assert_eq!(tokens[9].kind, TokenKind::Dot);
+    assert_eq!(tokens[10].kind, TokenKind::Question);
+    assert_eq!(tokens[11].kind, TokenKind::At);
+}
+
+// Test line comments
 #[test]
 fn test_line_comment() {
     let input = "42 // this is a comment\n84";
@@ -454,7 +528,7 @@ fn test_line_comment() {
     assert_eq!(tokens[1].kind, TokenKind::Integer(84));
 }
 
-// Block comments
+// Test block comments
 #[test]
 fn test_block_comment() {
     let input = "42 /* this is a comment */ 84";
@@ -464,7 +538,7 @@ fn test_block_comment() {
     assert_eq!(tokens[1].kind, TokenKind::Integer(84));
 }
 
-// Nested block comments
+// Test nested block comments
 #[test]
 fn test_nested_block_comment() {
     let input = "42 /* outer /* inner */ still in outer */ 84";
@@ -474,7 +548,7 @@ fn test_nested_block_comment() {
     assert_eq!(tokens[1].kind, TokenKind::Integer(84));
 }
 
-// Position tracking
+// Test position tracking
 #[test]
 fn test_position_tracking() {
     let input = "let x\n= 42";
