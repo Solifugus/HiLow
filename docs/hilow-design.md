@@ -139,7 +139,7 @@ The compiler verifies the `@low-callable` annotation: if the function body uses 
 
 **Shared between High and Low** (the core language):
 - All primitive types, `time`, `money`, `nothing`, `unknown`
-- All operators including `?=`, `~=`, `is`, `(qualifier)=`
+- All operators including `?=`, `!=`, `is`, `(qualifier)=`
 - All control flow constructs
 - F-strings and quote recursion
 - `watch()` reactive primitive
@@ -198,12 +198,13 @@ Identifiers begin with a letter or underscore, followed by letters, digits, or u
 
 ```
 and       arena     async     break     case      continue
-default   defer     else      ensures   export    false
-for       function  heap      high      if        import
-in        is        let       loop      low       manual
-match     module    not       nothing   or        program
-requires  return    shared    stack     switch    this
-true      unknown   when      while     watch
+decreases default   defer     else      ensures   excluding
+export    false     for       from      function  heap
+high      if        import    in        invariant is
+let       loop      low       manual    match     module
+not       nothing   or        program   requires  return
+shared    stack     stealth   switch    this      true
+unknown   watch     when      while
 ```
 
 ### Reserved for Future Use
@@ -406,6 +407,44 @@ if (meeting1 (within: 1h)= meeting2) {
   print("Within an hour")
 }
 ```
+
+##### Time Precision
+
+Every `time` value carries a *precision tag* indicating the smallest unit it was specified to: `year`, `month`, `day`, `hour`, `minute`, `second`, `millisecond`, `microsecond`, or `nanosecond`. The precision tag is set when the value is created:
+
+```hilow
+let t1 = time.parse("2024-01-15")              // day precision
+let t2 = time.parse("2024-01-15T10:00")        // minute precision
+let t3 = time.parse("2024-01-15T10:30:45.123") // millisecond precision
+let t4 = time.now()                             // always nanosecond precision
+```
+
+When two times are compared (with `?=`, `!=`, `<`, `>`, `<=`, `>=`), comparison happens at the precision of the *less precise* operand. This matches how humans reason about time: "the meeting is at 10am" means "sometime in the 10am hour," not "10:00:00.000000000."
+
+```hilow
+let t1 = time.parse("2024-01-15T10:00")        // minute precision
+let t2 = time.parse("2024-01-15T10:30:45")     // second precision
+
+// Comparison happens at minute precision (the coarser of the two)
+if (t1 ?= t2) { print("equal") }    // true: t2 falls within t1's minute? No - t2 is at 10:30, t1 at 10:00
+if (t1 < t2) { print("t2 later") }  // true: 10:30 > 10:00 at minute precision
+
+let t3 = time.parse("2024-01-15T10:00:30")     // second precision
+if (t1 ?= t3) { print("equal") }    // true: at minute precision both are 10:00
+```
+
+Arithmetic preserves the operand's precision: `t1 + 1h` keeps `t1`'s precision tag. Adding a sub-precision duration (e.g., adding `500ms` to an hour-precision time) keeps the coarser precision; the sub-precision quantity is held in storage but ignored in comparisons until the precision tag is changed.
+
+To force a specific precision, use `.atPrecision(.unit)`:
+
+```hilow
+let exact = t1.atPrecision(.second)            // round/truncate to second precision
+let coarse = t3.atPrecision(.day)              // truncate to day
+```
+
+This precision rule applies in both High and Low modes. Low mode does not have different semantics — but Low code typically creates times via `time.now()` or equivalent precise sources, so Low values tend to be nanosecond-precise. The rule is a property of the value, not of the mode.
+
+The qualifier forms `(same-year)=`, `(same-month)=`, `(same-day)=`, etc. are equivalent to comparing both operands `.atPrecision(.unit)`. They exist for readability — `t1 (same-day)= t2` is more obviously about day-equality than `t1.atPrecision(.day) ?= t2.atPrecision(.day)`.
 
 #### Money
 
@@ -690,16 +729,12 @@ No coercion — operands must be the same numeric type. Mixing `i32` and `f64` r
 
 ### Comparison
 
-HiLow distinguishes three kinds of equality, each with a distinct operator family:
+HiLow has two equality operators plus an open-ended qualifier form for unusual cases:
 
 ```hilow
-// Strict equality - types must match exactly
+// Equality - types must match exactly, no coercion
 x ?= y         // Equal
-x ?!= y        // Not equal
-
-// Approximate equality - for numeric tolerance, case-insensitive strings, etc.
-x ~= y         // Approximately equal
-x ~!= y        // Not approximately equal
+x != y         // Not equal
 
 // Type/prototype membership
 x is T         // x is of type T (or has T in prototype chain)
@@ -710,23 +745,39 @@ x < y          // Less than
 x > y          // Greater than
 x <= y         // Less than or equal
 x >= y         // Greater than or equal
+x !< y         // Not less than (equivalent to x >= y)
+x !> y         // Not greater than (equivalent to x <= y)
 ```
 
-The leading marker (`?` or `~`) makes the equality operator visually distinct from assignment, eliminating the classic `=` vs `==` typo bug. The negation marker `!` is consistent across both operator families: `?!=` and `~!=`.
+The leading `?` in `?=` makes the equality operator visually distinct from assignment, eliminating the classic `=` vs `==` typo bug. Inequality uses the familiar `!=` since it has no assignment-confusion risk and is universal across languages. The asymmetry is intentional — `!=` is so universally recognized that requiring something like `?!=` would be needless friction.
+
+The `!<` and `!>` operators are equivalent to `>=` and `<=` respectively, but read more naturally in invariant-style code: "x has not exceeded the limit" is `x !> limit`. Both forms are valid; choose the one whose framing matches your reasoning. The redundant forms `!<=` and `!>=` are not provided — use `>` and `<` instead.
+
+Bare `==` is **not** a valid operator in HiLow. Using it produces a clear compile error suggesting `?=` for equality or `=` for assignment. This catches the typo in both directions: someone reaching for `==` is told to use `?=`, and someone who typed `=` in a condition position by mistake is told that's an assignment.
 
 ### Qualified Equality
 
-For unusual or domain-specific comparisons, the `(qualifier)=` form is expressive and extensible:
+Approximate, fuzzy, or domain-specific comparisons use the `(qualifier)=` form. Inequality uses `(qualifier)!=`:
 
 ```hilow
-// Float tolerance
+// Approximate numeric equality
+if (a (roughly)= b) {
+  print("Roughly equal")
+}
+
+// Numeric tolerance
 if (a (within: 0.01)= b) {
   print("Close enough")
 }
 
 // Case-insensitive string comparison
-if (s1 (case-insensitive)= s2) {
+if (s1 (caseless)= s2) {
   print("Match (any case)")
+}
+
+// Combined qualifiers (comma-separated)
+if (s1 (caseless, trimmed)= s2) {
+  print("Match ignoring case and whitespace")
 }
 
 // Time comparisons
@@ -741,9 +792,36 @@ if (m1 (within: 1h)= m2) {
 if (p1 (after-conversion: USD)= p2) {
   print("Equal value when converted to USD")
 }
+
+// Negation form
+if (s1 (caseless)!= s2) {
+  print("Different (even ignoring case)")
+}
 ```
 
-The qualifier name is interpreted by the type involved — `time` knows about `same-day` and `within`, `string` knows about `case-insensitive`, etc. New qualifiers can be defined for user types.
+The qualifier name is interpreted by the type involved — `time` knows about `same-day` and `within`, `string` knows about `caseless` and `trimmed`, etc. Multiple qualifiers can be combined with commas; their order does not matter. Qualifier names are *contextual identifiers* — they are recognized only inside the `(...)=` position and do not pollute the keyword namespace, so a user can still name a variable `roughly` or `caseless`.
+
+The same `(qualifier)=` form handles unusual *assignment* operations. Coercion — converting from one type to another with type-aware parsing — uses `(coerce)=`:
+
+```hilow
+let price: f64 (coerce)= "9.95"          // parse "9.95" as f64
+let count: i32 (coerce)= "42"            // parse "42" as i32
+let amount: money (coerce)= "$19.99"     // parse currency-formatted string
+let when: time (coerce)= "2024-01-15"    // parse ISO date
+```
+
+HiLow has no implicit type coercion. The `(coerce)=` qualifier makes coercion *explicit at every point of use*. This preserves type safety while giving programmers a concise way to perform conversions when they're warranted. Each type defines what coercion means for it; if a type doesn't support coercion from a particular source type, the compiler reports an error.
+
+Built-in qualifiers in HiLow 1.0 include:
+
+- **Numeric**: `roughly` (default tolerance), `within: <value>` (explicit tolerance)
+- **String**: `caseless`, `trimmed`
+- **Time**: `same-year`, `same-month`, `same-day`, `same-hour`, `same-minute`, `within: <duration>`
+- **Money**: `after-conversion: <currency>`
+- **Coercion**: `coerce` (assignment qualifier; type-aware string parsing and value conversion)
+- **Low-mode atomic/memory**: `atomic-add`, `atomic-sub`, `atomic-or`, `atomic-and`, `saturating-add`, `saturating-sub`, `volatile` (assignment-only)
+
+User-defined qualifiers are not supported in HiLow 1.0; the qualifier set is fixed by the standard library. Future versions may add a registration mechanism.
 
 ### Assignment
 
@@ -829,11 +907,14 @@ x ||= y                     // Use: if (not x) x = y
 x &&= y                     // Use: if (x) x = y
 x ??= y (nullish assign)    // Use: if (x is nothing) x = y
 x?.y                        // Use explicit checks: if (x) x.y
-x === y                     // HiLow uses ?= (strict by default)
-x == y (with coercion)      // HiLow has no coercion; use ~= for approximate
+x === y                     // HiLow uses ?= (no coercion to begin with)
+x !== y                     // Use !=
+x == y (with coercion)      // HiLow has no coercion; use (roughly)= for fuzzy
 typeof x                    // Use: x is T
 ?:  (ternary)               // Use if/else
 ```
+
+Bare `==` is also not valid. Attempting to use it produces a compile error directing you to `?=` for equality or `=` for assignment.
 
 ## Control Flow
 
@@ -1006,7 +1087,7 @@ Preconditions with `requires`, postconditions with `ensures`. The result is name
 
 ```hilow
 function divide(a: i32, b: i32): i32
-  requires (b ?!= 0)
+  requires (b != 0)
   ensures (result * b <= a and result * b + b > a)
 {
   return a / b
@@ -1018,7 +1099,7 @@ let y = divide(10, 0)               // ✗ Proof error: precondition violated
 
 // Prover understands control flow
 let divisor = getUserInput()
-if (divisor ?!= 0) {
+if (divisor != 0) {
   let z = divide(100, divisor)      // ✓ Prover knows divisor != 0
 }
 ```
@@ -1126,9 +1207,18 @@ Low mode does not insert refcounting. Sharing requires explicit choice:
 let buf = alloc(1024)
 // freed at scope exit
 
+// Stack: explicit stack allocation (Low mode only)
+stack p: i64
+stack buffer: [u8; 256]
+// freed at scope exit; same as default but documents intent
+
+// Heap: explicit heap allocation (Low mode only)
+heap data: [u32; 1024]
+// freed at scope exit; same as default but documents the cost
+
 // Manual: you control the lifetime
 manual let graph = alloc(size_of<Graph>)
-defer free(graph)
+defer graph
 // freed when defer runs
 
 // Refcounted: opt-in shared ownership
@@ -1143,11 +1233,16 @@ arena {
 }                                   // entire arena freed here
 ```
 
-The four modes cover the full spectrum:
-- **Default (scope)**: single owner, automatic cleanup, no overhead
-- **Manual**: explicit control, for unusual lifetimes
-- **Shared (refcount)**: shared ownership when needed, opt-in cost
-- **Arena**: bulk allocation for batched work
+The Low-mode declarators `stack` and `heap` are alternatives to `let` that document where the variable lives. They behave identically to `let` for ownership and cleanup, but make the storage location explicit. Use them when storage location matters for the reader's understanding (e.g., a `stack` declaration of a 256-byte buffer signals that this size is acceptable on the stack).
+
+`stack` and `heap` are not available in High mode. High-mode developers do not generally need to think about storage location; the compiler manages it.
+
+The five forms cover the full spectrum:
+- **`let` (scope)**: single owner, automatic cleanup, no overhead
+- **`stack` / `heap` (Low only)**: same ownership as `let`, but explicit about storage location
+- **`manual`**: explicit control, for unusual lifetimes
+- **`shared` (refcount)**: shared ownership when needed, opt-in cost
+- **`arena`**: bulk allocation for batched work
 
 ### Pointers (Low mode only)
 
@@ -1171,17 +1266,48 @@ In High mode, pointers are not exposed. References to flexible objects are impli
 
 ### The `defer` Statement
 
+`defer` schedules cleanup to run when the current scope exits, including on early returns and `break`. It comes in two forms:
+
 ```hilow
+// Smart form: defer the type-appropriate cleanup
 function process() {
-  manual let resource = allocateResource()
-  defer free(resource)              // Runs at scope exit
+  manual let buffer = alloc(1024)
+  defer buffer                       // compiler infers: free(buffer)
   
-  if (errorCondition) {
-    return                          // resource is freed
-  }
+  let file = openFile("data.txt")
+  defer file                         // compiler infers: file.close()
   
-  doWork(resource)
-}                                   // resource is freed
+  doWork(buffer, file)
+}                                    // both cleaned up here
+
+// Explicit form: defer a specific expression
+function process() {
+  manual let buffer = alloc(1024)
+  defer free(buffer)                 // explicit cleanup expression
+  
+  doWork(buffer)
+}
+```
+
+The smart form (`defer <var>`) consults the type of `<var>` to determine the cleanup. Each resource type registers its cleanup function:
+
+- `manual` allocations: `free(var)`
+- File handles: `var.close()`
+- Network connections: `var.close()`
+- Locks: `var.release()`
+- User types: cleanup is determined by the type's destructor
+
+The explicit form (`defer <expr>`) runs the literal expression at scope exit. Use it when the smart form's inference doesn't match what you want, or when the cleanup involves multiple values.
+
+Multiple `defer` statements run in LIFO order: the last `defer` runs first.
+
+```hilow
+function example() {
+  defer print("third")
+  defer print("second")
+  defer print("first")
+  // prints: first, second, third
+}
 ```
 
 `defer` is available in both modes. In Low it's commonly used with `manual` allocations; in High it's used for non-memory cleanup (closing files, releasing locks).
@@ -1273,6 +1399,45 @@ let w = watch(counter) {
 
 counter = 10                        // Triggers once, counter becomes 11
 ```
+
+### Stealth Blocks
+
+Sometimes you need to mutate watched state without firing watchers — during initialization, during recovery from an error, or when performing internal bookkeeping that shouldn't be visible to observers. The `stealth { ... }` block provides this:
+
+```hilow
+let balance = 0
+let w = watch(balance) {
+  print(f"Balance changed: {balance}")
+}
+
+balance = 100                       // Watcher fires: "Balance changed: 100"
+
+stealth {
+  balance = 0                       // No watcher fires
+  balance = 500                     // No watcher fires
+}                                   // Final state: balance is 500, no watchers fired
+
+balance = 600                       // Watcher fires: "Balance changed: 600"
+```
+
+`stealth` blocks are *dynamic* — they suppress watcher notifications for any writes that occur during the block's execution, including writes made inside functions called from the block. This ensures complete suppression for the duration of the operation:
+
+```hilow
+function reset() {
+  balance = 0
+  total_spent = 0
+}
+
+stealth {
+  reset()                           // Writes inside reset() also don't fire watchers
+}
+```
+
+The default behavior is the opposite — watchers fire for all writes — because watchers exist for self-healing, monitoring, and reactive updates that should run by default. `stealth` is the explicit opt-out, used when you know a particular operation should not be observed.
+
+`stealth` blocks do not change the values' final state, only the notifications. After a `stealth` block exits, watched variables reflect their actual current values; subsequent writes outside the block trigger watchers normally.
+
+`stealth` is available in both High and Low modes.
 
 ### Async Operations
 
@@ -1425,7 +1590,7 @@ if (street is unknown) {
 function fetchData(url: string): object? {
   let response = http.get(url)
   
-  if (response.status ?!= 200) {
+  if (response.status != 200) {
     if (response.status ?= 404) {
       return unknown("not found", options: ["check url", "try alternate"])
     } else if (response.status ?= 500) {
@@ -1498,18 +1663,64 @@ HiLow's optional proof system verifies properties at compile time. It is more em
 
 ### Variable Constraints
 
-Constraints define valid ranges for values. The variable being constrained is referenced by its name:
+Constraints define valid values. HiLow has two forms: **predicates** (arbitrary boolean expressions) and **sets** (explicit domains).
+
+#### Predicate Form
+
+Wrap any boolean expression in parentheses after the type. The variable being constrained is referenced by its name:
 
 ```hilow
-let percent: i32 (percent >= 1 and percent <= 100) = 50
+let percent: i32 (percent >= 0 and percent <= 100) = 50
 let temperature: f32 (temperature >= -273.15)
 let port: u16 (port >= 1024)
 let balance: money (balance >= 0.00 USD)
-
-// Range sugar for the common case
-let percent: i32 in 1..100 = 50
-let port: u16 in 1024..65535
+let length: i32 (length !> capacity)        // length not greater than capacity
 ```
+
+Predicates are general — any boolean expression works. They handle relational invariants (variables compared to other variables), function results (`isPrime(n)`), and arbitrary logic.
+
+#### Set Form
+
+For domains expressible as a list of values and ranges, the set form is more concise and clearer:
+
+```hilow
+let direction: i32 in {-1, 0, 1}                    // exactly one of these
+let day: string in {"Mon", "Tue", "Wed", "Thu", "Fri"}
+let bigMonth: i32 in {1, 3, 5, 7, 8, 10, 12}        // months with 31 days
+let percent: i32 in {0..100}                         // range as set member
+let port: u16 in {1024..65535}                       // valid TCP/UDP port range
+let mixed: i32 in {1, 2, 5..14, 16}                  // scalars and ranges combined
+let valid: i32 in {1..100} excluding {10, 12}        // exclusion clause
+```
+
+Set syntax:
+
+```
+in { member, member, ... } [excluding { member, member, ... }]
+```
+
+A member is either a scalar value or a range (`a..b`). Ranges in sets are **inclusive on both ends** — `5..14` means the integers 5, 6, 7, ..., 14. The `excluding` clause is optional and follows the same syntax.
+
+Members can reference variables and function calls, not just literals:
+
+```hilow
+let port: u16 in {1024..max_port} excluding {reserved_port}
+let valid_id: i64 in {1..get_max_id()}
+```
+
+When members are runtime values, the prover treats the constraint as a runtime check rather than a static guarantee — see "Proof Modes" below.
+
+The set form is preferred for bounded domains; the predicate form is preferred for relational invariants and complex logic. Both compile to the same proof checks.
+
+#### What's Not Provided
+
+To keep the language small, the following are deliberately *not* in HiLow:
+
+- Set unions, intersections, or arithmetic — use a predicate if you need this complexity
+- Nested sets — `{1, {2, 3}}` is not valid
+- Range syntax outside of `in {...}` membership — there is no general range type, no range iteration, no slicing with ranges
+
+If a constraint cannot be expressed cleanly with a predicate or a single set-with-optional-exclusion, the language design suggests the constraint may be too complex and should be reconsidered.
 
 The prover verifies assignments:
 
@@ -1522,7 +1733,7 @@ percent = 75                        // ✓ Proven safe
 
 ```hilow
 function divide(a: i32, b: i32): i32
-  requires (b ?!= 0)
+  requires (b != 0)
   ensures (result * b <= a and result * b + b > a)
 {
   return a / b
@@ -1532,10 +1743,63 @@ let x = divide(10, 5)               // ✓
 let y = divide(10, 0)               // ✗ Proof error: precondition violated
 
 let divisor = getUserInput()
-if (divisor ?!= 0) {
+if (divisor != 0) {
   let z = divide(100, divisor)      // ✓ Prover follows control flow
 }
 ```
+
+### Loop Invariants
+
+For loops with non-trivial state, an `invariant` clause tells the prover what holds before, during, and after each iteration:
+
+```hilow
+function sum_array(arr: [i32]): i32 {
+  let total = 0
+  for (let i = 0; i < arr.length; i += 1)
+    invariant (total >= 0 and i <= arr.length)
+  {
+    if (arr[i] >= 0) {
+      total += arr[i]
+    }
+  }
+  return total
+}
+```
+
+The prover verifies:
+1. The invariant holds when the loop is first entered
+2. Each iteration preserves the invariant (assuming it held at iteration start)
+3. The invariant + the loop's exit condition give whatever postcondition the surrounding function requires
+
+Without invariants, the prover handles only simple loops where the relevant properties can be inferred. Complex loops require explicit invariants to verify.
+
+### Termination
+
+A `decreases` clause provides a metric that strictly decreases with each loop iteration or recursive call. The prover uses this to verify the code terminates (does not loop forever):
+
+```hilow
+function factorial(n: i32): i32
+  requires (n >= 0)
+  decreases (n)
+{
+  if (n ?= 0) return 1
+  return n * factorial(n - 1)         // n decreases on each call
+}
+
+function find_target(arr: [i32], target: i32): i32 {
+  let i = 0
+  while (i < arr.length and arr[i] != target)
+    decreases (arr.length - i)
+  {
+    i += 1
+  }
+  return i
+}
+```
+
+The decreases expression must be a non-negative integer that strictly decreases. A function or loop with a verified `decreases` clause is guaranteed to terminate. Functions without `decreases` are not verified for termination; they may loop forever, and the prover does not check.
+
+A function that has both `requires`/`ensures` clauses AND a `decreases` clause AND no `unknown` returns is **total**: it always terminates with a valid result on inputs satisfying its preconditions.
 
 ### Array Bounds
 
@@ -1556,6 +1820,80 @@ if (index >= 0 and index < 10) {
   let z = getItem(index)            // ✓ Bounds satisfied
 }
 ```
+
+### Resource Lifecycle
+
+Beyond memory, HiLow tracks the lifecycle of other resources: files, locks, network connections, database transactions, etc. Each resource type defines its valid state transitions; the prover verifies code respects them.
+
+```hilow
+let file = openFile("data.txt")     // state: open
+if (file is unknown) {
+  return                            // no cleanup needed; file was never opened
+}
+defer file                          // schedules: file.close() at scope exit
+
+let content = file.read()           // ✓ valid: file is open
+file.close()                        // explicit close; state: closed
+let more = file.read()              // ✗ Proof error: read on closed file
+```
+
+Resources cannot be:
+- Used after being released (read after close, lock acquired twice without release)
+- Released twice (double-close, double-release)
+- Leaked (allocated but never released, on any control flow path)
+
+`defer <var>` is the most common way to satisfy lifecycle proofs — it guarantees the cleanup runs.
+
+### Numeric Overflow
+
+In Low mode, arithmetic on fixed-width integers can overflow silently. The prover verifies that arithmetic stays within the type's range, or that the programmer has explicitly opted into overflow behavior.
+
+```hilow
+low function unsafe_add(a: u8, b: u8): u8 {
+  return a + b                      // ⚠ Proof warning: u8 + u8 may overflow
+}
+
+low function checked_add(a: u8, b: u8): u8
+  requires (a + b <= 255)
+{
+  return a + b                      // ✓ precondition prevents overflow
+}
+
+low function saturating_add(a: u8, b: u8): u8 {
+  let result: u8 = a
+  result (saturating-add)= b        // ✓ explicit saturation
+  return result
+}
+```
+
+In High mode, overflow defaults to checked: an arithmetic overflow produces an `unknown` value rather than a silent wrap. Code that needs different behavior uses the explicit qualifier (`(saturating-add)=`, `(wrapping-add)=`, etc.).
+
+### Concurrency Safety
+
+For programs using `async` and `shared`, the prover checks for race conditions and improper synchronization:
+
+```hilow
+shared let counter: i32 = 0
+
+async {
+  counter += 1                      // ✓ shared variables use atomic operations by default
+}
+
+async {
+  let old = counter
+  counter = old + 1                 // ⚠ Proof warning: read-modify-write on shared
+                                    //   without explicit atomicity is racy
+}
+
+async {
+  counter (atomic-add)= 1           // ✓ explicit atomic operation
+}
+```
+
+The prover verifies:
+- All accesses to `shared` variables use atomic operations or proper locking
+- Watch callbacks on `shared` variables don't race with concurrent writes
+- `async` blocks don't have data races on captured non-shared variables
 
 ### Money and Time Constraints
 
@@ -1610,29 +1948,67 @@ let bad = calculateTax(euro, 0.08)  // ✗ Currency mismatch
 
 ### Proof Modes
 
+The proof system is **optional and layered**. Compilation produces a runnable binary regardless of proof status; verification is a separate concern that can be turned up or down based on where you are in development.
+
 ```bash
 # Normal compilation (no proof checking)
 hilowc program.hl -o program
 
-# Verify all constraints
-hilowc program.hl --prove
+# Compile + verify (warnings, not errors)
+hilowc program.hl --prove -o program
 
-# Output:
-# ✓ All variable constraints verified
-# ✓ All function contracts satisfied
-# ✓ All unknown returns handled
-# ✓ No circular watch dependencies
-# ✓ All memory deallocations verified
-# ✓ Array bounds checked
-# ✓ Currency types verified
+# Sample output:
+# ✓ 14 constraints proven statically
+# ⚠ 3 constraints fall back to runtime checks (see lines 23, 67, 91)
+# ⚠ 1 unprovable assertion (line 134) — could not determine
+# ✗ 1 constraint violation (line 89) — value out of bounds
+# Compiled successfully with 5 verification warnings.
+
+# Compile + verify in strict mode (warnings become errors)
+hilowc program.hl --prove --strict -o program
+# Same output, but compilation fails if any non-✓ items appear.
+
+# Verify only, no compilation
+hilowc program.hl --prove-only
 
 # Suggestions for improvement
 hilowc program.hl --prove --suggest
 
-# Output may include:
-# 💡 Suggestion: line 23 - constraint always true
-# 💡 Suggestion: line 67 - use i32 instead of f64
+# Sample output may include:
+# 💡 Suggestion line 23: constraint is always true; consider removing
+# 💡 Suggestion line 67: use i32 instead of f64 (no fractional values seen)
 ```
+
+There are four proof outcomes for each constraint or contract:
+
+- **✓ Proven**: the prover statically verified this property
+- **⚠ Runtime-checked**: the property cannot be proven statically (because it depends on runtime values), so the compiler inserts a runtime check
+- **⚠ Unprovable**: the property is too complex for the prover, no runtime check is feasible — the property is documented but unverified
+- **✗ Violated**: the prover found a path that violates the property
+
+In normal `--prove` mode, only ✗ violations cause issues you can ignore (they print but don't fail compilation). In `--strict` mode, anything other than ✓ fails the build. This lets you:
+
+1. **Develop with `--prove`** — see warnings as you work, fix at your own pace
+2. **Gate releases with `--strict`** — your CI requires all properties verified
+3. **Skip proofs during exploration** — bare `hilowc` ignores all proof clauses
+
+The optional, layered approach means adding a constraint never breaks an existing build. You discover its impact through warnings, not failures.
+
+### Runtime Checks vs Static Proofs
+
+When a constraint references runtime-only values, static proof is impossible — the prover doesn't know what those values will be. In this case, the compiler emits a runtime check instead:
+
+```hilow
+let port: u16 in {1024..max_port}    // max_port may be runtime
+
+// At assignment, the compiler emits:
+//   if not (port >= 1024 and port <= max_port):
+//     handle_constraint_violation()
+```
+
+Runtime-checked constraints are weaker — they detect violations only when the offending code runs, not at compile time. The `--prove` output makes the distinction clear so programmers know which guarantees are static and which depend on testing.
+
+For maximum static verification, use literal values or `const` declarations in constraints; for flexibility, accept runtime checks.
 
 ### Gradual Verification
 
@@ -1646,14 +2022,14 @@ function divide(a, b) {
 
 // Basic precondition
 function divide(a: i32, b: i32): i32
-  requires (b ?!= 0)
+  requires (b != 0)
 {
   return a / b
 }
 
 // Full contract
 function divide(a: i32, b: i32): i32
-  requires (b ?!= 0)
+  requires (b != 0)
   ensures (result * b <= a and result * b + b > a)
 {
   return a / b
@@ -1875,7 +2251,7 @@ if (response is unknown) {
   return
 }
 
-if (response.status ?!= 200) {
+if (response.status != 200) {
   print(f"HTTP {response.status}")
   return
 }
@@ -2220,17 +2596,17 @@ This also eliminates the need for a separate file-level mode directive — the `
 
 The classic `=` vs `==` typo is a real bug source. `if (x = 5)` looks almost identical to `if (x == 5)` to a tired reader. HiLow uses `?=` for equality so the operator is visually distinct from assignment — the leading `?` carries meaning ("this is a question") and breaks the visual symmetry that makes the typo possible.
 
-`!=` for inequality is preserved (familiar, no ambiguity), with `?!=` for the strict inequality where consistency matters.
+`!=` for inequality is preserved (familiar, universal across languages, no assignment-confusion risk). The asymmetry with `?=` is intentional — requiring something like `?!=` would be needless friction.
 
-### Why `~=` for Approximate Equality
+Bare `==` is rejected with a compile error directing the user to `?=` for equality or `=` for assignment. This catches typos in both directions and prevents JavaScript-trained users from silently writing operators that mean something different in HiLow.
 
-Languages with type coercion conflate "are these equal" with "are these *kind of* equal." HiLow separates them: `?=` is strict equality (types must match, values must match exactly), `~=` is approximate equality (numeric tolerance, case-insensitive, whatever the type defines). The `~` symbol reads as "fuzzy" or "approximately," which matches the semantics.
+### Why `(qualifier)=` for Approximate and Domain-Specific Comparisons
 
-### Why `(qualifier)=` for Unusual Operations
+Earlier drafts of HiLow used `~=` for approximate equality. This was dropped in favor of `(qualifier)=`. The reasoning: approximate equality is rare enough that a dedicated symbol is wasteful, and the *kinds* of approximation vary too much to fit one symbol. Numeric tolerance, case-insensitive strings, same-calendar-day for time, currency-conversion-equality for money — all are conceptually "loose equality" but require different parameters and behaviors.
 
-Many useful operations don't fit comfortably into single-symbol operators. Atomic operations, saturating arithmetic, volatile access, domain-specific equality (same-day, within-tolerance, after-conversion) — each is rare enough that a dedicated operator would be wasteful, but common enough that calling functions feels heavy.
+The qualifier form names the kind of approximation explicitly: `(roughly)=`, `(caseless)=`, `(within: 0.01)=`, `(same-day)=`. This is more verbose for the rare case but eliminates ambiguity, stays open-ended for new equality kinds without grammar changes, and lets the qualifier carry parameters when needed. The same form handles unusual *assignment* operations: `(or)=`, `(atomic-add)=`, `(saturating-add)=`, `(volatile)=`.
 
-The `(qualifier)=` form gives unusual operations a clear, expressive syntax without consuming the limited supply of operator characters. It's open-ended — new qualifiers can be added without language changes.
+Qualifier names are contextual identifiers — they live only inside the `(...)=` position and don't pollute the keyword namespace. Multiple qualifiers can be combined with commas: `(caseless, trimmed)=` means "compare case-insensitively after trimming whitespace."
 
 ### Why No Type Coercion
 
@@ -2240,7 +2616,7 @@ In a language that compiles to native code with formal verification, coercion wo
 
 ### Why `is` for Type Tests
 
-Equality (`?=`, `~=`) compares values. Type/prototype membership is a different question. Conflating them via overloaded equality creates ambiguity (is `unknown` a type or a value?). `is` is short, reads naturally, and works for both type checks and prototype membership: `if (result is unknown)`, `if (dog is animal)`.
+Equality (`?=`, `(qualifier)=`) compares values. Type/prototype membership is a different question. Conflating them via overloaded equality creates ambiguity (is `unknown` a type or a value?). `is` is short, reads naturally, and works for both type checks and prototype membership: `if (result is unknown)`, `if (dog is animal)`.
 
 ### Why Prototype Objects in High Mode
 
@@ -2302,13 +2678,15 @@ JavaScript's automatic semicolon insertion has corner cases that surprise progra
 **Distinctive Features:**
 - Quote recursion for strings (no escaping quotes)
 - F-strings without backticks (Python-style)
-- `watch()` for reactive programming
-- Equality operators `?=` (strict), `~=` (approximate)
+- `watch()` for reactive programming, `stealth { }` for suppressed mutations
+- Equality operator `?=`, inequality `!=` (no bare `==`)
+- Negation comparators `!<` and `!>` for invariant-style readability
 - Type test operator `is`
-- Qualified operators `(qualifier)=` for domain-specific operations
+- Qualified operators `(qualifier)=` for domain-specific operations including `(coerce)=` for explicit type conversion
 - Logical operators `and`, `or`, `not`
-- Constraint-based verification
-- Function contracts with `requires`/`ensures`
+- Constraint-based verification with predicate or set form
+- Function contracts with `requires`/`ensures`/`invariant`/`decreases`
+- Layered, optional proof system (warnings by default, errors with `--strict`)
 
 **Mode Boundary:**
 - `high program` / `low program` declares entry point mode

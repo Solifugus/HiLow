@@ -39,7 +39,7 @@ Each session follows the same pattern:
 | 3 | AST and basic types | 1 |
 | 4 | High mode core: let, functions, control flow | 2 (4a, 4b) |
 | 5 | Equality and comparison operators | 2 (5a, 5b) |
-| 6 | Strings and f-strings | 2 (6a, 6b) |
+| 6 | Strings and f-strings | 3 (6a, 6b, 6c) |
 | 7 | Flexible objects and closures | 3 (7a, 7b, 7c) |
 | 8 | Memory model | 3 (8a, 8b, 8c) |
 | 9 | First-class types | 4 (9a, 9b, 9c, 9d) |
@@ -48,7 +48,7 @@ Each session follows the same pattern:
 | 12 | Low mode features | 4 (12a, 12b, 12c, 12d) |
 | 13 | Inline assembly | 1 |
 | 14 | Mode boundary enforcement | 1 |
-| 15 | Formal verification | 4 (15a, 15b, 15c, 15d) |
+| 15 | Formal verification | 6 (15a, 15b, 15c, 15d, 15e, 15f) |
 | 16 | Standard library | 3 (16a, 16b, 16c) |
 | 17 | Polish and cross-compilation | 2 |
 
@@ -110,7 +110,7 @@ cargo build
 **Out of scope:**
 - String literals (any kind) — Phase 6
 - F-strings — Phase 6
-- Equality operators (`?=`, `~=`, `?!=`, `~!=`) — Phase 5
+- Equality operators (`?=`, `!=`) — Phase 1b
 - Type-test operator `is` — Phase 5
 - `(qualifier)=` operators — Phase 5
 - Mode keywords (`high`, `low`, `program`, `module`) — Phase 2 (parser context)
@@ -138,34 +138,53 @@ cargo test --lib lexer::basic_tokens
 # All tests pass
 ```
 
-### Phase 1b: Equality Operators and Mode Tokens
+### Phase 1b: Equality Operators, Negation Comparators, and `?` Disambiguation
 
 **Scope:**
-- Equality operators: `?=`, `?!=`, `~=`, `~!=`
+- Equality operator `?=`
+- Inequality operator `!=`
+- Negation comparators `!<` and `!>`
 - The `is` keyword (already in keyword table from 1a; verify it tokenizes correctly)
-- The qualifier-paren-equals pattern `(...)=` — lexer treats `(` and `)` as separate tokens; the parser will recognize the `(qualifier)=` pattern
-- Multi-line operator disambiguation (e.g., `?` followed by `=` vs `?` alone)
+- Additional keywords now needed: `stealth`, `excluding`, `invariant`, `decreases`, `from` (for `import ... from`)
+- Disambiguation: `?=` vs bare `?` (the `?` alone is used in `T?` type syntax — Phase 9 — but the lexer must emit it correctly now)
+- Disambiguation: `!=`, `!<`, `!>` (all start with `!`, lookahead determines which)
+- Lexer also continues to treat `(` and `)` as separate tokens; the `(qualifier)=` form is recognized later by the parser in Phase 5b
 
 **Out of scope:**
-- Parsing `(qualifier)=` semantically — parser's job
+- Approximate equality `~=` — does not exist in HiLow (use `(roughly)=` instead, implemented as a qualifier in Phase 5b)
+- `~!=` — does not exist either
+- `!<=` and `!>=` — explicitly rejected as redundant with `>` and `<`; lexer should emit clear error
+- Bare `==` — must be rejected with a clear error message ("use `?=` for equality, or `=` for assignment")
+- Parsing `(qualifier)=` — parser's job in Phase 5b
 - Validating qualifier names — type checker's job
+- Bare `!` as logical NOT operator — HiLow uses the `not` keyword for that (already in Phase 1a's keyword table). Bare `!` followed by anything other than `=`, `<`, or `>` should be a lex error.
 
 **Tasks:**
-1. Add `TokenKind` variants: `EqStrict` (`?=`), `NotEqStrict` (`?!=`), `EqApprox` (`~=`), `NotEqApprox` (`~!=`)
-2. Implement lexing for `?=` (look for `?` followed by `=` or `!=`)
-3. Implement lexing for `~=` (look for `~` followed by `=` or `!=`)
-4. Disambiguate `?` alone (used in `T?` type syntax) from `?=` and `?!=`
-5. Disambiguate `~` alone (bitwise NOT) from `~=` and `~!=`
+1. Add `TokenKind` variants: `EqStrict` (`?=`), `NotEq` (`!=`), `NotLess` (`!<`), `NotGreater` (`!>`)
+2. Implement lexing for `?=` (look for `?` followed by `=`)
+3. Disambiguate `?` alone (used later for `T?` type syntax) from `?=` — emit `Question` token when `?` is not followed by `=`
+4. Implement lexing for `!=`, `!<`, `!>` (look for `!` followed by `=`, `<`, or `>`)
+5. Reject `!<=` and `!>=` with a clear error: "`!<=` is redundant; use `>` instead" and "`!>=` is redundant; use `<` instead"
+6. Reject bare `==` in the lexer with a clear error: "`==` is not a valid operator in HiLow; use `?=` for equality or `=` for assignment"
+7. Reject bare `!` (followed by something other than `=`, `<`, `>`) with: "`!` is not a valid operator in HiLow; use the `not` keyword for logical negation"
+8. Add the additional keywords (`stealth`, `excluding`, `invariant`, `decreases`, `from`) to the keyword table
+9. Verify `~` continues to lex as bitwise NOT (unchanged from Phase 1a; `~=` is not an operator)
 
 **Verification:**
 Add tests to `tests/lexer/equality.rs`:
 - `x ?= y` lexes as `[ident, eq_strict, ident]`
-- `x ?!= y` lexes as `[ident, not_eq_strict, ident]`
-- `x ~= y` lexes as `[ident, eq_approx, ident]`
-- `x ~!= y` lexes as `[ident, not_eq_approx, ident]`
+- `x != y` lexes as `[ident, not_eq, ident]`
+- `x !< y` lexes as `[ident, not_less, ident]`
+- `x !> y` lexes as `[ident, not_greater, ident]`
 - `x ? y` lexes as `[ident, question, ident]` (the `?` alone is for `T?` types — Phase 9)
-- `~x` lexes as `[bitnot, ident]`
+- `x <= y` and `x >= y` lex as before (regression test that 1a behavior unchanged)
+- `x == y` produces a `LexError` with message containing "use `?=`"
+- `x !<= y` produces a `LexError` containing "redundant"
+- `x !>= y` produces a `LexError` containing "redundant"
+- `!flag` produces a `LexError` containing "use the `not` keyword"
+- `~x` lexes as `[bitnot, ident]` (unchanged from 1a; verifies `~` is not consumed as part of an equality operator)
 - `result is unknown` lexes as `[ident, is_keyword, unknown_keyword]`
+- The new keywords lex correctly: `stealth`, `excluding`, `invariant`, `decreases`, `from`
 
 ```bash
 cargo test --lib lexer
@@ -249,7 +268,7 @@ cargo test --lib parser::structure
 
 **Scope:**
 - Statement parsing: `let` declarations (with optional type, optional initializer), `return`, `if`/`else`, `while`, `loop`, `break`, `continue`, expression statements
-- Expression parsing with full operator precedence: arithmetic, comparison (including new `?=`/`~=`/`is`), logical (`and`/`or`/`not`), bitwise
+- Expression parsing with full operator precedence: arithmetic, comparison (including `?=`/`!=`/`is`), logical (`and`/`or`/`not`), bitwise
 - Block parsing (`{ ... }`)
 - Function call parsing
 - Identifier and literal expressions
@@ -273,7 +292,7 @@ cargo test --lib parser::structure
    - `or`
    - `and`
    - `not` (unary)
-   - `?=`, `?!=`, `~=`, `~!=`, `is`, `is not`, `<`, `>`, `<=`, `>=`
+   - `?=`, `!=`, `!<`, `!>`, `is`, `is not`, `<`, `>`, `<=`, `>=`
    - `|`
    - `^`
    - `&`
@@ -328,10 +347,11 @@ high program(): i32 {
 high program(): i32 {
   let a = 5
   let b = 5
+  let c = 6
   if (a ?= b) {
     return 0
   }
-  if (a ~= b) {
+  if (a != c) {
     return 1
   }
   if (a is i32) {
@@ -625,30 +645,32 @@ hilowc truthy.hl -o truthy && ./truthy
 
 ---
 
-## Phase 5: Equality and Comparison Operators
+## Phase 5: Equality and Qualified Operators
 
-**Goal:** Full implementation of `?=`, `?!=`, `~=`, `~!=`, `is`, and `(qualifier)=`.
+**Goal:** Full implementation of `?=`, `!=`, `is`, and the `(qualifier)=` / `(qualifier)!=` family.
 
-### Phase 5a: Strict and Approximate Equality
+### Phase 5a: Equality, Type Tests, and Negation Comparators
 
 **Scope:**
-- Codegen for `?=` (strict equality): types must match exactly, value comparison
-- Codegen for `?!=` (strict inequality)
-- Codegen for `~=` and `~!=` for numeric types (default: same as `?=`; per-type approximate semantics defined in Phase 9)
+- Codegen for `?=` (equality): types must match exactly, value comparison
+- Codegen for `!=` (inequality)
+- Codegen for `!<` and `!>` (negation comparators)
 - The `is` operator for primitive type tests (`x is i32`, `x is bool`)
+- Reject bare `==` at the parser level (in case it slipped past the lexer for any reason) with the same error message
 
 **Out of scope:**
-- `~=` for strings (case-insensitive) — Phase 6
-- `~=` with numeric tolerance — needs type-level config, Phase 9
+- `(qualifier)=` and `(qualifier)!=` operators — Phase 5b
 - `is` for objects/prototypes — Phase 7
-- `(qualifier)=` operators — Phase 5b
+- Qualifier-based equality (`(roughly)=`, `(caseless)=`, etc.) — Phase 5b for the framework, Phase 6/9 for the specific qualifiers
+- `is` with `nothing`/`unknown` (those types arrive in Phase 9)
 
 **Tasks:**
-1. Codegen for `?=`: for primitives, emit C `==`. For strings (when added), emit `strcmp() == 0`. Type mismatch is a compile error.
-2. Codegen for `?!=`: emit C `!=` (or `!strcmp(...)` for strings)
-3. Codegen for `~=` on primitives: same as `?=` for now (the "approximate" comes into play with floats and strings later)
-4. Implement `is` operator: at compile time, verify the operand's type matches the named type. Emit `1` (true) or `0` (false) since types are static.
-5. Edge case: `is` with `nothing`/`unknown` is checked at runtime (those types come in Phase 9; for now, `is` on primitives is compile-time).
+1. Codegen for `?=`: for primitives, emit C `==`. Type mismatch is a compile error.
+2. Codegen for `!=`: emit C `!=`. Type mismatch is a compile error.
+3. Codegen for `!<`: emit C `>=` (logically equivalent). Type checking same as `<`.
+4. Codegen for `!>`: emit C `<=` (logically equivalent). Type checking same as `>`.
+5. Implement `is` operator for primitive types: at compile time, verify the operand's type matches the named type. Emit `1` (true) or `0` (false) since types are static.
+6. Ensure clear error messages for type mismatches and bare `==` use.
 
 **Verification:**
 
@@ -663,16 +685,36 @@ high program(): i32 {
     print(1)         // expected: 1
   }
   
-  if (a ?!= c) {
+  if (a != c) {
     print(2)         // expected: 2
   }
   
-  if (a ~= b) {
+  if (a is i32) {
     print(3)         // expected: 3
   }
   
-  if (a is i32) {
-    print(4)         // expected: 4
+  return 0
+}
+```
+
+```hilow
+// negation_compare.hl
+high program(): i32 {
+  let count = 50
+  let max = 100
+  let min = 0
+  
+  if (count !> max) {        // count <= max
+    print(1)                  // expected: 1
+  }
+  
+  if (count !< min) {        // count >= min
+    print(2)                  // expected: 2
+  }
+  
+  // Combined invariant style
+  if (count !> max and count !< min) {
+    print(3)                  // expected: 3
   }
   
   return 0
@@ -691,37 +733,62 @@ high program(): i32 {
 }
 ```
 
+```hilow
+// bad_equals.hl - should fail
+high program(): i32 {
+  let a = 5
+  let b = 5
+  if (a == b) {      // Error: == is not a valid operator; use ?= for equality
+    return 1
+  }
+  return 0
+}
+```
+
 ```bash
 hilowc equality.hl -o equality && ./equality
-# Output: 1\n2\n3\n4
+# Output: 1\n2\n3
+
+hilowc negation_compare.hl -o nc && ./nc
+# Output: 1\n2\n3
 
 hilowc type_mismatch.hl
-# Error: Phase 5a type mismatch on line 4
+# Error: type mismatch on line 4 (i32 vs f64)
+
+hilowc bad_equals.hl
+# Error: '==' is not a valid operator; use '?=' for equality or '=' for assignment
 ```
 
 ### Phase 5b: Qualified Operators
 
 **Scope:**
-- Lexer recognizes `(qualifier)=` pattern as a contextual operator (parser handles this — lexer just emits `(`, identifier(s), `)`, `=`)
-- Parser: in expression context, after a value, recognize `( ident ... )=` as a qualified equality operator
-- Initial qualifiers: `(or)=`, `(and)=`, `(bitor)=`, `(bitand)=`, `(bitxor)=` for assignment forms
-- Initial equality qualifiers: deferred to specific types — Phase 9 will add `(within: N)=`, `(case-insensitive)=`, `(same-day)=`, etc.
-- For Phase 5b: implement only the assignment forms listed above (`(or)=`, `(and)=`, `(bitor)=`, `(bitand)=`, `(bitxor)=`)
+- Parser: in expression context, after a value, recognize `( ident-list )=` and `( ident-list )!=` as qualified comparison operators, and `( ident-list )=` as a qualified assignment operator (context disambiguates)
+- Single qualifier with no argument: `(or)=`, `(roughly)=`
+- Single qualifier with named argument: `(within: 0.01)=`, `(after-conversion: USD)=`
+- Multiple qualifiers (comma-separated): `(caseless, trimmed)=`
+- Phase 5b implements ONLY the qualifier-assignment forms with no arguments: `(or)=`, `(and)=`, `(bitor)=`, `(bitand)=`, `(bitxor)=`. These are universal (work for any compatible numeric/boolean operands).
+- Phase 5b also implements the *parsing infrastructure* for qualifiers with arguments and multiple qualifiers, but the only qualifier *codegen* in this phase is the universal assignment forms above.
+- Register `coerce` as a known qualifier in the qualifier registry (for `(coerce)=`), but defer codegen to Phase 6c (where strings exist) and Phase 9 (where time/money exist).
 
 **Out of scope:**
-- Qualified equality (vs. assignment) — those qualifiers are type-specific, Phase 9
+- `(coerce)=` codegen — Phase 6c (strings to primitives) and Phase 9 (string to time/money)
+- Qualified *equality* operators like `(roughly)=`, `(caseless)=`, `(same-day)=` — these belong to type-specific phases (Phase 6c for strings, Phase 9 for time/money). Phase 5b builds the parser infrastructure that those phases will use.
 - Atomic/saturating/volatile qualifiers — Low mode, Phase 12
-- Custom user-defined qualifiers — Phase 17 or later
+- User-defined qualifiers — deferred to a future version of HiLow
 
 **Tasks:**
-1. Update parser to recognize `expr (ident)= expr` and `expr (ident: expr)= expr` patterns
-2. AST: add `QualifiedAssign { target, qualifier, args, value }` variant
-3. Codegen for `x (or)= y`: emit `x = x || y`
-4. Codegen for `x (and)= y`: emit `x = x && y`
-5. Codegen for `x (bitor)= y`: emit `x = x | y`
-6. Codegen for `x (bitand)= y`: emit `x = x & y`
-7. Codegen for `x (bitxor)= y`: emit `x = x ^ y`
-8. Reject qualifiers not in this list (clear error: "qualifier 'foo' not supported in this context")
+1. Update parser to recognize the qualifier syntax: `expr (qualifier-list) = expr`, `expr (qualifier-list) != expr`. A qualifier-list is one or more `qualifier-spec` items separated by commas. A qualifier-spec is either `ident` or `ident: expr`.
+2. AST: add `QualifiedOp { lhs, qualifiers: Vec<QualifierSpec>, op: QualifiedOpKind, rhs }` where `QualifiedOpKind` is `Assign | Eq | NotEq`. `QualifierSpec` is `{ name: String, arg: Option<Expression> }`.
+3. Add a registry of known qualifiers with their valid operator contexts (assignment, equality, both) and their argument requirements (none, named-required, etc.).
+4. For Phase 5b, register: `or`, `and`, `bitor`, `bitand`, `bitxor` (assignment-only, no arguments) with codegen, plus `coerce` (assignment-only, no arguments) with a placeholder error "coerce codegen not yet implemented for type X" — to be filled in by Phase 6c and Phase 9.
+5. Codegen for `x (or)= y`: emit `x = x || y` (logical OR)
+6. Codegen for `x (and)= y`: emit `x = x && y` (logical AND)
+7. Codegen for `x (bitor)= y`: emit `x = x | y`
+8. Codegen for `x (bitand)= y`: emit `x = x & y`
+9. Codegen for `x (bitxor)= y`: emit `x = x ^ y`
+10. Reject qualifiers not in the registry with a clear error: "qualifier 'foo' is not defined".
+11. Reject qualifier use in the wrong operator context: "qualifier 'or' applies to assignment only, not equality".
+12. Reject incorrect qualifier arguments: "qualifier 'or' takes no arguments" if user writes `(or: 5)=`.
 
 **Verification:**
 
@@ -740,13 +807,46 @@ high program(): i32 {
   flags (bitand)= mask     // flags = 5 & 7 = 5
   print(flags)             // expected: 5
   
+  let ready = false
+  ready (or)= true
+  if (ready) {
+    print(2)               // expected: 2
+  }
+  
+  return 0
+}
+```
+
+```hilow
+// bad_qualifier.hl - should fail
+high program(): i32 {
+  let x = 0
+  x (nonexistent)= 5      // Error: qualifier 'nonexistent' is not defined
+  return 0
+}
+```
+
+```hilow
+// wrong_context.hl - should fail
+high program(): i32 {
+  let a = 5
+  let b = 5
+  if (a (or)= b) {        // Error: 'or' applies to assignment only, not equality
+    return 1
+  }
   return 0
 }
 ```
 
 ```bash
 hilowc qualified_assign.hl -o qa && ./qa
-# Output: 1\n5
+# Output: 1\n5\n2
+
+hilowc bad_qualifier.hl
+# Error: qualifier 'nonexistent' is not defined
+
+hilowc wrong_context.hl
+# Error: qualifier 'or' applies to assignment only, not equality
 ```
 
 ---
@@ -866,6 +966,97 @@ hilowc fstrings.hl -o fs && ./fs
 # Hex: ff, Bin: 11111111, Padded: 00000255
 # |          Alice|
 # |Alice          |
+```
+
+### Phase 6c: String Equality, String Qualifiers, and Coercion
+
+**Scope:**
+- String `?=` and `!=` codegen (deferred from Phase 5a since strings didn't exist yet)
+- Register string qualifiers with the qualifier framework: `caseless`, `trimmed`
+- Combinations: `(caseless, trimmed)=` works because the framework already supports comma-separated qualifiers from Phase 5b
+- `(coerce)=` codegen for string-to-primitive conversions: `i32`, `i64`, `u32`, `u64`, `f32`, `f64`, `bool`. The compiler dispatches based on the target type.
+
+**Out of scope:**
+- Other string-specific qualifiers — can be added later as needed
+- The full set of string operations (`.indexOf`, `.slice`, etc.) — Phase 16
+- `(coerce)=` for `time` and `money` — those types don't exist yet; Phase 9
+- `(coerce)=` to or from objects — Phase 7
+
+**Tasks:**
+1. Codegen for string `?=`: `strcmp(a, b) == 0`
+2. Codegen for string `!=`: `strcmp(a, b) != 0`
+3. Register `caseless` qualifier for strings: codegen as case-insensitive comparison (`strcasecmp` or equivalent)
+4. Register `trimmed` qualifier for strings: codegen by trimming whitespace from both operands before comparison
+5. Combined qualifiers: when multiple qualifiers are present, apply them in a defined order (trim first, then case-fold, then compare). Order should be deterministic regardless of how the user wrote them.
+6. Codegen for `(coerce)=` from string to primitives:
+   - `let n: i32 (coerce)= "42"` calls a runtime parser that returns `i32` or `unknown` on failure
+   - For each target primitive, emit a call to the appropriate runtime function: `hl_parse_i32`, `hl_parse_f64`, etc.
+   - If the source string cannot be parsed, the result is `unknown` with reason "could not parse <source> as <target type>"
+   - Type mismatches (e.g., `(coerce)=` from `i32` to `string` — wrong direction) are compile errors
+7. Runtime: implement `hl_parse_*` helpers for each primitive type. Use C standard library functions (`strtol`, `strtod`, etc.) but check for full-string consumption (trailing garbage is an error).
+8. Reject string comparison with `<`, `>`, etc. (lexical ordering may come later, but is not in this phase)
+
+**Verification:**
+
+```hilow
+// string_equality.hl
+high program(): i32 {
+  let a = "hello"
+  let b = "hello"
+  let c = "world"
+  let d = "HELLO"
+  let e = "  hello  "
+  
+  if (a ?= b) {
+    print(1)         // 1
+  }
+  
+  if (a != c) {
+    print(2)         // 2
+  }
+  
+  if (a (caseless)= d) {
+    print(3)         // 3
+  }
+  
+  if (a ?= d) {
+    print(99)        // does NOT print (case-sensitive by default)
+  }
+  print(4)           // 4
+  
+  if (a (trimmed)= e) {
+    print(5)         // 5
+  }
+  
+  if (d (caseless, trimmed)= "  HELLO  ") {
+    print(6)         // 6
+  }
+  
+  return 0
+}
+```
+
+```hilow
+// coercion.hl
+high program(): i32 {
+  let n: i32 (coerce)= "42"
+  print(n)                    // 42
+  
+  let f: f64 (coerce)= "3.14159"
+  print(f)                    // 3.14159
+  
+  let bad: i32 (coerce)= "hello"
+  if (bad is unknown) {
+    print(0)                  // 0 (parse failed)
+  }
+  
+  return 0
+}
+```
+
+```bash
+hilowc string_equality.hl -o se && ./se
+# Output: 1\n2\n3\n4\n5\n6
 ```
 
 ---
@@ -1077,18 +1268,26 @@ hilowc matching.hl -o m && ./m
 
 **Scope:**
 - Variables of fixed-layout types (primitives, fixed-size arrays, fixed structs) live on the stack and are auto-cleaned at scope exit
-- `defer` statement
+- `defer` statement, both forms:
+  - **Smart form**: `defer <var>` — compiler infers type-appropriate cleanup
+  - **Explicit form**: `defer <expr>` — runs the literal expression at scope exit
 - Move semantics for return values
+- Resource cleanup registry: each resource type registers its cleanup function. For Phase 8a, the registry is empty (we don't have manual allocations or files yet); the smart-form lookup just errors clearly if used on something with no registered cleanup.
 
 **Out of scope:**
 - Heap allocation — Phase 8b
 - Refcounting for escaped values — Phase 8c
-- Low-mode `manual`/`arena`/`shared` — Phase 12
+- Low-mode `manual`/`arena`/`shared` — Phase 12 (those phases register their cleanup functions)
+- Files, locks, etc. — Phase 16 (those types register their cleanup functions)
 
 **Tasks:**
 1. Codegen: stack-allocated values map directly to C local variables
-2. `defer expr` codegen: collect deferred expressions, emit them in reverse order at scope exit (including early returns and `break`)
-3. Move semantics: when a value is returned from a function, it's copied (for primitives) or moved (for heap-owning values, which 8b will introduce)
+2. Parser: distinguish `defer <var>` (smart form) from `defer <expr>` (explicit form). The smart form is `defer` followed by a single identifier with nothing else (no parentheses, no method calls). The explicit form is `defer` followed by any expression.
+3. AST: `Defer { kind: DeferKind }` where `DeferKind` is `Smart(Identifier) | Explicit(Expression)`
+4. Codegen: collect deferred items, emit them in reverse order at scope exit (including early returns and `break`)
+5. For smart-form `defer`, look up the variable's type in the resource cleanup registry. Emit the appropriate cleanup expression. If the type has no registered cleanup, error: "defer <var>: type X has no automatic cleanup; use defer <expr> with an explicit cleanup expression."
+6. Move semantics: when a value is returned from a function, it's copied (for primitives) or moved (for heap-owning values, which 8b will introduce)
+7. Implement the cleanup registry as a compile-time table that later phases can extend.
 
 **Verification:**
 
@@ -1096,7 +1295,7 @@ hilowc matching.hl -o m && ./m
 // defer.hl
 high program(): i32 {
   print(1)
-  defer print(2)             // runs at scope exit
+  defer print(2)             // runs at scope exit (explicit form)
   defer print(3)             // runs first (LIFO)
   print(4)
   return 0
@@ -1251,23 +1450,33 @@ high program(): i32 {
 ### Phase 9b: Time Type
 
 **Scope:**
-- `time` type (i64 nanoseconds since epoch)
-- `duration` type (i64 nanoseconds)
+- `time` type: i64 nanoseconds since epoch + a precision tag (year, month, day, hour, minute, second, millisecond, microsecond, nanosecond)
+- `duration` type (i64 nanoseconds, no precision tag — durations are always exact)
 - Duration literals: `2h`, `30m`, `15s`, `500ms`, `250us`, `100ns`, `1d`
-- Arithmetic: `time + duration`, `time - time = duration`, `duration + duration`
-- `time.now()` and `time.parse(string)`
+- Arithmetic: `time + duration`, `time - time = duration`, `duration + duration`. Arithmetic preserves the time operand's precision tag.
+- `time.now()` (always nanosecond precision) and `time.parse(string)` (precision inferred from the input format)
+- `.atPrecision(.unit)` method to coerce a time value to a specific precision
 - Calendar operations: `.year()`, `.month()`, `.day()`, `.hour()`, `.minute()`, `.second()`, `.dayOfWeek()`
 - `.next(.tuesday)`, `.month().nthWeekday(2, .tuesday)`, `.month().end()`
+- **Precision-aware comparison**: `?=`, `!=`, `<`, `>`, `<=`, `>=` between two times compare at the precision of the less-precise operand
 - F-string formatting: `f"{now:YYYY-MM-DD HH:mm:ss}"`
-- Qualified equality: `(same-day)=`, `(within: duration)=`
+- Time qualifiers (registered with the qualifier framework from Phase 5b):
+  - `(same-year)=`, `(same-month)=`, `(same-day)=`, `(same-hour)=`, `(same-minute)=` — equivalent to `.atPrecision(.unit) ?=` on both sides
+  - `(within: duration)=` — true if `|t1 - t2| <= duration`
+
+**Out of scope:**
+- Time zones beyond the basic `time.now(.timezone(...))` and `.in(.timezone(...))` API — Phase 16 will round these out
 
 **Tasks:**
-1. Type system: add `time` and `duration` types
+1. Type system: add `time` and `duration` types. `time` carries a precision tag.
 2. Lexer: duration literals (number followed by unit suffix)
-3. Runtime: time and duration are i64; helpers for parsing, formatting, calendar
-4. Codegen for arithmetic operators on time/duration
-5. F-string format spec for time
-6. `(same-day)=` and `(within: ...)=` qualifier handlers for time
+3. Runtime: time is `{ nanos: i64, precision: u8 }`; duration is `i64`. Helpers for parsing, formatting, calendar.
+4. `time.parse` infers precision from the input format: `"2024-01-15"` → day, `"2024-01-15T10:00"` → minute, `"2024-01-15T10:30:45.123"` → millisecond, etc.
+5. Codegen for arithmetic operators on time/duration. `time + duration` preserves the time's precision tag. `time - time` produces duration regardless of operand precisions.
+6. Codegen for comparison operators: when comparing two times, compute the coarser precision and compare both operands truncated to that precision.
+7. `.atPrecision(.unit)` method: returns a new time with the specified precision.
+8. F-string format spec for time
+9. Register time qualifiers with the qualifier framework: `same-year`, `same-month`, `same-day`, `same-hour`, `same-minute`, `within`. Codegen for each.
 
 **Verification:**
 
@@ -1292,6 +1501,44 @@ high program(): i32 {
   
   return 0
 }
+```
+
+```hilow
+// time_precision.hl
+high program(): i32 {
+  let coarse = time.parse("2024-01-15T10:00")     // minute precision
+  let fine = time.parse("2024-01-15T10:30:45")    // second precision
+  
+  // Comparison happens at minute precision (coarser)
+  // 10:00 vs 10:30 at minute precision: 10:30 > 10:00
+  if (coarse < fine) {
+    print(1)                 // 1
+  }
+  
+  let same = time.parse("2024-01-15T10:00:30")    // second precision
+  // At minute precision both are 10:00
+  if (coarse ?= same) {
+    print(2)                 // 2
+  }
+  
+  // Force second precision
+  let exact = coarse.atPrecision(.second)
+  // Now exact has nanos=10:00:00, precision=second
+  if (exact ?= same) {
+    print(3)                 // does NOT print (10:00:00 != 10:00:30)
+  }
+  print(4)                   // 4
+  
+  return 0
+}
+```
+
+```bash
+hilowc time_basic.hl -o tb && ./tb
+# Output: 90.0\n1\n3
+
+hilowc time_precision.hl -o tp && ./tp
+# Output: 1\n2\n4
 ```
 
 ### Phase 9c: Money Type
@@ -1389,13 +1636,14 @@ high program(): i32 {
 
 **Goal:** Implement `watch()` reactive primitive and `async` blocks.
 
-### Phase 10a: Basic Watch
+### Phase 10a: Basic Watch and Stealth
 
 **Scope:**
 - `watch(var) { ... }` syntax: registers a callback that fires when `var` is assigned
 - `watch(var1, var2, ...) { ... }`: multi-variable watch
 - Watch handle: `.pause()`, `.resume()`, `.end()`
 - No self-triggering: modifications inside the watch body don't re-fire
+- `stealth { ... }` block: dynamically suppresses watcher notifications for all writes during the block, including writes inside functions called from the block
 
 **Out of scope:**
 - `async` blocks — Phase 10b
@@ -1404,9 +1652,12 @@ high program(): i32 {
 
 **Tasks:**
 1. AST: `WatchExpr { vars, body }` returns a watch handle
-2. Codegen: assignments to watched variables are intercepted — they update the value and then fire registered watch callbacks
-3. Watch handle: a struct with active/paused state and an end flag
-4. Self-triggering prevention: a "currently executing" flag prevents re-entry
+2. AST: `StealthBlock { body }` is a statement that wraps a body
+3. Codegen: assignments to watched variables are intercepted — they update the value and then fire registered watch callbacks
+4. Watch handle: a struct with active/paused state and an end flag
+5. Self-triggering prevention: a "currently executing" flag prevents re-entry
+6. Stealth: maintain a thread-local "suppression depth counter" in the runtime. `stealth { ... }` increments at entry, decrements at exit. The watch-firing logic checks this counter — if non-zero, the watch is *not* called.
+7. Stealth is dynamic: any function called from within a `stealth` block continues running with the suppression counter elevated, until control returns and the block exits.
 
 **Verification:**
 
@@ -1433,6 +1684,73 @@ high program(): i32 {
   
   return 0
 }
+```
+
+```hilow
+// stealth.hl
+high program(): i32 {
+  let counter = 0
+  let total_seen = 0
+  
+  let w = watch(counter) {
+    total_seen += 1
+    print(counter)
+  }
+  
+  counter = 1                       // prints 1, total_seen=1
+  counter = 2                       // prints 2, total_seen=2
+  
+  stealth {
+    counter = 100                   // no print
+    counter = 200                   // no print
+  }
+  
+  // total_seen is 2, counter is 200
+  print(total_seen)                 // 2
+  print(counter)                    // 200
+  
+  counter = 201                     // prints 201, total_seen=3
+  print(total_seen)                 // 3
+  
+  return 0
+}
+```
+
+```hilow
+// stealth_dynamic.hl
+high program(): i32 {
+  let x = 0
+  let count = 0
+  
+  let w = watch(x) {
+    count += 1
+  }
+  
+  function reset() {
+    x = 0                           // would normally trigger watch
+  }
+  
+  reset()
+  print(count)                      // 1
+  
+  stealth {
+    reset()                         // does NOT trigger watch (dynamic suppression)
+  }
+  print(count)                      // still 1
+  
+  return 0
+}
+```
+
+```bash
+hilowc watch_basic.hl -o wb && ./wb
+# Output: 10\n20\n40
+
+hilowc stealth.hl -o s && ./s
+# Output: 1\n2\n2\n200\n201\n3
+
+hilowc stealth_dynamic.hl -o sd && ./sd
+# Output: 1\n1
 ```
 
 ### Phase 10b: Async and Shared
@@ -1569,19 +1887,26 @@ low program(): i32 {
 }
 ```
 
-### Phase 12b: Manual, Arena, Shared Memory Modes
+### Phase 12b: Memory Mode Declarators (manual, arena, shared, stack, heap)
 
 **Scope:**
 - `manual let buf = alloc(N)`: explicit allocation, programmer frees
-- `defer free(buf)` for manual cleanup
+- `defer buf` (smart) or `defer free(buf)` (explicit) for manual cleanup
 - `arena { ... }`: bulk allocation block, all freed at end
 - `shared let res = rc_alloc<T>()`: refcounted in low mode (opt-in)
+- Standalone `stack <name>: <type>` declarators: equivalent to `let` but documents stack location explicitly
+- Standalone `heap <name>: <type>` declarators: equivalent to `let` but documents heap location explicitly
 - `alloc()`, `free()`, `arena.alloc()`, `rc_alloc<T>()` runtime functions
+- Register cleanup for `manual` allocations in the resource cleanup registry from Phase 8a (so `defer <var>` works on them)
 
 **Tasks:**
 1. Parser: `manual`, `arena`, `shared` keywords in let declarations
-2. Runtime: `alloc`, `free`, arena allocator with bulk free, refcounted alloc
-3. Codegen: `manual` skips automatic cleanup; `arena` blocks set up an arena and tear it down at end; `shared` uses refcounted allocator
+2. Parser: standalone `stack <name>: <type> [= <expr>]` and `heap <name>: <type> [= <expr>]` declarations (Low mode only)
+3. Type checker: reject `stack` and `heap` declarators in High mode with a clear error: "`stack` and `heap` declarators are only available in low mode; use `let` instead"
+4. Runtime: `alloc`, `free`, arena allocator with bulk free, refcounted alloc
+5. Codegen: `manual` skips automatic cleanup; `arena` blocks set up an arena and tear it down at end; `shared` uses refcounted allocator
+6. Codegen: `stack` and `heap` map to the same code generation as `let` (the location annotation is just documentation; the compiler already chooses appropriately)
+7. Register `manual`-allocated values in the cleanup registry: smart `defer <var>` on a manual variable emits `free(var)`
 
 **Verification:**
 
@@ -1589,7 +1914,7 @@ low program(): i32 {
 // memory_modes.hl
 low program(): i32 {
   manual let buf = alloc(1024)
-  defer free(buf)
+  defer buf                         // smart form: emits free(buf)
   
   arena {
     let a = arena.alloc(100)
@@ -1601,7 +1926,37 @@ low program(): i32 {
 }
 ```
 
-Run under valgrind to confirm no leaks.
+```hilow
+// stack_heap_decls.hl
+low program(): i32 {
+  stack p: i64 = 42
+  stack buffer: [u8; 256]
+  heap data: [u32; 1024]
+  
+  print(p)                          // 42
+  return 0
+}
+```
+
+```hilow
+// stack_in_high.hl - should fail
+high program(): i32 {
+  stack p: i64 = 42                 // Error: stack/heap declarators are low-mode only
+  return 0
+}
+```
+
+```bash
+hilowc memory_modes.hl -o mm && ./mm
+valgrind --leak-check=full ./mm
+# No leaks
+
+hilowc stack_heap_decls.hl -o shd && ./shd
+# Output: 42
+
+hilowc stack_in_high.hl
+# Error: 'stack' and 'heap' declarators are only available in low mode; use 'let' instead
+```
 
 ### Phase 12c: Low Mode Restrictions
 
@@ -1756,53 +2111,91 @@ high function bad(): object {       // Error: returns flexible object
 
 ## Phase 15: Formal Verification
 
-**Goal:** Optional proof system for constraints, contracts, and safety properties.
+**Goal:** Optional, layered proof system. Compiler flags `--prove` (warnings) and `--strict` (errors) drive verification depth. Verification covers constraints, contracts, loop invariants, termination, memory and resource lifecycle, numeric overflow, concurrency safety, and type-level properties.
 
-This is the largest phase by complexity. The proof system uses an SMT solver (Z3 via Rust bindings) to verify properties. Each sub-phase introduces one class of verification.
+This is the largest phase by complexity. The proof system uses an SMT solver (Z3 via Rust bindings) to verify properties. Each sub-phase introduces one class of verification. The layered design — warnings by default, errors with `--strict` — means programmers can adopt verification incrementally.
 
-### Phase 15a: Variable Constraints
+**Compiler flags introduced in this phase:**
+- `hilowc <file>` — compile, no proof checking (proof clauses are parsed but ignored)
+- `hilowc <file> --prove` — compile + verify, warnings on issues, runtime checks emitted where static proof fails
+- `hilowc <file> --prove --strict` — same as above but warnings become errors
+- `hilowc <file> --prove-only` — verify without producing a binary
+- `hilowc <file> --prove --suggest` — include suggestions for improvement (e.g., redundant constraints)
+
+### Phase 15a: Variable Constraints (Predicates and Sets)
 
 **Scope:**
-- Constraint syntax on `let`: `let x: i32 (x >= 0 and x <= 100) = 50`
-- Range sugar: `let x: i32 in 1..100 = 50`
-- `--prove` compiler flag enables verification
-- Verify constraints hold at every assignment
+- Predicate constraint syntax: `let x: i32 (x >= 0 and x <= 100) = 50`
+- Set constraint syntax: `let x: i32 in {0..100} = 50` and `let x: i32 in {1, 2, 5..14, 16}`
+- `excluding` clause: `let valid: i32 in {1..100} excluding {10, 12}`
+- Member elements may be literals, variables, or function calls
+- When members are runtime values, fall back to runtime checks
 
 **Tasks:**
-1. Add Z3 dependency
-2. Parser: constraint clause on let declarations
-3. Verifier: at each assignment to a constrained variable, check that the new value satisfies the constraint (using surrounding control flow as context)
+1. Add Z3 dependency (Rust bindings)
+2. Parser: predicate constraint clause `(<expr>)` on let declarations
+3. Parser: set constraint clause `in { <member-list> } [excluding { <member-list> }]` on let declarations
+4. Member: scalar expression OR `<expr>..<expr>` (inclusive range)
+5. Verifier: at each assignment to a constrained variable, encode the predicate or set membership in Z3 and check that the new value satisfies it (using surrounding control flow as context)
+6. When constraint involves runtime values (variables, function calls), emit a runtime check at the assignment instead of (or in addition to) the static proof
+7. Wire up `--prove`, `--strict`, `--prove-only`, `--suggest` flags
 
 **Verification:**
 
 ```hilow
 // constraints_ok.hl - --prove should succeed
 high program(): i32 {
-  let percent: i32 in 1..100 = 50
+  let percent: i32 in {0..100} = 50
   percent = 75                      // OK
+  
+  let direction: i32 in {-1, 0, 1} = 0
+  direction = -1                    // OK
+  
+  let valid: i32 in {1..100} excluding {10, 12} = 5
+  valid = 13                        // OK
+  
   return 0
 }
 ```
 
 ```hilow
-// constraints_bad.hl - --prove should fail
+// constraints_bad.hl - --prove should warn, --strict should fail
 high program(): i32 {
-  let percent: i32 in 1..100 = 50
-  percent = 150                     // Proof error
+  let percent: i32 in {0..100} = 50
+  percent = 150                     // Proof error / runtime check fails
+  
+  let valid: i32 in {1..100} excluding {10, 12} = 5
+  valid = 10                        // Proof error: in exclusion set
+  
   return 0
 }
 ```
 
-### Phase 15b: Function Contracts
+```hilow
+// constraints_predicate.hl
+high program(): i32 {
+  let length: i32 (length >= 0)
+  let capacity: i32 (capacity >= 0) = 100
+  let safe_length: i32 (safe_length !> capacity) = 50
+  
+  safe_length = 200                 // Proof error: 200 > capacity (100)
+  return 0
+}
+```
+
+### Phase 15b: Function Contracts, Loop Invariants, and Termination
 
 **Scope:**
 - `requires (cond)` and `ensures (cond)` on functions
 - `result` is the named return value in `ensures`
-- Verifier: at each call, check `requires`. At end of function, check `ensures`.
+- `invariant (cond)` on loops
+- `decreases (expr)` on functions (recursion termination) and loops (iteration termination)
 
 **Tasks:**
-1. Parser: `requires` and `ensures` clauses
+1. Parser: `requires`, `ensures`, `invariant`, `decreases` clauses
 2. Verifier: contract verification with Z3
+3. Verifier: loop invariant verification (entry, preservation, exit)
+4. Verifier: termination via decreases — verify the expression is non-negative and strictly decreases each iteration/recursion
 
 **Verification:**
 
@@ -1810,7 +2203,7 @@ high program(): i32 {
 // contract_ok.hl
 high program(): i32 {
   function divide(a: i32, b: i32): i32
-    requires (b ?!= 0)
+    requires (b != 0)
   {
     return a / b
   }
@@ -1818,7 +2211,7 @@ high program(): i32 {
   let x = divide(10, 5)             // OK
   
   let d = 5
-  if (d ?!= 0) {
+  if (d != 0) {
     let y = divide(10, d)           // OK (control flow tells prover)
   }
   
@@ -1826,29 +2219,187 @@ high program(): i32 {
 }
 ```
 
-### Phase 15c: Memory and Bounds
+```hilow
+// invariant_ok.hl
+high program(): i32 {
+  let total = 0
+  let arr = [1, 2, 3, 4, 5]
+  for (let i = 0; i < arr.length; i += 1)
+    invariant (total >= 0 and i <= arr.length)
+  {
+    total += arr[i]
+  }
+  return 0
+}
+```
+
+```hilow
+// termination_ok.hl
+high program(): i32 {
+  function fact(n: i32): i32
+    requires (n >= 0)
+    decreases (n)
+  {
+    if (n ?= 0) return 1
+    return n * fact(n - 1)
+  }
+  
+  print(fact(5))                    // 120
+  return 0
+}
+```
+
+### Phase 15c: Memory Safety and Resource Lifecycle
 
 **Scope:**
 - Verify no use-after-free
 - Verify no double-free
 - Verify no leaks in `manual` blocks
 - Verify array bounds at compile time when possible
+- Resource lifecycle: file/lock/connection types declare valid state transitions; verify code respects them
 
 **Tasks:**
-1. Track allocation/free pairs
-2. Verify with Z3 that all paths through a function have correct memory discipline
+1. Track allocation/free pairs through the AST
+2. Resource state machine: each resource type has states and transitions defined in its type metadata
+3. Verifier: walk all paths through a function, ensuring resources reach a terminal state (closed/freed/released) on every path
+4. Verify with Z3 that all paths through a function have correct memory discipline
 
-### Phase 15d: Watch and Type Safety
+**Verification:**
+
+```hilow
+// memory_ok.hl
+low program(): i32 {
+  manual let buf = alloc(1024)
+  defer buf
+  
+  // use buf...
+  return 0
+}                                   // ✓ Proof: buf is freed by defer
+```
+
+```hilow
+// memory_bad.hl - --strict fails
+low program(): i32 {
+  manual let buf = alloc(1024)
+  // No defer, no explicit free
+  return 0
+}                                   // ✗ Proof error: buf leaked
+```
+
+```hilow
+// resource_ok.hl
+high program(): i32 {
+  let file = openFile("data.txt")
+  if (file is unknown) return 1
+  defer file
+  
+  let content = file.read()         // ✓ valid: file is open
+  return 0
+}                                   // ✓ Proof: file is closed by defer
+```
+
+### Phase 15d: Watch, Type, and Currency Safety
 
 **Scope:**
 - Verify no circular watch dependencies
 - Verify `unknown` returns are checked before use
 - Verify currency consistency in `money` arithmetic
+- Verify time arithmetic respects precision rules
 
 **Tasks:**
 1. Watch dependency graph: build graph, check for cycles
 2. Unknown handling: track which variables may hold unknown; require check before use
 3. Currency tracking: enforce same-currency at compile time when types are concrete
+4. Time precision: verify operations on times of different precisions follow the precision rule
+
+### Phase 15e: Numeric Overflow
+
+**Scope:**
+- For each arithmetic operation, verify the result fits in the target type
+- In Low mode, default behavior is checked overflow (warning); programmer opts into wrapping/saturating with explicit qualifiers
+- In High mode, default behavior is `unknown` on overflow
+
+**Tasks:**
+1. Verifier: track value ranges through arithmetic operations using interval analysis
+2. At each `+`, `-`, `*` etc., verify the result range fits in the target type
+3. Where static verification fails, emit a runtime overflow check
+4. Document the overflow policy difference between High and Low modes
+
+**Verification:**
+
+```hilow
+// overflow_ok.hl
+high program(): i32 {
+  let a: u8 in {0..100} = 50
+  let b: u8 in {0..100} = 50
+  let sum: u16 = a + b              // ✓ 50+50=100 fits in u8 trivially, and fits in u16
+  return 0
+}
+```
+
+```hilow
+// overflow_warning.hl
+low program(): i32 {
+  let a: u8 = 200
+  let b: u8 = 200
+  let sum: u8 = a + b               // ⚠ Proof warning: u8 + u8 may overflow
+  return 0
+}
+```
+
+```hilow
+// overflow_explicit.hl
+low program(): i32 {
+  let a: u8 = 200
+  let b: u8 = 100
+  
+  let sum: u8 = a
+  sum (saturating-add)= b           // ✓ explicit saturating; sum becomes 255
+  return 0
+}
+```
+
+### Phase 15f: Concurrency Safety
+
+**Scope:**
+- Verify all accesses to `shared` variables use atomic operations or proper locking
+- Verify `async` blocks don't have data races on captured non-shared variables
+- Verify watch callbacks on `shared` variables are thread-safe
+
+**Tasks:**
+1. Identify all `shared` variables in the program
+2. For each access to a `shared` variable, classify as atomic-safe or potentially-racy
+3. Read-modify-write sequences (e.g., `shared_var = shared_var + 1`) without explicit atomicity warn
+4. Watch callbacks on `shared` variables: verify the callback body is itself thread-safe
+
+**Verification:**
+
+```hilow
+// concurrency_ok.hl
+high program(): i32 {
+  shared let counter: i32 = 0
+  
+  async {
+    counter (atomic-add)= 1         // ✓ explicit atomic
+  }
+  
+  return 0
+}
+```
+
+```hilow
+// concurrency_warning.hl
+high program(): i32 {
+  shared let counter: i32 = 0
+  
+  async {
+    let old = counter               // racy: read
+    counter = old + 1               // ⚠ racy: write, not atomic with read
+  }
+  
+  return 0
+}
+```
 
 ---
 
