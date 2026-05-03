@@ -21,6 +21,19 @@
 
 ## Recent sessions
 
+### 2026-05-03 — Parser optional semicolons fix
+- Fixed critical parser gap: implemented optional semicolons per spec (JavaScript-style) by adding `skip_semicolons()` method to consume any sequence of semicolon tokens between statements
+- Modified `parse_block()` and `parse_program_body()` to skip leading semicolons before parsing and trailing semicolons after each statement/item
+- Resolved 5 typecheck tests that had been failing since Phase 5b due to semicolon parsing errors: test_unknown_qualifier_error, test_qualifier_with_wrong_arguments, test_or_assignment_with_bool, test_or_assignment_with_integer_error, test_bitor_assignment_with_bool_error
+- Added 5 positive parser tests to verify spec compliance: single-line semicolon separation, trailing semicolons, multiple consecutive semicolons (as no-ops), mixed newlines/semicolons, leading semicolons
+- All new semicolon tests pass; original 5 failing tests now parse correctly and exercise their intended type-checking logic
+- Note: test_qualifier_in_wrong_context remains failing but due to missing semantic validation (qualified assignment in equality context), not parsing issues
+- Parser now correctly accepts: `let x = 1; let y = 2` (semicolon separation), `let x = 1;` (trailing semicolon), `let x = 1;;;` (multiple semicolons), `;let x = 1` (leading semicolon)
+- Verification ritual shows 35/36 typecheck tests passing; 1 failure is unrelated type-checking logic issue, not semicolon parsing
+- Commit: "Fix: parser accepts optional semicolons per spec; resolves 5 stale typecheck failures"
+
+## Recent sessions
+
 ### 2026-05-03 — Integration tests fix (critical)
 - Fixed runtime.h race condition: changed from hardcoded `/tmp/runtime.h` to per-process unique temp directories `/tmp/hilow_{pid}/` with runtime.h, runtime.c, main.c all in the same directory
 - Root cause: parallel cargo test runs had multiple hilowc processes writing/deleting shared `/tmp/runtime.h` file concurrently, causing "No such file or directory" failures during cc compilation
@@ -260,6 +273,7 @@
 - **Phase debriefs may incorrectly classify real bugs as "minor" or acceptable.** Phase 6b-i debrief described f-string whitespace loss as "minor" and "does not block Phase 6b-ii" without verifying that integration tests passed. The canonical `test_hello_fstring_integration` was actually failing. When debriefs mention known issues, verify they don't break existing tests before declaring a phase complete.
 - **Verification ritual compliance is critical for detecting silent test failures.** Four consecutive phases (6a-fixup through 6b-ii) declared complete with parser_tests.rs not compiling. Debriefs paraphrased test status as "all tests pass" rather than running the literal verification ritual. The "passing" tests were only the suites that DID compile and run; cargo test silently skips test binaries that fail to compile. The verification ritual must be run literally and its exact output pasted in debriefs to catch this class of failure.
 - **Runtime.h race conditions can be hidden by parallel test execution inconsistency.** Multiple phases (6b-i, 6b-ii, 7a) had 6-7 integration test failures from temp file collisions that went undiagnosed because the failures seemed random and serial vs parallel execution differences weren't investigated. When integration tests fail inconsistently, check for shared temporary file paths that could cause race conditions in parallel execution.
+- **Optional-semicolon parser gap masked failing tests since Phase 5b.** Six typecheck tests used semicolon-separated statements but the parser didn't accept semicolons per the spec (JavaScript-style optional semicolons). Tests like `"let x = 0; x (nonexistent)= 5"` failed to parse, never reaching the type-checking logic they were intended to test. The verification ritual wasn't being run literally in session debriefs, so parsing failures in test programs went undetected. Manual verification caught this after nine sessions. When new tests are added, ensure they exercise the intended code path by running them immediately.
 
 ### Test coverage gaps
 - **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.

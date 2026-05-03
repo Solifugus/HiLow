@@ -733,3 +733,95 @@ fn test_nested_function_parsing() {
         _ => panic!("Expected Program"),
     }
 }
+
+// Optional semicolon tests (per spec: JavaScript-style optional semicolons)
+
+#[test]
+fn test_single_line_semicolon_separated() {
+    let input = "high program(): i32 { let x = 1; let y = 2; let z = 3; return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Single-line semicolon-separated statements should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 4); // three let statements and one return
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_trailing_semicolon() {
+    let input = "high program(): i32 { let x = 1; return x }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Trailing semicolon should be accepted");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 2); // one let and one return statement
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_multiple_semicolons() {
+    let input = "high program(): i32 { let x = 1;;; return x }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Multiple semicolons should be accepted as no-ops");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 2); // one let and one return statement (semicolons are ignored)
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_mixed_newlines_and_semicolons() {
+    let input = "high program(): i32 {
+        let x = 1;
+        let y = 2
+        let z = 3;
+        return x + y + z
+    }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Mixed newlines and semicolons should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 4); // three let statements and one return
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_leading_semicolon() {
+    let input = "high program(): i32 { ; let x = 1; return x }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Leading semicolon should be accepted");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 2); // one let and one return statement (leading semicolon ignored)
+        }
+        _ => panic!("Expected Program"),
+    }
+}

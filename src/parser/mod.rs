@@ -324,8 +324,13 @@ impl Parser {
 
         let mut statements = Vec::new();
 
+        // Skip any leading semicolons
+        self.skip_semicolons();
+
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
             statements.push(self.parse_statement()?);
+            // Skip any trailing semicolons after each statement
+            self.skip_semicolons();
         }
 
         self.expect_token(TokenKind::RightBrace, "Expected '}'")?;
@@ -338,6 +343,9 @@ impl Parser {
         let position = start_token.position;
 
         let mut items = Vec::new();
+
+        // Skip any leading semicolons
+        self.skip_semicolons();
 
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
             match &self.peek()?.kind {
@@ -352,6 +360,8 @@ impl Parser {
                     items.push(BlockItem::Statement(statement));
                 }
             }
+            // Skip any trailing semicolons after each item
+            self.skip_semicolons();
         }
 
         self.expect_token(TokenKind::RightBrace, "Expected '}'")?;
@@ -912,6 +922,12 @@ impl Parser {
 
     fn is_at_end(&self) -> bool {
         self.current >= self.tokens.len()
+    }
+
+    fn skip_semicolons(&mut self) {
+        while !self.is_at_end() && self.check(&TokenKind::Semicolon) {
+            self.current += 1; // consume semicolon
+        }
     }
 
     // Helper to check if a parenthesized expression after `expr (` is a qualified operator
