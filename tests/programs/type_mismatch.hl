@@ -1,0 +1,8 @@
+high program(): i32 {
+  let x: i32 = 5
+  let y: f64 = 5.0
+  if (x ?= y) {      // Error: type mismatch i32 vs f64
+    return 1
+  }
+  return 0
+}

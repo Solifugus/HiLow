@@ -292,3 +292,61 @@ fn test_compound_assign_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 5a integration tests
+
+#[test]
+fn test_equality_integration() {
+    let executable = compile_program("tests/programs/equality.hl")
+        .expect("Failed to compile equality.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run equality");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/equality.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_negation_compare_integration() {
+    let executable = compile_program("tests/programs/negation_compare.hl")
+        .expect("Failed to compile negation_compare.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run negation_compare");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/negation_compare.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_type_mismatch_error_handling() {
+    let result = compile_program("tests/programs/type_mismatch.hl");
+    assert!(result.is_err(), "Compilation should fail for type mismatch");
+
+    let error_msg = result.unwrap_err();
+    assert!(error_msg.contains("Type checking failed") || error_msg.contains("Cannot compare i32 and f64"));
+}
+
+#[test]
+fn test_bad_equals_error_handling() {
+    let result = compile_program("tests/programs/bad_equals.hl");
+    assert!(result.is_err(), "Compilation should fail for == operator");
+
+    let error_msg = result.unwrap_err();
+    assert!(error_msg.contains("Invalid operator '==' at"));
+}

@@ -137,4 +137,24 @@
 
 ## Known issues / TODOs
 
+### Code quality
+- **5 cargo warnings** (unused imports, unnecessary `mut`). Run `cargo fix --allow-dirty` at a natural break point (end of Phase 5 or 6) to clean up.
+
+### Vestigial AST fields
+- ~~`body_placeholder` field on Function AST nodes is dead code after Phase 2b moved body parsing inline.~~ *(Cleaned up in Phase 3.)*
+
+### Error message polish
+- **Assignment-in-condition error is generic.** Currently `if (x = 5) { }` produces "Expected ')' after if condition, found Equal token." A more helpful message would be: "assignment is not allowed in expression position; did you mean `?=` for equality?" The behavior is correctly rejected (Phase 2b), but the error wording is a parser-level error rather than a domain-aware suggestion. Owned by Phase 2b; revisit when polishing error messages.
+- **Literal-fits-in-context errors report type-mismatch rather than value-fits.** `let x: u8 = 300` says "i32 cannot be assigned to u8" rather than "300 does not fit in u8." Both prevent the bug; the second is more directly informative. Future polish: special-case typed-let-with-literal-initializer to give a value-based error.
+
+### Deferred behavior
+- **Program parameters parse but don't function at runtime.** `high program(args: [string]): i32 { return 0 }` compiles successfully in Phase 4a but the resulting binary doesn't accept command-line arguments — `int main()` is generated, not `int main(int argc, char **argv)`. Phase 6 (when strings exist) should revisit this and either properly forward args or reject the syntax with a clear "not yet supported" error. Currently silent acceptance of unsupported syntax.
+- **`print` is a built-in special case in codegen.** The codegen has a hardcoded mapping from `print(x)` to runtime functions based on x's type. This is documented as a Phase 4a-only special case to be replaced with proper module imports later. Phase 11 (modules) or Phase 16 (standard library) should generalize this.
+- **`is` operator on objects is not implemented.** Phase 5a implements `is` for primitives only (compile-time constant). Runtime prototype-chain checking comes in Phase 7.
+
+### Documentation polish
+- The development plan and design document accumulated some inconsistencies during refactoring. After Phase 5b lands, do a sweep to make sure the operator examples throughout both documents reflect the final design (?=, !=, !<, !>, (qualifier)= variants).
+
+### Behavioral observations (not bugs, just things to remember)
+- **Claude Code sometimes paraphrases generated code in debriefs rather than pasting actual output.** Phase 4b debrief showed `while ((count != 0))` for a program that actually generated `while (count < 5)`. When debriefs include code samples, treat them as descriptive — verify with `cat` on the actual files or by examining what the integration tests assert.
 *(none currently)*

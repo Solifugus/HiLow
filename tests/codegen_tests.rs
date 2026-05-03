@@ -281,3 +281,71 @@ fn test_bool_condition_no_truthy_check() {
     assert!(c_code.contains("if (flag)"));
     assert!(!c_code.contains("flag != 0"));
 }
+
+// Phase 5a codegen tests
+
+#[test]
+fn test_equality_operators_codegen() {
+    let input = "high program(): i32 { let a = 5\n  let b = 6\n  if (a ?= b) { print(1) }\n  if (a != b) { print(2) }\n  return 0 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate equality operators as C == and !=
+    assert!(c_code.contains("(a == b)"));
+    assert!(c_code.contains("(a != b)"));
+}
+
+#[test]
+fn test_negation_comparators_codegen() {
+    let input = "high program(): i32 { let x = 10\n  let y = 20\n  if (x !< y) { print(1) }\n  if (x !> y) { print(2) }\n  return 0 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate negation comparators as C >= and <=
+    assert!(c_code.contains("(x >= y)"));
+    assert!(c_code.contains("(x <= y)"));
+}
+
+#[test]
+fn test_is_check_true_codegen() {
+    let input = "high program(): i32 { let x = 42\n  if (x is i32) { print(1) }\n  return 0 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate compile-time true check as literal 1
+    assert!(c_code.contains("if (1)"));
+}
+
+#[test]
+fn test_is_check_false_codegen() {
+    let input = "high program(): i32 { let x = 42\n  if (x is f64) { print(1) }\n  return 0 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate compile-time false check as literal 0
+    assert!(c_code.contains("if (0)"));
+}

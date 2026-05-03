@@ -342,11 +342,8 @@ impl CodeGenerator {
                     phase: "Phase 6 (arrays)".to_string(),
                 });
             }
-            Expression::IsCheck(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "is checks".to_string(),
-                    phase: "Phase 9 (runtime type info)".to_string(),
-                });
+            Expression::IsCheck(is_check) => {
+                self.generate_is_check(is_check, type_checker)?;
             }
         }
         Ok(())
@@ -368,6 +365,8 @@ impl CodeGenerator {
             BinaryOpKind::GreaterEq => " >= ",
             BinaryOpKind::Eq => " == ",
             BinaryOpKind::NotEq => " != ",
+            BinaryOpKind::NotLess => " >= ",
+            BinaryOpKind::NotGreater => " <= ",
             BinaryOpKind::And => " && ",
             BinaryOpKind::Or => " || ",
             BinaryOpKind::BitAnd => " & ",
@@ -492,6 +491,23 @@ impl CodeGenerator {
         }
     }
 
+    fn generate_is_check(&mut self, is_check: &IsCheck, _type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // For primitive types, is checks are done at compile time
+        let expr_type = self.infer_expression_type(&is_check.expression);
+        let target_type = Type::from_ast_type(&is_check.ty);
+
+        // Compare types at compile time
+        let types_match = expr_type == target_type;
+
+        // Apply negation if needed
+        let result = if is_check.negated { !types_match } else { types_match };
+
+        // Emit 1 for true, 0 for false
+        self.output.push_str(if result { "1" } else { "0" });
+
+        Ok(())
+    }
+
     fn next_var_name(&mut self) -> String {
         let name = format!("_v{}", self.var_counter);
         self.var_counter += 1;
@@ -538,6 +554,7 @@ impl CodeGenerator {
                     _ => self.infer_expression_type(&op.operand),
                 }
             }
+            Expression::IsCheck(_) => Type::Bool,
             _ => Type::I32, // Default fallback
         }
     }

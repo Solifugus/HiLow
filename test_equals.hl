@@ -1,0 +1,1 @@
+high program(): i32 { if (x == y) { } }

@@ -1,0 +1,19 @@
+high program(): i32 {
+  let a = 5
+  let b = 5
+  let c = 6
+
+  if (a ?= b) {
+    print(1)         // expected: 1
+  }
+
+  if (a != c) {
+    print(2)         // expected: 2
+  }
+
+  if (a is i32) {
+    print(3)         // expected: 3
+  }
+
+  return 0
+}
