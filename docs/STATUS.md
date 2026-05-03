@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 5a — Equality, Type Tests, and Negation Comparators
+**Phase:** Phase 5b — Qualified Operators
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 4b: Control flow, loops, truthy/falsy
+**Last commit:** Phase 5a: Equality, Type Tests, and Negation Comparators
 
 ---
 
@@ -32,6 +32,17 @@
 - Created 7 verification programs: counter.hl (while loop), fizzbuzz_numeric.hl (using sentinels), early_exit.hl (break), continue_skip.hl (continue), nested_loops.hl (break scope), truthy.hl (0 falsy, nonzero truthy), compound_assign.hl (compound operations)
 - All 167 tests passing (up from 146): working HiLow compiler with full Phase 4b control flow support
 - Commit: "Phase 4b: Control flow, loops, truthy/falsy"
+
+### 2026-05-02 — Phase 5a complete
+- Implemented codegen for !< (emit C >=) and !> (emit C <=) negation comparators
+- Implemented compile-time is operator for primitive types: at compile time, verify operand type matches target type and emit 1 (true) or 0 (false)
+- Fixed infer_expression_type to properly handle IsCheck expressions as Type::Bool, preventing incorrect truthy/falsy conversion
+- Type checker already correctly handled ?= and != requiring same types, and !< and !> as comparison operators
+- Lexer already properly rejects == with clear error suggesting ?= for equality
+- Created 4 verification programs: equality.hl (?=, !=, is tests), negation_compare.hl (!<, !> tests), type_mismatch.hl (compile error), bad_equals.hl (compile error)
+- Added 4 new integration tests for Phase 5a verification programs and 4 new codegen unit tests for equality operators, negation comparators, and is checks  
+- All 175 tests passing (up from 167): equality operators, type tests, and negation comparators fully functional
+- Commit: "Phase 5a: Equality, Type Tests, and Negation Comparators"
 
 ### 2026-05-02 — Phase 4a complete
 - Implemented C code generation backend in src/codegen/mod.rs with comprehensive AST-to-C translation for programs, functions, statements, and expressions
