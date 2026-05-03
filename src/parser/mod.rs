@@ -97,8 +97,8 @@ impl Parser {
         self.expect_token(TokenKind::Colon, "Expected ':' after parameter list")?;
         let return_type = self.parse_type()?;
 
-        // Parse body - Phase 2b: parse actual statements
-        let body = self.parse_block()?;
+        // Parse body - Phase 6a-fixup: parse statements and nested functions
+        let body = self.parse_program_body(mode.clone())?;
 
         // Expect EOF
         self.expect_token(TokenKind::Eof, "Expected end of file")?;
@@ -331,6 +331,32 @@ impl Parser {
         self.expect_token(TokenKind::RightBrace, "Expected '}'")?;
 
         Ok(Block { statements, position })
+    }
+
+    fn parse_program_body(&mut self, mode: Mode) -> Result<ProgramBody, ParseError> {
+        let start_token = self.expect_token(TokenKind::LeftBrace, "Expected '{'")?;
+        let position = start_token.position;
+
+        let mut items = Vec::new();
+
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            match &self.peek()?.kind {
+                TokenKind::Function => {
+                    // Parse nested function definition (inherits mode from program/module)
+                    let function = self.parse_function_signature(mode.clone())?;
+                    items.push(BlockItem::Function(function));
+                }
+                _ => {
+                    // Parse statement
+                    let statement = self.parse_statement()?;
+                    items.push(BlockItem::Statement(statement));
+                }
+            }
+        }
+
+        self.expect_token(TokenKind::RightBrace, "Expected '}'")?;
+
+        Ok(ProgramBody { items, position })
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {

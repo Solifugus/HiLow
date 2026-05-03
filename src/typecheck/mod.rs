@@ -77,7 +77,7 @@ impl TypeChecker {
 
         // Check body
         if let Some(body) = &program.body {
-            self.check_block(body);
+            self.check_program_body(body);
         }
     }
 
@@ -116,6 +116,33 @@ impl TypeChecker {
         }
 
         // Exit block scope
+        self.exit_scope();
+    }
+
+    fn check_program_body(&mut self, body: &ProgramBody) {
+        // Enter program body scope
+        self.enter_scope();
+
+        // Phase 1: Declare all nested functions in the current scope first
+        for item in &body.items {
+            if let BlockItem::Function(function) = item {
+                // For Phase 6a-fixup, nested functions can't access enclosing variables
+                // They're treated as top-level functions that happen to be declared nested
+                // Add function to symbol table - for simplicity, use return type as the function type
+                let func_type = Type::from_ast_type(&function.return_type);
+                self.declare_variable(&function.name, func_type, function.position.clone());
+            }
+        }
+
+        // Phase 2: Check function bodies and statements
+        for item in &body.items {
+            match item {
+                BlockItem::Statement(statement) => self.check_statement(statement),
+                BlockItem::Function(function) => self.check_function(function),
+            }
+        }
+
+        // Exit program body scope
         self.exit_scope();
     }
 
@@ -500,16 +527,30 @@ impl TypeChecker {
         }
 
         // Type check the callee
-        self.check_expression(&call.callee);
+        let callee_type = self.check_expression(&call.callee);
 
         // Type check all arguments
         for arg in &call.args {
             self.check_expression(arg);
         }
 
-        // TODO: Implement proper function type checking
-        // For now, just return unknown
-        Type::Unknown
+        // Phase 6a-fixup: For nested functions, return the function's return type
+        // For now, we use a simple approach: if callee is a function identifier,
+        // return the type we stored (which is the return type)
+        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+            // Look up the function in symbol table
+            let func_type = self.lookup_variable(func_name, call.position.clone());
+            if func_type != Type::Unknown {
+                return func_type;
+            }
+        }
+
+        // For other cases, return the callee type or unknown
+        if callee_type != Type::Unknown {
+            callee_type
+        } else {
+            Type::Unknown
+        }
     }
 
     /// Special handling for print() built-in function

@@ -916,6 +916,10 @@ hilowc strings_basic.hl -o sb && ./sb
 # C:\Users\Alice
 ```
 
+### Phase 6a-fixup: UTF-8 Codegen and Nested Functions
+
+**Note**: This was an unplanned consolidation phase to address issues discovered during Phase 6a verification. Fixed UTF-8 string literal corruption in generated C code (hex escapes caused parsing conflicts), implemented nested function definitions inside program bodies with name mangling to avoid C keyword conflicts, added missing multiline.hl integration test, and cleaned up dead placeholder code. Nested functions work as declaration-only (no variable capture) until closures are implemented in Phase 7c.
+
 ### Phase 6b: F-Strings
 
 **Scope:**

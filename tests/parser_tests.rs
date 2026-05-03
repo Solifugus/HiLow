@@ -693,3 +693,44 @@ fn test_function_call_with_arg() {
         _ => panic!("Expected Program")
     }
 }
+
+// Phase 6a-fixup: Nested function tests
+
+#[test]
+fn test_nested_function_parsing() {
+    let input = "high program(): i32 {
+        function double(x: i32): i32 {
+            return x * 2
+        }
+        print(double(21))
+        return 0
+    }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Nested function should parse successfully");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 2); // function and print statement
+
+            // First item should be a function
+            match &body.items[0] {
+                BlockItem::Function(func) => {
+                    assert_eq!(func.name, "double");
+                }
+                _ => panic!("Expected function as first item"),
+            }
+
+            // Second item should be a statement
+            match &body.items[1] {
+                BlockItem::Statement(_) => {
+                    // Expected
+                }
+                _ => panic!("Expected statement as second item"),
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}

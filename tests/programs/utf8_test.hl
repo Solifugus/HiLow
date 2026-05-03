@@ -1,0 +1,4 @@
+high program(): i32 {
+  print("café — £100 — 日本語")
+  return 0
+}

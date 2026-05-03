@@ -466,3 +466,60 @@ fn test_raw_path_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_multiline_integration() {
+    let executable = compile_program("tests/programs/multiline.hl")
+        .expect("Failed to compile multiline.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run multiline");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/multiline.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_utf8_integration() {
+    let executable = compile_program("tests/programs/utf8_test.hl")
+        .expect("Failed to compile utf8_test.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run utf8_test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/utf8_test.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_nested_function_integration() {
+    let executable = compile_program("tests/programs/nested_function.hl")
+        .expect("Failed to compile nested_function.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run nested_function");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/nested_function.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

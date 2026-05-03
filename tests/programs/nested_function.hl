@@ -1,0 +1,7 @@
+high program(): i32 {
+  function double(x: i32): i32 {
+    return x * 2
+  }
+  print(double(21))
+  return 0
+}

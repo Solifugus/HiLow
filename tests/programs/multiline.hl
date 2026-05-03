@@ -1,0 +1,9 @@
+high program(): i32 {
+  let s = "
+Line 1
+Line 2
+Line 3
+"
+  print(s)
+  return 0
+}

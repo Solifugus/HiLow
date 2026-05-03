@@ -178,8 +178,20 @@ pub enum Expression {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum BlockItem {
+    Statement(Statement),
+    Function(Function),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub statements: Vec<Statement>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProgramBody {
+    pub items: Vec<BlockItem>,
     pub position: Position,
 }
 
@@ -256,7 +268,7 @@ pub struct Program {
     pub mode: Mode,
     pub params: Vec<Parameter>,
     pub return_type: Type,
-    pub body: Option<Block>, // Parsed body
+    pub body: Option<ProgramBody>, // Parsed body with nested functions support
     pub position: Position,
 }
 

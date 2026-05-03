@@ -9,7 +9,7 @@
 **Phase:** Phase 6b — F-Strings  
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 6a: Strings with quote recursion
+**Last commit:** Phase 6a-fixup: UTF-8 codegen, nested functions, cleanup
 
 ---
 
@@ -20,6 +20,17 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 6a-fixup complete
+- Fixed UTF-8 string literal codegen: replaced hex escape sequences (\xC3\xA9) with raw UTF-8 bytes in C string literals, eliminating compiler warnings and output corruption
+- Implemented nested function definitions: parser supports function declarations inside program bodies, AST extended with ProgramBody/BlockItem for mixed statements/functions, name mangling (hilow_) prevents C keyword conflicts
+- Added multiline.hl integration test for multi-line string verification
+- Removed dead placeholder code in generate_program function
+- Function call type checking enhanced to properly handle nested function return types
+- Simple mangling scheme prevents issues with C reserved words (e.g., "double" becomes "hilow_double")
+- Nested functions work as declarations-only (no variable capture) as specified for Phase 6a-fixup; closures with capture deferred to Phase 7c
+- All integration tests passing: 27 tests (up from 25) including UTF-8 verification, nested functions, multiline strings
+- Commit: "Phase 6a-fixup: UTF-8 codegen, nested functions, cleanup"
 
 ### 2026-05-02 — Phase 6a complete
 - Implemented complete string literal support with quote recursion algorithm: N adjacent quotes open/close strings, fewer quotes inside are literal

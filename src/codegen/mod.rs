@@ -71,23 +71,16 @@ impl CodeGenerator {
     }
 
     fn generate_program(&mut self, program: &Program, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Generate function declarations first (if any functions are defined in the program body)
-        // For Phase 4a, we support functions at the top level within the program
+        // Phase 6a-fixup: Generate nested functions first, then main function
         if let Some(body) = &program.body {
-            // First pass: collect function declarations
-            for statement in &body.statements {
-                if let Statement::ExprStatement(Expression::Call(call)) = statement {
-                    // Check if this is a function definition (this is a placeholder -
-                    // actual function definitions would need proper AST support)
-                }
-            }
+            self.generate_program_body_functions(body, type_checker)?;
         }
 
         // Generate the main function
         self.output.push_str("int main() {\n");
 
         if let Some(body) = &program.body {
-            self.generate_block(body, type_checker)?;
+            self.generate_program_body_statements(body, type_checker)?;
         }
 
         self.output.push_str("}\n");
@@ -106,8 +99,9 @@ impl CodeGenerator {
         // Convert return type to C
         let c_return_type = self.hilow_type_to_c(&Type::from_ast_type(&function.return_type));
 
-        // Generate function signature
-        self.output.push_str(&format!("{} {}(", c_return_type, function.name));
+        // Generate function signature with mangled name to avoid C keyword conflicts
+        let c_func_name = self.mangle_function_name(&function.name);
+        self.output.push_str(&format!("{} {}(", c_return_type, c_func_name));
 
         // Generate parameters
         for (i, param) in function.params.iter().enumerate() {
@@ -132,6 +126,26 @@ impl CodeGenerator {
     fn generate_block(&mut self, block: &Block, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         for statement in &block.statements {
             self.generate_statement(statement, type_checker)?;
+        }
+        Ok(())
+    }
+
+    fn generate_program_body_functions(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate nested functions as top-level C functions
+        for item in &body.items {
+            if let BlockItem::Function(function) = item {
+                self.generate_function(function, type_checker)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_program_body_statements(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate only the statements, not the nested functions
+        for item in &body.items {
+            if let BlockItem::Statement(statement) = item {
+                self.generate_statement(statement, type_checker)?;
+            }
         }
         Ok(())
     }
@@ -320,7 +334,7 @@ impl CodeGenerator {
                 self.output.push_str(&value.to_string());
             }
             Expression::StringLit(value, _) => {
-                // Emit C string literal with proper escaping
+                // Emit C string literal with UTF-8 support
                 self.output.push('"');
                 for ch in value.chars() {
                     match ch {
@@ -329,14 +343,13 @@ impl CodeGenerator {
                         '\n' => self.output.push_str("\\n"),
                         '\t' => self.output.push_str("\\t"),
                         '\r' => self.output.push_str("\\r"),
-                        c if c.is_ascii() && !c.is_control() => self.output.push(c),
+                        c if (c as u32) < 0x20 && c != '\n' && c != '\t' && c != '\r' => {
+                            // Escape control characters below 0x20 (except \n, \t, \r already handled)
+                            self.output.push_str(&format!("\\x{:02x}", c as u8));
+                        }
                         c => {
-                            // For non-ASCII or control chars, use hex escape
-                            let mut buf = [0; 4];
-                            let encoded = c.encode_utf8(&mut buf);
-                            for byte in encoded.bytes() {
-                                self.output.push_str(&format!("\\x{:02x}", byte));
-                            }
+                            // Emit UTF-8 bytes directly - C99/C11 supports arbitrary bytes in string literals
+                            self.output.push(c);
                         }
                     }
                 }
@@ -438,8 +451,14 @@ impl CodeGenerator {
             }
         }
 
-        // Regular function call
-        self.generate_expression(&call.callee, type_checker)?;
+        // Regular function call - handle nested function name mangling
+        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+            // Use mangled name for nested functions
+            let c_func_name = self.mangle_function_name(func_name);
+            self.output.push_str(&c_func_name);
+        } else {
+            self.generate_expression(&call.callee, type_checker)?;
+        }
         self.output.push_str("(");
 
         for (i, arg) in call.args.iter().enumerate() {
@@ -543,6 +562,11 @@ impl CodeGenerator {
         let name = format!("_v{}", self.var_counter);
         self.var_counter += 1;
         name
+    }
+
+    fn mangle_function_name(&self, name: &str) -> String {
+        // Phase 6a-fixup: Simple mangling for nested functions to avoid C keyword conflicts
+        format!("hilow_{}", name)
     }
 
     /// Simple type inference for expressions in Phase 4a
