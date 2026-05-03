@@ -382,22 +382,21 @@ impl Parser {
                 // Try to parse assignment or expression statement
                 let checkpoint = self.current;
 
-                // Try assignment first
+                // Try regular assignment first
                 if let Ok(assignment) = self.try_parse_assignment() {
                     return Ok(Statement::Assign(assignment));
+                }
+
+                // Reset and try qualified assignment
+                self.current = checkpoint;
+                if let Ok(qualified_op) = self.try_parse_qualified_assignment() {
+                    return Ok(Statement::QualifiedOp(qualified_op));
                 }
 
                 // Reset and parse as expression statement
                 self.current = checkpoint;
                 let expr = self.parse_expression()?;
-
-                // If this is a qualified assignment, treat it as a statement
-                match &expr {
-                    Expression::QualifiedOp(qualified_op) if matches!(qualified_op.op, QualifiedOpKind::Assign) => {
-                        Ok(Statement::QualifiedOp(qualified_op.clone()))
-                    }
-                    _ => Ok(Statement::ExprStatement(expr))
-                }
+                Ok(Statement::ExprStatement(expr))
             }
         }
     }
@@ -561,6 +560,50 @@ impl Parser {
             target,
             op,
             value,
+            position,
+        })
+    }
+
+    fn try_parse_qualified_assignment(&mut self) -> Result<QualifiedOp, ParseError> {
+        // Parse left-hand side
+        let lhs = self.parse_primary_expression()?;
+
+        // Check if this looks like a qualified operator (next token should be '(')
+        if !self.check(&TokenKind::LeftParen) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "'(' for qualified assignment".to_string(),
+                found: self.peek()?.kind.clone(),
+                position: self.peek()?.position.clone(),
+            });
+        }
+
+        // Parse the qualified operator, but force it to be an assignment
+        let position = self.peek()?.position.clone();
+        self.advance()?; // consume '('
+
+        // Parse qualifier list
+        let qualifiers = self.parse_qualifier_list()?;
+
+        self.expect_token(TokenKind::RightParen, "Expected ')' after qualifier list")?;
+
+        // Parse operator - in assignment context, only = is valid
+        let op = match self.advance()?.kind {
+            TokenKind::Equal => QualifiedOpKind::Assign,
+            found => return Err(ParseError::UnexpectedToken {
+                expected: "'=' for qualified assignment".to_string(),
+                found,
+                position,
+            }),
+        };
+
+        // Parse right-hand side
+        let rhs = self.parse_expression_with_precedence(5)?;
+
+        Ok(QualifiedOp {
+            lhs: Box::new(lhs),
+            qualifiers,
+            op,
+            rhs: Box::new(rhs),
             position,
         })
     }
@@ -1004,8 +1047,9 @@ impl Parser {
         self.expect_token(TokenKind::RightParen, "Expected ')' after qualifier list")?;
 
         // Parse operator (= or !=)
+        // In expression context, = means equality, not assignment
         let op = match self.advance()?.kind {
-            TokenKind::Equal => QualifiedOpKind::Assign,
+            TokenKind::Equal => QualifiedOpKind::Eq,
             TokenKind::NotEq => QualifiedOpKind::NotEq,
             found => return Err(ParseError::UnexpectedToken {
                 expected: "'=' or '!='".to_string(),

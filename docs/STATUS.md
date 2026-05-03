@@ -7,9 +7,9 @@
 ## Current state
 
 **Phase:** Phase 7a — Object Literals and Property Access  
-**Status:** Ready to start
+**Status:** Ready to start (clean baseline achieved)
 **Branch:** main
-**Last commit:** Phase 6b-ii: F-string format specifiers
+**Last commit:** Fix: qualifier context validation order; all tests now pass
 
 ---
 
@@ -21,16 +21,17 @@
 
 ## Recent sessions
 
-### 2026-05-03 — Parser optional semicolons fix
-- Fixed critical parser gap: implemented optional semicolons per spec (JavaScript-style) by adding `skip_semicolons()` method to consume any sequence of semicolon tokens between statements
-- Modified `parse_block()` and `parse_program_body()` to skip leading semicolons before parsing and trailing semicolons after each statement/item
-- Resolved 5 typecheck tests that had been failing since Phase 5b due to semicolon parsing errors: test_unknown_qualifier_error, test_qualifier_with_wrong_arguments, test_or_assignment_with_bool, test_or_assignment_with_integer_error, test_bitor_assignment_with_bool_error
-- Added 5 positive parser tests to verify spec compliance: single-line semicolon separation, trailing semicolons, multiple consecutive semicolons (as no-ops), mixed newlines/semicolons, leading semicolons
-- All new semicolon tests pass; original 5 failing tests now parse correctly and exercise their intended type-checking logic
-- Note: test_qualifier_in_wrong_context remains failing but due to missing semantic validation (qualified assignment in equality context), not parsing issues
-- Parser now correctly accepts: `let x = 1; let y = 2` (semicolon separation), `let x = 1;` (trailing semicolon), `let x = 1;;;` (multiple semicolons), `;let x = 1` (leading semicolon)
-- Verification ritual shows 35/36 typecheck tests passing; 1 failure is unrelated type-checking logic issue, not semicolon parsing
-- Commit: "Fix: parser accepts optional semicolons per spec; resolves 5 stale typecheck failures"
+### 2026-05-03 — Qualifier context validation fix
+- Fixed critical qualifier validation order bug: context validation was running after type validation, producing misleading error messages  
+- Root cause: when `or` qualifier (assignment-only) was used in equality context like `if (a (or)= b)`, type checker first checked if `or` applies to i32 (no), produced "requires compatible types; got i32" instead of correct "qualifier 'or' applies to assignment only, not equality"
+- Parser was incorrectly treating all `(qualifier)=` as assignment operations regardless of context; fixed by implementing context-aware parsing
+- Changed parser to create `QualifiedOpKind::Eq` for qualified operators in expression contexts (like if conditions), `QualifiedOpKind::Assign` for statement contexts
+- Added `try_parse_qualified_assignment()` method to handle qualified assignments at statement level with proper `QualifiedOpKind::Assign`
+- Reordered type checker validation steps: 1) existence, 2) context, 3) arguments, 4) type, 5) codegen status (was 1,4,2,3,5)
+- Updated one incorrect parser test: `test_qualified_equality_multiple_qualifiers` expected `Assign` for `if (s1 (caseless, trimmed)= s2)` but should expect `Eq`
+- This completes cleanup of hidden test failures dating back to Phase 5b; test_qualifier_in_wrong_context now correctly produces "assignment only, not equality" error
+- Verification ritual achieves clean baseline: all 230 tests pass with 0 failures for first time since project began accumulating stale failures  
+- Commit: "Fix: qualifier context validation order; all tests now pass"
 
 ## Recent sessions
 

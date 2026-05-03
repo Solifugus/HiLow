@@ -591,7 +591,7 @@ fn test_qualified_equality_multiple_qualifiers() {
                                 assert_eq!(qualified_op.qualifiers[1].name, "trimmed");
                                 assert!(qualified_op.qualifiers[0].arg.is_none());
                                 assert!(qualified_op.qualifiers[1].arg.is_none());
-                                assert_eq!(qualified_op.op, QualifiedOpKind::Assign);
+                                assert_eq!(qualified_op.op, QualifiedOpKind::Eq);
                             }
                             _ => panic!("Expected qualified operator in if condition")
                         }

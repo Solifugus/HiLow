@@ -643,7 +643,7 @@ impl TypeChecker {
 
         // Check each qualifier in the list
         for qualifier_spec in &qualified_op.qualifiers {
-            // Check if qualifier is defined
+            // 1. Check if qualifier is defined
             let qualifier_name = &qualifier_spec.name;
             let qualifier_info = self.qualifier_registry.get_qualifier(qualifier_name);
 
@@ -662,7 +662,7 @@ impl TypeChecker {
             let applies_to_type = qualifier_info.applies_to_type;
             let codegen_status = qualifier_info.codegen_status.clone();
 
-            // Check context (assignment vs equality)
+            // 2. Check context (assignment vs equality) - BEFORE type checking
             let is_assignment = matches!(qualified_op.op, QualifiedOpKind::Assign);
             if !self.qualifier_registry.is_valid_in_context(qualifier_name, is_assignment) {
                 let context_name = if is_assignment { "assignment" } else { "equality" };
@@ -679,13 +679,13 @@ impl TypeChecker {
                 continue;
             }
 
-            // Check arguments
+            // 3. Check arguments
             if let Err(err) = self.qualifier_registry.check_args(qualifier_name, qualifier_spec.arg.is_some()) {
                 self.add_error(err, qualifier_spec.position.clone());
                 continue;
             }
 
-            // Check if qualifier applies to the operand types
+            // 4. Check if qualifier applies to the operand types
             if !applies_to_type(&lhs_type) {
                 self.add_error(
                     format!("qualifier '{}' requires compatible types; got {}",
@@ -694,7 +694,7 @@ impl TypeChecker {
                 );
             }
 
-            // Check codegen status
+            // 5. Check codegen status
             match &codegen_status {
                 CodegenStatus::NotYetImplemented(phase) => {
                     self.add_error(
