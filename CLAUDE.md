@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 5b — Qualified Operators**
+**Current phase: Phase 6a — Basic Strings and Quote Recursion**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -320,3 +320,85 @@ fn test_float_condition() {
 }
 
 // Note: String condition test omitted because string literals not implemented until Phase 6
+
+// Phase 5b: Qualified operators type checker tests
+
+#[test]
+fn test_bitor_assignment_with_integer() {
+    let input = "high program(): i32 { let flags = 0\n  flags (bitor)= 4 }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "bitor qualifier should work with integer types");
+}
+
+#[test]
+fn test_bitor_assignment_with_bool_error() {
+    let input = "high program(): i32 { let flag = true; flag (bitor)= false }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "bitor qualifier should not work with bool types");
+
+    if let Err(errors) = result {
+        let error_message = errors[0].to_string();
+        assert!(error_message.contains("bitor"));
+        assert!(error_message.contains("requires compatible types"));
+    }
+}
+
+#[test]
+fn test_or_assignment_with_bool() {
+    let input = "high program(): i32 { let ready = false; ready (or)= true }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "or qualifier should work with bool types");
+}
+
+#[test]
+fn test_or_assignment_with_integer_error() {
+    let input = "high program(): i32 { let x = 0; x (or)= 1 }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "or qualifier should not work with integer types");
+
+    if let Err(errors) = result {
+        let error_message = errors[0].to_string();
+        assert!(error_message.contains("or"));
+        assert!(error_message.contains("requires compatible types"));
+    }
+}
+
+#[test]
+fn test_unknown_qualifier_error() {
+    let input = "high program(): i32 { let x = 0; x (nonexistent)= 5 }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Unknown qualifiers should be rejected");
+
+    if let Err(errors) = result {
+        let error_message = errors[0].to_string();
+        assert!(error_message.contains("nonexistent"));
+        assert!(error_message.contains("is not defined"));
+    }
+}
+
+#[test]
+fn test_qualifier_with_wrong_arguments() {
+    let input = "high program(): i32 { let x = 0; x (or: 5)= 1 }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Qualifiers with wrong arguments should be rejected");
+
+    if let Err(errors) = result {
+        let error_message = errors[0].to_string();
+        assert!(error_message.contains("or"));
+        assert!(error_message.contains("takes no arguments"));
+    }
+}
+
+#[test]
+fn test_qualifier_in_wrong_context() {
+    let input = "high program(): i32 { let a = 5; let b = 5; if (a (or)= b) { } }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Assignment qualifiers in equality context should be rejected");
+
+    if let Err(errors) = result {
+        let error_message = errors[0].to_string();
+        assert!(error_message.contains("or"));
+        assert!(error_message.contains("assignment only"));
+        assert!(error_message.contains("not equality"));
+    }
+}

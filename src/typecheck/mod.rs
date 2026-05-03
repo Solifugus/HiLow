@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::types::{Type, TypeError};
 use crate::lexer::Position;
+use crate::qualifiers::{QualifierRegistry, QualifierContext, CodegenStatus};
 use std::collections::HashMap;
 
 /// Symbol table entry for a variable
@@ -37,6 +38,7 @@ pub struct TypeChecker {
     scopes: Vec<Scope>,
     errors: Vec<TypeError>,
     loop_depth: usize, // Track nested loop depth for break/continue validation
+    qualifier_registry: QualifierRegistry,
 }
 
 impl TypeChecker {
@@ -45,6 +47,7 @@ impl TypeChecker {
             scopes: vec![Scope::new()], // Start with global scope
             errors: Vec::new(),
             loop_depth: 0,
+            qualifier_registry: QualifierRegistry::new(),
         }
     }
 
@@ -140,6 +143,7 @@ impl TypeChecker {
                 }
             },
             Statement::Assign(assign_stmt) => self.check_assign_statement(assign_stmt),
+            Statement::QualifiedOp(qualified_op) => self.check_qualified_op(qualified_op),
             Statement::ExprStatement(expr) => {
                 self.check_expression(expr);
             }
@@ -324,6 +328,7 @@ impl TypeChecker {
                 // Note: The type in is_check.ty is already validated during parsing
                 Type::Bool
             },
+            Expression::QualifiedOp(qualified_op) => self.check_qualified_op_expression(qualified_op),
         }
     }
 
@@ -588,6 +593,128 @@ impl TypeChecker {
         }
     }
 
+    fn check_qualified_op(&mut self, qualified_op: &QualifiedOp) {
+        // Type check both operands
+        let lhs_type = self.check_expression(&qualified_op.lhs);
+        let rhs_type = self.check_expression(&qualified_op.rhs);
+
+        // Check each qualifier in the list
+        for qualifier_spec in &qualified_op.qualifiers {
+            // Check if qualifier is defined
+            let qualifier_name = &qualifier_spec.name;
+            let qualifier_info = self.qualifier_registry.get_qualifier(qualifier_name);
+
+            if qualifier_info.is_none() {
+                self.add_error(
+                    format!("qualifier '{}' is not defined", qualifier_name),
+                    qualifier_spec.position.clone(),
+                );
+                continue;
+            }
+
+            let qualifier_info = qualifier_info.unwrap();
+
+            // Extract the information we need before making mutable borrows
+            let contexts = qualifier_info.contexts.clone();
+            let applies_to_type = qualifier_info.applies_to_type;
+            let codegen_status = qualifier_info.codegen_status.clone();
+
+            // Check context (assignment vs equality)
+            let is_assignment = matches!(qualified_op.op, QualifiedOpKind::Assign);
+            if !self.qualifier_registry.is_valid_in_context(qualifier_name, is_assignment) {
+                let context_name = if is_assignment { "assignment" } else { "equality" };
+                let allowed_context = match contexts {
+                    QualifierContext::Assignment => "assignment only",
+                    QualifierContext::Equality => "equality only",
+                    QualifierContext::Both => unreachable!(),
+                };
+                self.add_error(
+                    format!("qualifier '{}' applies to {}, not {}",
+                           qualifier_name, allowed_context, context_name),
+                    qualifier_spec.position.clone(),
+                );
+                continue;
+            }
+
+            // Check arguments
+            if let Err(err) = self.qualifier_registry.check_args(qualifier_name, qualifier_spec.arg.is_some()) {
+                self.add_error(err, qualifier_spec.position.clone());
+                continue;
+            }
+
+            // Check if qualifier applies to the operand types
+            if !applies_to_type(&lhs_type) {
+                self.add_error(
+                    format!("qualifier '{}' requires compatible types; got {}",
+                           qualifier_name, lhs_type),
+                    qualifier_spec.position.clone(),
+                );
+            }
+
+            // Check codegen status
+            match &codegen_status {
+                CodegenStatus::NotYetImplemented(phase) => {
+                    self.add_error(
+                        format!("qualifier '{}' for type {} is implemented in {}",
+                               qualifier_name, lhs_type, phase),
+                        qualifier_spec.position.clone(),
+                    );
+                }
+                CodegenStatus::NotYetForType(phase) => {
+                    self.add_error(
+                        format!("qualifier '{}' for type {} is implemented in {}",
+                               qualifier_name, lhs_type, phase),
+                        qualifier_spec.position.clone(),
+                    );
+                }
+                CodegenStatus::Implemented => {
+                    // Good to go!
+                }
+            }
+        }
+
+        // Type checking for the operation itself
+        match qualified_op.op {
+            QualifiedOpKind::Assign => {
+                // For assignment, both types must match
+                if lhs_type != rhs_type {
+                    self.add_error(
+                        format!("Cannot assign {} to {}; types must match exactly",
+                               rhs_type, lhs_type),
+                        qualified_op.position.clone(),
+                    );
+                }
+            }
+            QualifiedOpKind::Eq | QualifiedOpKind::NotEq => {
+                // For equality, both types must match and result is bool
+                if lhs_type != rhs_type {
+                    self.add_error(
+                        format!("Cannot compare {} and {} for equality; types must match exactly",
+                               lhs_type, rhs_type),
+                        qualified_op.position.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    fn check_qualified_op_expression(&mut self, qualified_op: &QualifiedOp) -> Type {
+        // Perform the same checks as the statement version
+        self.check_qualified_op(qualified_op);
+
+        // Return the appropriate type
+        match qualified_op.op {
+            QualifiedOpKind::Assign => {
+                // Assignment returns the assigned value type
+                self.check_expression(&qualified_op.lhs)
+            }
+            QualifiedOpKind::Eq | QualifiedOpKind::NotEq => {
+                // Equality returns bool
+                Type::Bool
+            }
+        }
+    }
+
     fn add_error(&mut self, message: String, position: Position) {
         self.errors.push(TypeError::new(message, position));
     }
@@ -611,6 +738,7 @@ impl HasPosition for Expression {
             Expression::MemberAccess(access) => access.position.clone(),
             Expression::IndexAccess(access) => access.position.clone(),
             Expression::IsCheck(check) => check.position.clone(),
+            Expression::QualifiedOp(qualified_op) => qualified_op.position.clone(),
         }
     }
 }

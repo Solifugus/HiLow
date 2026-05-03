@@ -139,6 +139,29 @@ pub struct IsCheck {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct QualifierSpec {
+    pub name: String,
+    pub arg: Option<Expression>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum QualifiedOpKind {
+    Assign,
+    Eq,
+    NotEq,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct QualifiedOp {
+    pub lhs: Box<Expression>,
+    pub qualifiers: Vec<QualifierSpec>,
+    pub op: QualifiedOpKind,
+    pub rhs: Box<Expression>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
@@ -150,6 +173,7 @@ pub enum Expression {
     MemberAccess(MemberAccess),
     IndexAccess(IndexAccess),
     IsCheck(IsCheck),
+    QualifiedOp(QualifiedOp),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -211,6 +235,7 @@ pub enum Statement {
     Break(Position),
     Continue(Position),
     Assign(AssignStmt),
+    QualifiedOp(QualifiedOp), // For qualified assignment operations
     ExprStatement(Expression),
 }
 

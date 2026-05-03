@@ -167,6 +167,9 @@ impl CodeGenerator {
             Statement::Assign(assign_stmt) => {
                 self.generate_assign_statement(assign_stmt, type_checker)?;
             }
+            Statement::QualifiedOp(qualified_op) => {
+                self.generate_qualified_op_statement(qualified_op, type_checker)?;
+            }
         }
         Ok(())
     }
@@ -344,6 +347,9 @@ impl CodeGenerator {
             }
             Expression::IsCheck(is_check) => {
                 self.generate_is_check(is_check, type_checker)?;
+            }
+            Expression::QualifiedOp(qualified_op) => {
+                self.generate_qualified_op_expression(qualified_op, type_checker)?;
             }
         }
         Ok(())
@@ -555,7 +561,73 @@ impl CodeGenerator {
                 }
             }
             Expression::IsCheck(_) => Type::Bool,
+            Expression::QualifiedOp(qualified_op) => {
+                match qualified_op.op {
+                    QualifiedOpKind::Assign => self.infer_expression_type(&qualified_op.lhs),
+                    QualifiedOpKind::Eq | QualifiedOpKind::NotEq => Type::Bool,
+                }
+            }
             _ => Type::I32, // Default fallback
         }
+    }
+
+    fn generate_qualified_op_statement(&mut self, qualified_op: &QualifiedOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("  ");
+        self.generate_qualified_op_expression(qualified_op, type_checker)?;
+        self.output.push_str(";\n");
+        Ok(())
+    }
+
+    fn generate_qualified_op_expression(&mut self, qualified_op: &QualifiedOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        match qualified_op.op {
+            QualifiedOpKind::Assign => {
+                // Generate qualified assignment: x (qualifier)= y  ->  x = x op y
+                self.generate_qualified_assignment(qualified_op, type_checker)?;
+            }
+            QualifiedOpKind::Eq | QualifiedOpKind::NotEq => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "qualified equality operators".to_string(),
+                    phase: "Phase 6c (strings) and Phase 9 (time/money)".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_qualified_assignment(&mut self, qualified_op: &QualifiedOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // For now, only handle single qualifiers (no comma-separated lists)
+        if qualified_op.qualifiers.len() != 1 {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: "multiple qualifiers in assignment".to_string(),
+                phase: "future phases when multiple qualifiers are implemented".to_string(),
+            });
+        }
+
+        let qualifier = &qualified_op.qualifiers[0];
+
+        // Generate: lhs = lhs op rhs
+        self.generate_expression(&qualified_op.lhs, type_checker)?;
+        self.output.push_str(" = ");
+        self.generate_expression(&qualified_op.lhs, type_checker)?;
+
+        // Map qualifier to C operator
+        let c_operator = match qualifier.name.as_str() {
+            "or" => " || ",
+            "and" => " && ",
+            "bitor" => " | ",
+            "bitand" => " & ",
+            "bitxor" => " ^ ",
+            _ => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("qualifier '{}'", qualifier.name),
+                    phase: "a future phase".to_string(),
+                });
+            }
+        };
+
+        self.output.push_str(c_operator);
+        self.generate_expression(&qualified_op.rhs, type_checker)?;
+
+        Ok(())
     }
 }

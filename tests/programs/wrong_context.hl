@@ -1,0 +1,8 @@
+high program(): i32 {
+  let a = true
+  let b = false
+  if (a (or)= b) {        // Error: 'or' applies to assignment only, not equality
+    return 1
+  }
+  return 0
+}

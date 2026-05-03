@@ -504,3 +504,192 @@ fn test_assignment_not_allowed_in_expression_position() {
         }
     }
 }
+
+// Phase 5b: Qualified operators parser tests
+
+#[test]
+fn test_simple_qualified_assignment() {
+    let input = "high program(): i32 { flags (bitor)= 4 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(body) = program.body {
+                assert_eq!(body.statements.len(), 1);
+                match &body.statements[0] {
+                    Statement::QualifiedOp(qualified_op) => {
+                        assert_eq!(qualified_op.qualifiers.len(), 1);
+                        assert_eq!(qualified_op.qualifiers[0].name, "bitor");
+                        assert!(qualified_op.qualifiers[0].arg.is_none());
+                        assert_eq!(qualified_op.op, QualifiedOpKind::Assign);
+                        match qualified_op.rhs.as_ref() {
+                            Expression::IntLit(4, _) => {},
+                            _ => panic!("Expected integer literal 4")
+                        }
+                    }
+                    _ => panic!("Expected qualified operator statement")
+                }
+            }
+        }
+        _ => panic!("Expected Program")
+    }
+}
+
+#[test]
+fn test_qualified_assignment_with_argument() {
+    let input = "high program(): i32 { x (within: 0.01)= y }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(body) = program.body {
+                assert_eq!(body.statements.len(), 1);
+                match &body.statements[0] {
+                    Statement::QualifiedOp(qualified_op) => {
+                        assert_eq!(qualified_op.qualifiers.len(), 1);
+                        assert_eq!(qualified_op.qualifiers[0].name, "within");
+                        assert!(qualified_op.qualifiers[0].arg.is_some());
+                        match &qualified_op.qualifiers[0].arg {
+                            Some(Expression::FloatLit(f, _)) => {
+                                assert_eq!(*f, 0.01);
+                            }
+                            _ => panic!("Expected float literal 0.01")
+                        }
+                        assert_eq!(qualified_op.op, QualifiedOpKind::Assign);
+                    }
+                    _ => panic!("Expected qualified operator statement")
+                }
+            }
+        }
+        _ => panic!("Expected Program")
+    }
+}
+
+#[test]
+fn test_qualified_equality_multiple_qualifiers() {
+    let input = "high program(): i32 { if (s1 (caseless, trimmed)= s2) { } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(body) = program.body {
+                assert_eq!(body.statements.len(), 1);
+                match &body.statements[0] {
+                    Statement::If(if_stmt) => {
+                        match &if_stmt.condition {
+                            Expression::QualifiedOp(qualified_op) => {
+                                assert_eq!(qualified_op.qualifiers.len(), 2);
+                                assert_eq!(qualified_op.qualifiers[0].name, "caseless");
+                                assert_eq!(qualified_op.qualifiers[1].name, "trimmed");
+                                assert!(qualified_op.qualifiers[0].arg.is_none());
+                                assert!(qualified_op.qualifiers[1].arg.is_none());
+                                assert_eq!(qualified_op.op, QualifiedOpKind::Assign);
+                            }
+                            _ => panic!("Expected qualified operator in if condition")
+                        }
+                    }
+                    _ => panic!("Expected if statement")
+                }
+            }
+        }
+        _ => panic!("Expected Program")
+    }
+}
+
+#[test]
+fn test_or_qualified_assignment() {
+    let input = "high program(): i32 { x (or)= y }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(body) = program.body {
+                assert_eq!(body.statements.len(), 1);
+                match &body.statements[0] {
+                    Statement::QualifiedOp(qualified_op) => {
+                        assert_eq!(qualified_op.qualifiers.len(), 1);
+                        assert_eq!(qualified_op.qualifiers[0].name, "or");
+                        assert!(qualified_op.qualifiers[0].arg.is_none());
+                        assert_eq!(qualified_op.op, QualifiedOpKind::Assign);
+                    }
+                    _ => panic!("Expected qualified operator statement")
+                }
+            }
+        }
+        _ => panic!("Expected Program")
+    }
+}
+
+#[test]
+fn test_function_call_vs_qualified_operator_disambiguation() {
+    // This should parse as a function call, not qualified operator
+    let input = "high program(): i32 { x() }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(body) = program.body {
+                assert_eq!(body.statements.len(), 1);
+                match &body.statements[0] {
+                    Statement::ExprStatement(Expression::Call(call)) => {
+                        match call.callee.as_ref() {
+                            Expression::Ident(name, _) => {
+                                assert_eq!(name, "x");
+                            }
+                            _ => panic!("Expected identifier 'x'")
+                        }
+                        assert!(call.args.is_empty());
+                    }
+                    _ => panic!("Expected function call")
+                }
+            }
+        }
+        _ => panic!("Expected Program")
+    }
+}
+
+#[test]
+fn test_function_call_with_arg() {
+    // This should parse as a function call, not qualified operator
+    let input = "high program(): i32 { foo(arg) }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(body) = program.body {
+                assert_eq!(body.statements.len(), 1);
+                match &body.statements[0] {
+                    Statement::ExprStatement(Expression::Call(call)) => {
+                        match call.callee.as_ref() {
+                            Expression::Ident(name, _) => {
+                                assert_eq!(name, "foo");
+                            }
+                            _ => panic!("Expected identifier 'foo'")
+                        }
+                        assert_eq!(call.args.len(), 1);
+                    }
+                    _ => panic!("Expected function call")
+                }
+            }
+        }
+        _ => panic!("Expected Program")
+    }
+}

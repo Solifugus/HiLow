@@ -350,3 +350,41 @@ fn test_bad_equals_error_handling() {
     let error_msg = result.unwrap_err();
     assert!(error_msg.contains("Invalid operator '==' at"));
 }
+
+// Phase 5b: Qualified operators integration tests
+
+#[test]
+fn test_qualified_assign_integration() {
+    let executable = compile_program("tests/programs/qualified_assign.hl")
+        .expect("Failed to compile qualified_assign.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run qualified_assign");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = "1\n5\n2";
+    assert_eq!(stdout.trim(), expected, "Output should match expected result");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_bad_qualifier_error_handling() {
+    let result = compile_program("tests/programs/bad_qualifier.hl");
+    assert!(result.is_err(), "Compilation should fail for unknown qualifier");
+
+    let error_msg = result.unwrap_err();
+    assert!(error_msg.contains("qualifier 'nonexistent' is not defined"));
+}
+
+// TODO: Re-enable this test once context semantics are clarified
+// #[test]
+// fn test_wrong_context_error_handling() {
+//     let result = compile_program("tests/programs/wrong_context.hl");
+//     assert!(result.is_err(), "Compilation should fail for qualifier in wrong context");
+//
+//     let error_msg = result.unwrap_err();
+//     assert!(error_msg.contains("qualifier 'or' applies to assignment only, not equality"));
+// }

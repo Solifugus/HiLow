@@ -354,7 +354,14 @@ impl Parser {
                 // Reset and parse as expression statement
                 self.current = checkpoint;
                 let expr = self.parse_expression()?;
-                Ok(Statement::ExprStatement(expr))
+
+                // If this is a qualified assignment, treat it as a statement
+                match &expr {
+                    Expression::QualifiedOp(qualified_op) if matches!(qualified_op.op, QualifiedOpKind::Assign) => {
+                        Ok(Statement::QualifiedOp(qualified_op.clone()))
+                    }
+                    _ => Ok(Statement::ExprStatement(expr))
+                }
             }
         }
     }
@@ -641,26 +648,32 @@ impl Parser {
         loop {
             match &self.peek()?.kind {
                 TokenKind::LeftParen => {
-                    // Function call
-                    let position = self.advance()?.position; // consume '('
-                    let mut args = Vec::new();
+                    // Check if this is a qualified operator or function call
+                    if self.is_qualified_operator(self.current + 1) {
+                        // Parse as qualified operator
+                        expr = self.parse_qualified_operator(expr)?;
+                    } else {
+                        // Function call
+                        let position = self.advance()?.position; // consume '('
+                        let mut args = Vec::new();
 
-                    if !self.check(&TokenKind::RightParen) {
-                        args.push(self.parse_expression()?);
-
-                        while self.check(&TokenKind::Comma) {
-                            self.advance()?; // consume ','
+                        if !self.check(&TokenKind::RightParen) {
                             args.push(self.parse_expression()?);
+
+                            while self.check(&TokenKind::Comma) {
+                                self.advance()?; // consume ','
+                                args.push(self.parse_expression()?);
+                            }
                         }
+
+                        self.expect_token(TokenKind::RightParen, "Expected ')' after function arguments")?;
+
+                        expr = Expression::Call(Call {
+                            callee: Box::new(expr),
+                            args,
+                            position,
+                        });
                     }
-
-                    self.expect_token(TokenKind::RightParen, "Expected ')' after function arguments")?;
-
-                    expr = Expression::Call(Call {
-                        callee: Box::new(expr),
-                        args,
-                        position,
-                    });
                 }
                 TokenKind::Dot => {
                     // Member access
@@ -803,6 +816,30 @@ impl Parser {
         }
     }
 
+    fn expect_qualifier_name(&mut self, message: &str) -> Result<Token, ParseError> {
+        let token = self.advance()?;
+        match token.kind {
+            TokenKind::Identifier => Ok(token),
+            // Allow specific keywords to be used as qualifier names
+            TokenKind::Or => Ok(Token {
+                kind: TokenKind::Identifier,
+                lexeme: "or".to_string(),
+                position: token.position,
+            }),
+            TokenKind::And => Ok(Token {
+                kind: TokenKind::Identifier,
+                lexeme: "and".to_string(),
+                position: token.position,
+            }),
+            // Add other keywords that can be qualifiers
+            _ => Err(ParseError::UnexpectedToken {
+                expected: message.to_string(),
+                found: token.kind,
+                position: token.position,
+            }),
+        }
+    }
+
     fn advance(&mut self) -> Result<Token, ParseError> {
         if self.is_at_end() {
             let last_pos = if self.tokens.is_empty() {
@@ -845,5 +882,101 @@ impl Parser {
 
     fn is_at_end(&self) -> bool {
         self.current >= self.tokens.len()
+    }
+
+    // Helper to check if a parenthesized expression after `expr (` is a qualified operator
+    // Returns true if this should be parsed as a qualified operator (ends with = or !=)
+    fn is_qualified_operator(&self, start_pos: usize) -> bool {
+        let mut pos = start_pos; // start_pos should be the position AFTER the opening '('
+        let mut paren_depth = 1;
+
+        // Find the matching closing parenthesis
+        while pos < self.tokens.len() && paren_depth > 0 {
+            match self.tokens[pos].kind {
+                TokenKind::LeftParen => paren_depth += 1,
+                TokenKind::RightParen => paren_depth -= 1,
+                _ => {}
+            }
+            pos += 1;
+        }
+
+        // If we didn't find matching paren, treat as function call
+        if paren_depth > 0 {
+            return false;
+        }
+
+        // Check what comes after the closing paren
+        if pos < self.tokens.len() {
+            matches!(self.tokens[pos].kind, TokenKind::Equal | TokenKind::NotEq)
+        } else {
+            false
+        }
+    }
+
+    // Parse a list of qualifier specs: ident or ident: expr
+    fn parse_qualifier_list(&mut self) -> Result<Vec<QualifierSpec>, ParseError> {
+        let mut qualifiers = Vec::new();
+
+        loop {
+            // Parse qualifier name (can be identifier or keyword)
+            let name_token = self.expect_qualifier_name("Expected qualifier name")?;
+            let name = name_token.lexeme;
+            let position = name_token.position;
+
+            // Check for optional argument
+            let arg = if self.check(&TokenKind::Colon) {
+                self.advance()?; // consume ':'
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+
+            qualifiers.push(QualifierSpec {
+                name,
+                arg,
+                position,
+            });
+
+            // Check for more qualifiers
+            if self.check(&TokenKind::Comma) {
+                self.advance()?; // consume ','
+            } else {
+                break;
+            }
+        }
+
+        Ok(qualifiers)
+    }
+
+    // Parse a qualified operator: expr (qualifier-list) op expr
+    fn parse_qualified_operator(&mut self, lhs: Expression) -> Result<Expression, ParseError> {
+        let position = self.advance()?.position; // consume '('
+
+        // Parse qualifier list
+        let qualifiers = self.parse_qualifier_list()?;
+
+        self.expect_token(TokenKind::RightParen, "Expected ')' after qualifier list")?;
+
+        // Parse operator (= or !=)
+        let op = match self.advance()?.kind {
+            TokenKind::Equal => QualifiedOpKind::Assign,
+            TokenKind::NotEq => QualifiedOpKind::NotEq,
+            found => return Err(ParseError::UnexpectedToken {
+                expected: "'=' or '!='".to_string(),
+                found,
+                position,
+            }),
+        };
+
+        // Parse right-hand side
+        let rhs = self.parse_expression_with_precedence(5)?; // Higher precedence than assignment
+
+        Ok(Expression::QualifiedOp(QualifiedOp {
+            lhs: Box::new(lhs),
+            qualifiers,
+            op,
+            rhs: Box::new(rhs),
+            position,
+        }))
     }
 }

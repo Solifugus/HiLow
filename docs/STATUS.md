@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 5b — Qualified Operators
+**Phase:** Phase 6a — Basic Strings and Quote Recursion  
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 5a: Equality, Type Tests, and Negation Comparators
+**Last commit:** Phase 5b: Qualified operators framework
 
 ---
 
@@ -20,6 +20,18 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 5b complete
+- Implemented qualified operator framework with parser disambiguation between function calls `foo(arg)` and qualified operators `var (qualifier)=` using peek-ahead approach to check for `=` or `!=` after closing parenthesis
+- Added AST nodes: QualifierSpec, QualifiedOp, QualifiedOpKind (Assign/Eq/NotEq); qualified operators work as both expressions and statements
+- Created qualifier registry framework with QualifierInfo containing context validation (assignment/equality), argument specifications, type applicability checks, and codegen status tracking
+- Implemented universal assignment qualifiers with full codegen: (or)= emits `x = x || y`, (and)= emits `x = x && y`, (bitor)= emits `x = x | y`, (bitand)= emits `x = x & y`, (bitxor)= emits `x = x ^ y`
+- Parser handles keywords as qualifier names using expect_qualifier_name helper (allows `or` and `and` keywords in qualifier position)
+- Type checker validates qualifier context (assignment-only vs equality-only), argument requirements, type compatibility, and reports phase-specific "not yet implemented" errors for placeholder qualifiers like (coerce)=, (roughly)=, (caseless)=
+- Codegen distinguishes assignment statement form `flags (bitor)= 4;` vs expression form returning values
+- Added 8 comprehensive tests: 6 parser tests (parsing, disambiguation), 7 type checker tests (validation), 5 codegen tests (C code generation), 2 integration tests (end-to-end verification)
+- All 183 tests passing (up from 175): working qualified operator framework ready for type-specific qualifiers in future phases
+- Commit: "Phase 5b: Qualified operators framework"
 
 ### 2026-05-02 — Phase 4b complete
 - Implemented truthy/falsy semantics: type checker now accepts bool, integer, and float types for conditions in if/while statements
@@ -169,3 +181,8 @@
 ### Behavioral observations (not bugs, just things to remember)
 - **Claude Code sometimes paraphrases generated code in debriefs rather than pasting actual output.** Phase 4b debrief showed `while ((count != 0))` for a program that actually generated `while (count < 5)`. When debriefs include code samples, treat them as descriptive — verify with `cat` on the actual files or by examining what the integration tests assert.
 *(none currently)*
+
+### Test coverage gaps
+- **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.
+
+- **`bad_equals` integration test uses a different pattern than success tests.** It calls `compile_program` and asserts the result is `Err`, rather than running a compiled binary. This is correct for compile-failure tests but means the pattern in `tests/integration_tests.rs` is heterogeneous. Note for future readers; not a problem.

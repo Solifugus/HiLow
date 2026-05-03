@@ -1,0 +1,5 @@
+high program(): i32 {
+  let x = 0
+  x (nonexistent)= 5      // Error: qualifier 'nonexistent' is not defined
+  return 0
+}

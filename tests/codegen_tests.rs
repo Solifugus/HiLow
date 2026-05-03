@@ -349,3 +349,85 @@ fn test_is_check_false_codegen() {
     // Should generate compile-time false check as literal 0
     assert!(c_code.contains("if (0)"));
 }
+
+// Phase 5b: Qualified operators codegen tests
+
+#[test]
+fn test_bitor_assignment_codegen() {
+    let input = "high program(): i32 { let flags = 0\n  flags (bitor)= 4 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate bitwise OR assignment
+    assert!(c_code.contains("flags = flags | 4"));
+}
+
+#[test]
+fn test_bitand_assignment_codegen() {
+    let input = "high program(): i32 { let mask = 7\n  mask (bitand)= 3 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate bitwise AND assignment
+    assert!(c_code.contains("mask = mask & 3"));
+}
+
+#[test]
+fn test_or_assignment_codegen() {
+    let input = "high program(): i32 { let ready = false\n  ready (or)= true }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate logical OR assignment
+    assert!(c_code.contains("ready = ready || true"));
+}
+
+#[test]
+fn test_and_assignment_codegen() {
+    let input = "high program(): i32 { let enabled = true\n  enabled (and)= false }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate logical AND assignment
+    assert!(c_code.contains("enabled = enabled && false"));
+}
+
+#[test]
+fn test_bitxor_assignment_codegen() {
+    let input = "high program(): i32 { let value = 10\n  value (bitxor)= 6 }";
+    let ast = Parser::new(input).unwrap().parse().unwrap();
+    let type_checker = TypeChecker::new();
+
+    let mut codegen = CodeGenerator::new();
+    let result = codegen.generate(&ast, &type_checker);
+
+    assert!(result.is_ok());
+    let c_code = result.unwrap();
+
+    // Should generate bitwise XOR assignment
+    assert!(c_code.contains("value = value ^ 6"));
+}

@@ -1,0 +1,21 @@
+high program(): i32 {
+  let flags = 0
+  flags (bitor)= 4         // flags = 4
+  flags (bitor)= 1         // flags = 5
+
+  if (flags ?= 5) {
+    print(1)               // expected: 1
+  }
+
+  let mask = 7
+  flags (bitand)= mask     // flags = 5 & 7 = 5
+  print(flags)             // expected: 5
+
+  let ready = false
+  ready (or)= true
+  if (ready) {
+    print(2)               // expected: 2
+  }
+
+  return 0
+}
