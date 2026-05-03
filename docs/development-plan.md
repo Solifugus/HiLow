@@ -1120,9 +1120,11 @@ hilowc string_equality.hl -o se && ./se
 **Scope:**
 - Object literal syntax: `{ x: 10, y: 20 }`
 - Object type in type system: `object` (general flexible object) and shape inference for known structures
-- Property access: `obj.prop`, `obj["dynamic"]`
+- Property access: `obj.prop` (dot notation only)
 - Property assignment: `obj.prop = value`
 - Object representation in C: struct with hashmap for dynamic properties
+
+**Note:** Computed access `obj[key]` requires `unknown` semantics for non-literal keys; deferred to Phase 7c (when match/for-in expand the dispatch substrate) or Phase 9 (when `unknown` lands).
 
 **Out of scope:**
 - Prototype delegation — Phase 7b
@@ -1131,9 +1133,9 @@ hilowc string_equality.hl -o se && ./se
 - Match on types — Phase 7c
 
 **Tasks:**
-1. AST: `ObjectLiteral { fields: Vec<(String, Expression)> }`, `MemberAccess { obj, prop }`, `IndexAccess { obj, index }`
+1. AST: `ObjectLiteral { fields: Vec<(String, Expression)> }`, `PropertyAccess { obj, prop }`
 2. Parser: parse object literals with `{ key: value, ... }` syntax
-3. Parser: dot notation for member access; `[]` for dynamic indexing (string keys)
+3. Parser: dot notation for property access (`obj.prop`)
 4. Type system: `object` is a generic flexible type; track known field types when possible
 5. Codegen: implement HiLow objects as a tagged-union value with a hashmap for fields
 6. Runtime: `hl_object_t` struct, `hl_obj_new()`, `hl_obj_set(obj, key, value)`, `hl_obj_get(obj, key)`
@@ -1151,16 +1153,13 @@ high program(): i32 {
   point.z = 30
   print(point.z)               // 30
   
-  let key = "x"
-  print(point[key])            // 10
-  
   return 0
 }
 ```
 
 ```bash
 hilowc objects.hl -o objs && ./objs
-# Output: 10\n20\n30\n10
+# Output: 10\n20\n30
 ```
 
 ### Phase 7b: Prototype Delegation
@@ -1224,6 +1223,7 @@ hilowc prototypes.hl -o protos && ./protos
 - Closures: function expressions that capture variables from enclosing scope
 - Closure representation: function pointer + captured environment struct
 - `for-in` iteration over arrays and objects
+- Computed property access: `obj[key]` with dynamic keys (requires `unknown` for missing properties)
 - `match` expressions with literal patterns, range patterns, type patterns (`is unknown`, `is nothing`, `is i32`), and guards (`when`)
 - `switch` statements
 
