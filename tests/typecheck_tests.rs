@@ -149,16 +149,11 @@ fn test_string_equals_integer() {
 }
 
 #[test]
-fn test_non_bool_condition() {
+fn test_numeric_condition_allowed() {
+    // Phase 4b: numeric conditions are allowed (truthy/falsy)
     let input = "high program(): i32 { if (5) { } }";
     let result = type_check_program(input);
-    assert!(result.is_err(), "Expected type error");
-
-    if let Err(errors) = result {
-        assert!(!errors.is_empty());
-        assert!(errors[0].message.contains("bool"));
-        assert!(errors[0].message.contains("i32"));
-    }
+    assert!(result.is_ok(), "Numeric conditions should be allowed in Phase 4b");
 }
 
 #[test]
@@ -215,15 +210,11 @@ fn test_i32_plus_i64_error() {
 }
 
 #[test]
-fn test_while_condition_must_be_bool() {
+fn test_while_numeric_condition_allowed() {
+    // Phase 4b: numeric conditions are allowed (truthy/falsy)
     let input = "high program(): i32 { while (5) { break } }";
     let result = type_check_program(input);
-    assert!(result.is_err(), "Expected type error");
-
-    if let Err(errors) = result {
-        assert!(!errors.is_empty());
-        assert!(errors[0].message.contains("bool"));
-    }
+    assert!(result.is_ok(), "Numeric conditions should be allowed in Phase 4b");
 }
 
 #[test]
@@ -280,3 +271,52 @@ fn test_is_check_returns_bool() {
     let result = type_check_program(input);
     assert!(result.is_ok(), "Expected successful type check, got: {:?}", result);
 }
+
+// Phase 4b tests
+
+#[test]
+fn test_break_outside_loop() {
+    let input = "high program(): i32 { break }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type error");
+
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("break is only valid inside a loop"));
+    }
+}
+
+#[test]
+fn test_continue_outside_loop() {
+    let input = "high program(): i32 { continue }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type error");
+
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("continue is only valid inside a loop"));
+    }
+}
+
+#[test]
+fn test_break_inside_while_loop() {
+    let input = "high program(): i32 { while (true) { break } }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Break should be allowed inside while loop");
+}
+
+#[test]
+fn test_continue_inside_loop() {
+    let input = "high program(): i32 { loop { continue } }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Continue should be allowed inside loop");
+}
+
+#[test]
+fn test_float_condition() {
+    let input = "high program(): i32 { if (3.14) { } }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Float conditions should be allowed in Phase 4b");
+}
+
+// Note: String condition test omitted because string literals not implemented until Phase 6

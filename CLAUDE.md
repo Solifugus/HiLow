@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 4b — Control Flow, Loops, Truthy/Falsy**
+**Current phase: Phase 5a — Equality, Type Tests, and Negation Comparators**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

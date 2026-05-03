@@ -36,6 +36,7 @@ impl Scope {
 pub struct TypeChecker {
     scopes: Vec<Scope>,
     errors: Vec<TypeError>,
+    loop_depth: usize, // Track nested loop depth for break/continue validation
 }
 
 impl TypeChecker {
@@ -43,6 +44,7 @@ impl TypeChecker {
         Self {
             scopes: vec![Scope::new()], // Start with global scope
             errors: Vec::new(),
+            loop_depth: 0,
         }
     }
 
@@ -121,8 +123,22 @@ impl TypeChecker {
             Statement::If(if_stmt) => self.check_if_statement(if_stmt),
             Statement::While(while_stmt) => self.check_while_statement(while_stmt),
             Statement::Loop(loop_stmt) => self.check_loop_statement(loop_stmt),
-            Statement::Break(_) => {}, // No type checking needed
-            Statement::Continue(_) => {}, // No type checking needed
+            Statement::Break(pos) => {
+                if self.loop_depth == 0 {
+                    self.add_error(
+                        "break is only valid inside a loop".to_string(),
+                        pos.clone()
+                    );
+                }
+            },
+            Statement::Continue(pos) => {
+                if self.loop_depth == 0 {
+                    self.add_error(
+                        "continue is only valid inside a loop".to_string(),
+                        pos.clone()
+                    );
+                }
+            },
             Statement::Assign(assign_stmt) => self.check_assign_statement(assign_stmt),
             Statement::ExprStatement(expr) => {
                 self.check_expression(expr);
@@ -186,11 +202,11 @@ impl TypeChecker {
     }
 
     fn check_if_statement(&mut self, if_stmt: &IfStmt) {
-        // Check condition - must be bool in Phase 3
+        // Phase 4b: Check condition - supports truthy/falsy (bool, integers, floats)
         let condition_type = self.check_expression(&if_stmt.condition);
-        if condition_type != Type::Bool {
+        if !self.is_condition_type(&condition_type) {
             self.add_error(
-                format!("If condition must be bool, found {}", condition_type),
+                format!("If condition must be bool, integer, or float type, found {}", condition_type),
                 if_stmt.condition.position()
             );
         }
@@ -205,22 +221,34 @@ impl TypeChecker {
     }
 
     fn check_while_statement(&mut self, while_stmt: &WhileStmt) {
-        // Check condition - must be bool in Phase 3
+        // Phase 4b: Check condition - supports truthy/falsy (bool, integers, floats)
         let condition_type = self.check_expression(&while_stmt.condition);
-        if condition_type != Type::Bool {
+        if !self.is_condition_type(&condition_type) {
             self.add_error(
-                format!("While condition must be bool, found {}", condition_type),
+                format!("While condition must be bool, integer, or float type, found {}", condition_type),
                 while_stmt.condition.position()
             );
         }
 
+        // Enter loop scope for break/continue validation
+        self.loop_depth += 1;
+
         // Check body
         self.check_block(&while_stmt.body);
+
+        // Exit loop scope
+        self.loop_depth -= 1;
     }
 
     fn check_loop_statement(&mut self, loop_stmt: &LoopStmt) {
+        // Enter loop scope for break/continue validation
+        self.loop_depth += 1;
+
         // Check body
         self.check_block(&loop_stmt.body);
+
+        // Exit loop scope
+        self.loop_depth -= 1;
     }
 
     fn check_assign_statement(&mut self, assign_stmt: &AssignStmt) {
@@ -542,6 +570,22 @@ impl TypeChecker {
             position
         );
         Type::Unknown
+    }
+
+    /// Phase 4b: Check if a type is valid for truthy/falsy conditions
+    fn is_condition_type(&self, ty: &Type) -> bool {
+        match ty {
+            // Bool is always valid
+            Type::Bool => true,
+            // All integer types are valid (truthy if non-zero)
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+            Type::Isize | Type::Usize => true,
+            // All float types are valid (truthy if non-zero)
+            Type::F32 | Type::F64 => true,
+            // Other types not yet implemented for truthy/falsy
+            _ => false,
+        }
     }
 
     fn add_error(&mut self, message: String, position: Position) {

@@ -1,0 +1,15 @@
+high program(): i32 {
+  let outer = 0
+  while (outer < 3) {
+    let inner = 0
+    while (inner < 3) {
+      print(outer * 10 + inner)
+      inner += 1
+      if (inner ?= 2) {
+        break
+      }
+    }
+    outer += 1
+  }
+  return 0
+}

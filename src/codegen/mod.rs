@@ -149,41 +149,23 @@ impl CodeGenerator {
                 self.generate_expression(expr, type_checker)?;
                 self.output.push_str(";\n");
             }
-            Statement::If(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "if statements".to_string(),
-                    phase: "Phase 4b".to_string(),
-                });
+            Statement::If(if_stmt) => {
+                self.generate_if_statement(if_stmt, type_checker)?;
             }
-            Statement::While(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "while loops".to_string(),
-                    phase: "Phase 4b".to_string(),
-                });
+            Statement::While(while_stmt) => {
+                self.generate_while_statement(while_stmt, type_checker)?;
             }
-            Statement::Loop(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "loop statements".to_string(),
-                    phase: "Phase 4b".to_string(),
-                });
+            Statement::Loop(loop_stmt) => {
+                self.generate_loop_statement(loop_stmt, type_checker)?;
             }
             Statement::Break(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "break statements".to_string(),
-                    phase: "Phase 4b".to_string(),
-                });
+                self.output.push_str("  break;\n");
             }
             Statement::Continue(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "continue statements".to_string(),
-                    phase: "Phase 4b".to_string(),
-                });
+                self.output.push_str("  continue;\n");
             }
-            Statement::Assign(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "assignment statements".to_string(),
-                    phase: "Phase 4b".to_string(),
-                });
+            Statement::Assign(assign_stmt) => {
+                self.generate_assign_statement(assign_stmt, type_checker)?;
             }
         }
         Ok(())
@@ -235,6 +217,93 @@ impl CodeGenerator {
             self.generate_expression(value, type_checker)?;
         }
         self.output.push_str(";\n");
+        Ok(())
+    }
+
+    fn generate_if_statement(&mut self, if_stmt: &IfStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("  if (");
+        self.generate_condition(&if_stmt.condition, type_checker)?;
+        self.output.push_str(") {\n");
+
+        self.generate_block(&if_stmt.then_block, type_checker)?;
+
+        self.output.push_str("  }");
+
+        if let Some(else_block) = &if_stmt.else_block {
+            self.output.push_str(" else {\n");
+            self.generate_block(else_block, type_checker)?;
+            self.output.push_str("  }");
+        }
+
+        self.output.push_str("\n");
+        Ok(())
+    }
+
+    fn generate_while_statement(&mut self, while_stmt: &WhileStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("  while (");
+        self.generate_condition(&while_stmt.condition, type_checker)?;
+        self.output.push_str(") {\n");
+
+        self.generate_block(&while_stmt.body, type_checker)?;
+
+        self.output.push_str("  }\n");
+        Ok(())
+    }
+
+    fn generate_loop_statement(&mut self, loop_stmt: &LoopStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("  while (1) {\n");
+
+        self.generate_block(&loop_stmt.body, type_checker)?;
+
+        self.output.push_str("  }\n");
+        Ok(())
+    }
+
+    fn generate_assign_statement(&mut self, assign_stmt: &AssignStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("  ");
+        self.generate_expression(&assign_stmt.target, type_checker)?;
+
+        let op_str = match assign_stmt.op {
+            AssignOpKind::Assign => " = ",
+            AssignOpKind::AddAssign => " += ",
+            AssignOpKind::SubAssign => " -= ",
+            AssignOpKind::MulAssign => " *= ",
+            AssignOpKind::DivAssign => " /= ",
+            AssignOpKind::ModAssign => " %= ",
+        };
+
+        self.output.push_str(op_str);
+        self.generate_expression(&assign_stmt.value, type_checker)?;
+        self.output.push_str(";\n");
+        Ok(())
+    }
+
+    /// Phase 4b: Generate condition expressions with truthy/falsy dispatch
+    fn generate_condition(&mut self, condition: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Determine the type of the condition
+        let condition_type = self.infer_expression_type(condition);
+
+        match condition_type {
+            Type::Bool => {
+                // For bool, just generate the expression directly
+                self.generate_expression(condition, type_checker)?;
+            }
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+            Type::Isize | Type::Usize | Type::F32 | Type::F64 => {
+                // For numeric types, emit (expr != 0) for truthy/falsy check
+                self.output.push_str("(");
+                self.generate_expression(condition, type_checker)?;
+                self.output.push_str(" != 0)");
+            }
+            _ => {
+                // This should be caught by the type checker, but handle gracefully
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("conditions with type {}", condition_type),
+                    phase: "Phase 4b (truthy/falsy)".to_string(),
+                });
+            }
+        }
         Ok(())
     }
 

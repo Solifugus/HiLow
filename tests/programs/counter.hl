@@ -1,0 +1,8 @@
+high program(): i32 {
+  let count = 0
+  while (count < 5) {
+    print(count)
+    count += 1
+  }
+  return 0
+}

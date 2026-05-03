@@ -1,0 +1,8 @@
+high program(): i32 {
+  let x = 10
+  x += 5
+  x -= 2
+  x *= 2
+  print(x)
+  return 0
+}

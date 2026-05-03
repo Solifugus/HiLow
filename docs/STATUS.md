@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 4b — Control Flow, Loops, Truthy/Falsy
+**Phase:** Phase 5a — Equality, Type Tests, and Negation Comparators
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 4a: First runnable HiLow programs
+**Last commit:** Phase 4b: Control flow, loops, truthy/falsy
 
 ---
 
@@ -20,6 +20,18 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 4b complete
+- Implemented truthy/falsy semantics: type checker now accepts bool, integer, and float types for conditions in if/while statements
+- Added loop depth tracking to validate break/continue statements are only used inside loops (while, loop constructs)
+- Implemented complete codegen for if/else statements (including else-if chains), while loops, infinite loops (as `while (1)`), break/continue as literal C statements
+- Added codegen for compound assignment operations (+=, -=, *=, /=, %=) with direct mapping to C operators
+- Implemented truthy/falsy dispatch in codegen: bool conditions generate direct checks, numeric conditions generate `(expr != 0)` checks
+- Extended type checker with `is_condition_type()` helper accepting bool, all integer types (i8-i128, u8-u128, isize, usize), and float types (f32, f64)
+- Added comprehensive test coverage: 9 new codegen unit tests, 7 new integration end-to-end tests, 5 new type checker tests
+- Created 7 verification programs: counter.hl (while loop), fizzbuzz_numeric.hl (using sentinels), early_exit.hl (break), continue_skip.hl (continue), nested_loops.hl (break scope), truthy.hl (0 falsy, nonzero truthy), compound_assign.hl (compound operations)
+- All 167 tests passing (up from 146): working HiLow compiler with full Phase 4b control flow support
+- Commit: "Phase 4b: Control flow, loops, truthy/falsy"
 
 ### 2026-05-02 — Phase 4a complete
 - Implemented C code generation backend in src/codegen/mod.rs with comprehensive AST-to-C translation for programs, functions, statements, and expressions
