@@ -1,6 +1,8 @@
 use clap::Parser;
 
 pub mod lexer;
+pub mod ast;
+pub mod parser;
 
 #[derive(Parser)]
 #[command(name = "hilowc")]
