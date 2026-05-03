@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 6b-i bugfix — F-Strings whitespace fix**
+**Current phase: Phase 6b-ii — F-Strings (Format Specifiers)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -1,0 +1,5 @@
+high program(): i32 {
+  let n = 42
+  print(f"Binary: {n:b}")
+  return 0
+}

@@ -19,4 +19,8 @@ void print_f64(double value);
 void print_bool(bool value);
 void print_str(const char *value);
 
+// F-string format helpers
+char* hl_format_binary(unsigned long long value);
+char* hl_format_center(const char* value, int width);
+
 #endif // HILOW_RUNTIME_H

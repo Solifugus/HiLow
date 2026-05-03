@@ -1,0 +1,9 @@
+high program(): i32 {
+  let n = 255
+  print(f"Dec: {n:d}")
+  print(f"Hex: {n:x}")
+  print(f"HEX: {n:X}")
+  print(f"Bin: {n:b}")
+  print(f"Oct: {n:o}")
+  return 0
+}

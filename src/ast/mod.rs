@@ -162,9 +162,26 @@ pub struct QualifiedOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum Align {
+    Left,    // <
+    Right,   // >
+    Center,  // ^
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatSpec {
+    pub fill: Option<char>,
+    pub align: Option<Align>,
+    pub width: Option<u32>,
+    pub precision: Option<u32>,
+    pub type_code: Option<char>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum FStringPart {
     Text(String),
-    Expression(Expression),
+    Expression(Expression, Option<FormatSpec>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

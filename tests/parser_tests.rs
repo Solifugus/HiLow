@@ -734,3 +734,33 @@ fn test_nested_function_parsing() {
         _ => panic!("Expected Program"),
     }
 }
+
+// F-String Format Specifier Tests
+
+#[test]
+fn test_fstring_basic_format_float() {
+    let input = r#"high program(): i32 {
+        let x = 3.14
+        print(f"{x:.2f}")
+        return 0
+    }"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    if let TopLevel::Program(program) = top_level {
+        if let Some(body) = &program.body {
+            if let BlockItem::Statement(Statement::ExprStatement(Expression::Call(call))) = &body.items[1] {
+                if let Expression::FString(fstring) = &call.args[0] {
+                    if let FStringPart::Expression(_, Some(format_spec)) = &fstring.parts[0] {
+                        assert_eq!(format_spec.precision, Some(2));
+                        assert_eq!(format_spec.type_code, Some('f'));
+                    } else {
+                        panic!("Expected f-string expression with format spec");
+                    }
+                }
+            }
+        }
+    }
+}

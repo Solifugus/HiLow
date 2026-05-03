@@ -1,0 +1,12 @@
+high program(): i32 {
+  let pi = 3.14159265
+  print(f"Pi: {pi:.2f}")
+  print(f"Pi: {pi:.4f}")
+
+  let n = 255
+  print(f"Hex: {n:x}")
+  print(f"HEX: {n:X}")
+  print(f"Padded: {n:08d}")
+
+  return 0
+}

@@ -765,7 +765,7 @@ impl TypeChecker {
                 FStringPart::Text(_) => {
                     // Text parts are always valid
                 }
-                FStringPart::Expression(expr) => {
+                FStringPart::Expression(expr, format_spec) => {
                     let expr_type = self.check_expression(expr);
 
                     // Check if the expression type can be interpolated
@@ -785,12 +785,120 @@ impl TypeChecker {
                             );
                         }
                     }
+
+                    // Check format specifier compatibility if present
+                    if let Some(format_spec) = format_spec {
+                        self.check_format_spec_compatibility(&expr_type, format_spec);
+                    }
                 }
             }
         }
 
         // F-strings always have type string
         Type::String
+    }
+
+    fn check_format_spec_compatibility(&mut self, expr_type: &Type, format_spec: &FormatSpec) {
+        // Check type code compatibility
+        if let Some(type_code) = format_spec.type_code {
+            match type_code {
+                'd' | 'x' | 'X' | 'b' | 'o' => {
+                    // Integer format codes
+                    match expr_type {
+                        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+                        Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+                        Type::Isize | Type::Usize => {
+                            // OK
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("format type '{}' requires an integer, got {:?}", type_code, expr_type),
+                                format_spec.position.clone()
+                            );
+                        }
+                    }
+                }
+                'e' | 'E' | 'f' | 'g' => {
+                    // Float format codes
+                    match expr_type {
+                        Type::F32 | Type::F64 => {
+                            // OK
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("format type '{}' requires a float, got {:?}", type_code, expr_type),
+                                format_spec.position.clone()
+                            );
+                        }
+                    }
+                }
+                's' => {
+                    // String format code
+                    match expr_type {
+                        Type::String => {
+                            // OK
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("format type '{}' incompatible with {:?}", type_code, expr_type),
+                                format_spec.position.clone()
+                            );
+                        }
+                    }
+                }
+                'c' => {
+                    // Character format code
+                    match expr_type {
+                        Type::U8 | Type::I8 => {
+                            // OK
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("format type '{}' requires u8 or i8, got {:?}", type_code, expr_type),
+                                format_spec.position.clone()
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    self.add_error(
+                        format!("unknown format type '{}'", type_code),
+                        format_spec.position.clone()
+                    );
+                }
+            }
+        }
+
+        // Check precision validity
+        if let Some(_precision) = format_spec.precision {
+            if let Some(type_code) = format_spec.type_code {
+                match type_code {
+                    'e' | 'E' | 'f' | 'g' => {
+                        // Precision is valid with float type codes
+                    }
+                    'd' | 'x' | 'X' | 'b' | 'o' | 's' | 'c' => {
+                        self.add_error(
+                            format!("precision is not valid with format type '{}'", type_code),
+                            format_spec.position.clone()
+                        );
+                    }
+                    _ => {}
+                }
+            } else {
+                // No type code but has precision - only valid for floats
+                match expr_type {
+                    Type::F32 | Type::F64 => {
+                        // OK - implicit float formatting
+                    }
+                    _ => {
+                        self.add_error(
+                            "precision is only valid with float types".to_string(),
+                            format_spec.position.clone()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn add_error(&mut self, message: String, position: Position) {

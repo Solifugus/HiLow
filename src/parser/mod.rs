@@ -1022,8 +1022,8 @@ impl Parser {
                 }
                 TokenKind::FStringExprStart => {
                     // Parse expression until FStringExprEnd
-                    let expr = self.parse_f_string_expression()?;
-                    parts.push(FStringPart::Expression(expr));
+                    let (expr, format_spec) = self.parse_f_string_expression()?;
+                    parts.push(FStringPart::Expression(expr, format_spec));
                 }
                 TokenKind::FStringEnd => {
                     // End of f-string
@@ -1043,22 +1043,184 @@ impl Parser {
         }))
     }
 
-    fn parse_f_string_expression(&mut self) -> Result<Expression, ParseError> {
+    fn parse_f_string_expression(&mut self) -> Result<(Expression, Option<FormatSpec>), ParseError> {
         let expr = self.parse_expression()?;
 
         // Check for format specifiers (colon after expression)
-        if self.check(&TokenKind::Colon) {
+        let format_spec = if self.check(&TokenKind::Colon) {
             let colon_token = self.advance()?;
-            return Err(ParseError::UnsupportedFeature {
-                feature: "format specifiers".to_string(),
-                position: colon_token.position,
-                suggestion: "format specifiers are not yet supported (Phase 6b-ii)".to_string(),
-            });
-        }
+            Some(self.parse_format_spec(colon_token.position)?)
+        } else {
+            None
+        };
 
         // Expect FStringExprEnd
         self.expect_token(TokenKind::FStringExprEnd, "Expected '}' after f-string expression")?;
 
-        Ok(expr)
+        Ok((expr, format_spec))
+    }
+
+    fn parse_format_spec(&mut self, start_pos: Position) -> Result<FormatSpec, ParseError> {
+        // Format spec is parsed as a sequence of tokens up until the closing brace
+        // We'll collect all tokens and parse them as a string
+        let mut spec_chars = String::new();
+
+        // Collect all characters until FStringExprEnd
+        loop {
+            let token = self.peek()?;
+            match token.kind {
+                TokenKind::FStringExprEnd => break,
+                _ => {
+                    // Consume the token and add its lexeme to the spec string
+                    let consumed_token = self.advance()?;
+                    spec_chars.push_str(&consumed_token.lexeme);
+                }
+            }
+        }
+
+        // If no spec characters found, error
+        if spec_chars.is_empty() {
+            return Err(ParseError::UnexpectedToken {
+                expected: "format specifier after ':'".to_string(),
+                found: TokenKind::FStringExprEnd,
+                position: self.peek()?.position.clone(),
+            });
+        }
+
+        // Parse the format specification
+        self.parse_format_spec_string(&spec_chars, start_pos)
+    }
+
+    fn parse_format_spec_string(&mut self, spec: &str, position: Position) -> Result<FormatSpec, ParseError> {
+        // Parse format spec according to: [fill align] [width] ['.' precision] [type]
+        let chars: Vec<char> = spec.chars().collect();
+        let mut i = 0;
+
+        let mut fill: Option<char> = None;
+        let mut align: Option<Align> = None;
+        let mut width: Option<u32> = None;
+        let mut precision: Option<u32> = None;
+        let mut type_code: Option<char> = None;
+
+        // Parse [fill align]
+        if i < chars.len() && i + 1 < chars.len() {
+            // Check if the second character is an alignment character
+            let possible_align = chars[i + 1];
+            if matches!(possible_align, '<' | '>' | '^') {
+                fill = Some(chars[i]);
+                align = Some(match possible_align {
+                    '<' => Align::Left,
+                    '>' => Align::Right,
+                    '^' => Align::Center,
+                    _ => unreachable!(),
+                });
+                i += 2;
+            } else if matches!(chars[i], '<' | '>' | '^') {
+                // No fill, just align
+                align = Some(match chars[i] {
+                    '<' => Align::Left,
+                    '>' => Align::Right,
+                    '^' => Align::Center,
+                    _ => unreachable!(),
+                });
+                i += 1;
+            }
+        } else if i < chars.len() && matches!(chars[i], '<' | '>' | '^') {
+            // No fill, just align
+            align = Some(match chars[i] {
+                '<' => Align::Left,
+                '>' => Align::Right,
+                '^' => Align::Center,
+                _ => unreachable!(),
+            });
+            i += 1;
+        }
+
+        // Parse [width] - sequence of digits, possibly with leading zero for padding
+        let width_start = i;
+        let mut zero_padding = false;
+
+        // Check for zero-padding (leading 0 in width)
+        if i < chars.len() && chars[i] == '0' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit() {
+            zero_padding = true;
+            i += 1; // Skip the leading 0
+        }
+
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        if width_start < i {
+            let width_str: String = if zero_padding {
+                chars[width_start + 1..i].iter().collect()  // Skip the leading 0
+            } else {
+                chars[width_start..i].iter().collect()
+            };
+            width = Some(width_str.parse().map_err(|_| ParseError::UnexpectedToken {
+                expected: "valid width number".to_string(),
+                found: TokenKind::FStringExprEnd,
+                position: position.clone(),
+            })?);
+
+            // Set fill to '0' if zero-padding was specified
+            if zero_padding {
+                fill = Some('0');
+            }
+        }
+
+        // Parse ['.' precision]
+        if i < chars.len() && chars[i] == '.' {
+            i += 1; // skip the dot
+            let precision_start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            if precision_start < i {
+                let precision_str: String = chars[precision_start..i].iter().collect();
+                precision = Some(precision_str.parse().map_err(|_| ParseError::UnexpectedToken {
+                    expected: "valid precision number".to_string(),
+                    found: TokenKind::FStringExprEnd,
+                    position: position.clone(),
+                })?);
+            } else {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "precision number after '.'".to_string(),
+                    found: TokenKind::FStringExprEnd,
+                    position,
+                });
+            }
+        }
+
+        // Parse [type]
+        if i < chars.len() {
+            let type_char = chars[i];
+            if matches!(type_char, 'd' | 'x' | 'X' | 'b' | 'o' | 'e' | 'E' | 'f' | 'g' | 's' | 'c') {
+                type_code = Some(type_char);
+                i += 1;
+            } else {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "valid format type (d, x, X, b, o, e, E, f, g, s, c)".to_string(),
+                    found: TokenKind::FStringExprEnd,
+                    position: position.clone(),
+                });
+            }
+        }
+
+        // Check if there are any remaining characters
+        if i < chars.len() {
+            return Err(ParseError::UnexpectedToken {
+                expected: "end of format specifier".to_string(),
+                found: TokenKind::FStringExprEnd,
+                position,
+            });
+        }
+
+        Ok(FormatSpec {
+            fill,
+            align,
+            width,
+            precision,
+            type_code,
+            position,
+        })
     }
 }

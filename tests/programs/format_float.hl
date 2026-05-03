@@ -1,0 +1,7 @@
+high program(): i32 {
+  let pi = 3.14159265
+  print(f"Pi: {pi:.2f}")
+  print(f"Pi: {pi:.4f}")
+  print(f"Pi: {pi:.6f}")
+  return 0
+}

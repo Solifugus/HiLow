@@ -724,64 +724,120 @@ impl CodeGenerator {
                         self.output.push_str("\"); ");
                     }
                 }
-                FStringPart::Expression(expr) => {
+                FStringPart::Expression(expr, format_spec) => {
                     let expr_type = self.infer_expression_type(expr);
 
-                    // Generate appropriate format string and conversion
-                    match expr_type {
-                        Type::String => {
-                            // String: concatenate directly
-                            self.output.push_str("strcat(__fstring_buf, ");
+                    if let Some(format_spec) = format_spec {
+                        // Handle special binary format case
+                        if format_spec.type_code == Some('b') {
+                            self.output.push_str("{ char* __tmp_buf = hl_format_binary((unsigned long long)");
                             self.generate_expression(expr, type_checker)?;
                             self.output.push_str("); ");
+
+                            // Handle alignment for binary format
+                            if format_spec.align == Some(Align::Center) && format_spec.width.is_some() {
+                                self.output.push_str(&format!("char* __centered_buf = hl_format_center(__tmp_buf, {}); ", format_spec.width.unwrap()));
+                                self.output.push_str("strcat(__fstring_buf, __centered_buf); free(__tmp_buf); free(__centered_buf); } ");
+                            } else {
+                                // For binary format, we'll implement basic left/right alignment here
+                                if let Some(width) = format_spec.width {
+                                    if format_spec.align == Some(Align::Left) {
+                                        self.output.push_str(&format!("sprintf(__tmp_buf + strlen(__tmp_buf), \"%*s\", {}, \"\"); ", width.saturating_sub(1)));
+                                    } else if format_spec.align == Some(Align::Right) || format_spec.align.is_none() {
+                                        // Right align or default - pad on left
+                                        self.output.push_str("{ char __padded_buf[128]; ");
+                                        self.output.push_str(&format!("sprintf(__padded_buf, \"%*s\", {}, __tmp_buf); ", width));
+                                        self.output.push_str("strcat(__fstring_buf, __padded_buf); } ");
+                                    }
+                                } else {
+                                    self.output.push_str("strcat(__fstring_buf, __tmp_buf); ");
+                                }
+                                self.output.push_str("free(__tmp_buf); } ");
+                            }
+                        } else {
+                            // Generate format string based on format spec
+                            let c_format = self.generate_c_format_string(&expr_type, format_spec)?;
+
+                            // Handle alignment if specified
+                            if format_spec.align == Some(Align::Center) {
+                                // Center alignment requires special handling - use runtime helper
+                                self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"");
+                                self.output.push_str(&c_format);
+                                self.output.push_str("\", ");
+                                self.generate_format_expression_with_cast(&expr_type, expr, type_checker)?;
+                                self.output.push_str("); ");
+                                if let Some(width) = format_spec.width {
+                                    self.output.push_str(&format!("char* __centered_buf = hl_format_center(__tmp_buf, {}); ", width));
+                                    self.output.push_str("strcat(__fstring_buf, __centered_buf); free(__centered_buf); } ");
+                                } else {
+                                    self.output.push_str("strcat(__fstring_buf, __tmp_buf); } ");
+                                }
+                            } else {
+                                // Standard sprintf with possible alignment
+                                self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"");
+                                self.output.push_str(&c_format);
+                                self.output.push_str("\", ");
+                                self.generate_format_expression_with_cast(&expr_type, expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
                         }
-                        Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
-                            // 32-bit integers
-                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", (int)");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
-                        }
-                        Type::I64 => {
-                            // 64-bit integers
-                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", (long long)");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
-                        }
-                        Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
-                            // 32-bit unsigned integers
-                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", (unsigned int)");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
-                        }
-                        Type::U64 => {
-                            // 64-bit unsigned integers
-                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", (unsigned long long)");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
-                        }
-                        Type::F32 => {
-                            // 32-bit floats
-                            self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", (double)");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
-                        }
-                        Type::F64 => {
-                            // 64-bit floats
-                            self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
-                        }
-                        Type::Bool => {
-                            // Boolean: "true" or "false"
-                            self.output.push_str("strcat(__fstring_buf, (");
-                            self.generate_expression(expr, type_checker)?;
-                            self.output.push_str(") ? \"true\" : \"false\"); ");
-                        }
-                        _ => {
-                            return Err(CodegenError::UnsupportedFeature {
-                                feature: format!("f-string interpolation of type {:?}", expr_type),
-                                phase: "Phase 6b-i".to_string(),
-                            });
+                    } else {
+                        // No format specifier - use default formatting
+                        match expr_type {
+                            Type::String => {
+                                // String: concatenate directly
+                                self.output.push_str("strcat(__fstring_buf, ");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); ");
+                            }
+                            Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
+                                // 32-bit integers
+                                self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", (int)");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
+                            Type::I64 => {
+                                // 64-bit integers
+                                self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", (long long)");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
+                            Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
+                                // 32-bit unsigned integers
+                                self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", (unsigned int)");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
+                            Type::U64 => {
+                                // 64-bit unsigned integers
+                                self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", (unsigned long long)");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
+                            Type::F32 => {
+                                // 32-bit floats
+                                self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", (double)");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
+                            Type::F64 => {
+                                // 64-bit floats
+                                self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                            }
+                            Type::Bool => {
+                                // Boolean: "true" or "false"
+                                self.output.push_str("strcat(__fstring_buf, (");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str(") ? \"true\" : \"false\"); ");
+                            }
+                            _ => {
+                                return Err(CodegenError::UnsupportedFeature {
+                                    feature: format!("f-string interpolation of type {:?}", expr_type),
+                                    phase: "Phase 6b-i".to_string(),
+                                });
+                            }
                         }
                     }
                 }
@@ -790,6 +846,132 @@ impl CodeGenerator {
 
         self.output.push_str("__fstring_buf; })");
 
+        Ok(())
+    }
+
+    fn generate_c_format_string(&self, expr_type: &Type, format_spec: &FormatSpec) -> Result<String, CodegenError> {
+        let mut c_format = String::from("%");
+
+        // Add alignment and width flags
+        if let Some(align) = &format_spec.align {
+            match align {
+                Align::Left => c_format.push('-'),
+                Align::Right => {
+                    // Right alignment is default in printf, no flag needed unless there's zero-padding
+                }
+                Align::Center => {
+                    // Center alignment handled separately in caller
+                }
+            }
+        }
+
+        // Add fill character for zero-padding
+        if format_spec.fill == Some('0') && format_spec.width.is_some() {
+            c_format.push('0');
+        } else if format_spec.fill.is_some() && format_spec.fill != Some(' ') {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: "custom fill characters other than '0' and ' '".to_string(),
+                phase: "Phase 6b-ii".to_string(),
+            });
+        }
+
+        // Add width
+        if let Some(width) = format_spec.width {
+            if format_spec.align != Some(Align::Center) {
+                c_format.push_str(&width.to_string());
+            }
+        }
+
+        // Add precision
+        if let Some(precision) = format_spec.precision {
+            c_format.push('.');
+            c_format.push_str(&precision.to_string());
+        }
+
+        // Add type specifier
+        if let Some(type_code) = format_spec.type_code {
+            match type_code {
+                'd' => c_format.push('d'),
+                'x' => c_format.push('x'),
+                'X' => c_format.push('X'),
+                'o' => c_format.push('o'),
+                'b' => {
+                    // Binary format uses our custom runtime helper
+                    c_format.push('s');  // We'll format as string using hl_format_binary
+                }
+                'e' => c_format.push('e'),
+                'E' => c_format.push('E'),
+                'f' => c_format.push('f'),
+                'g' => c_format.push('g'),
+                's' => c_format.push('s'),
+                'c' => c_format.push('c'),
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("format type '{}'", type_code),
+                        phase: "Phase 6b-ii".to_string(),
+                    });
+                }
+            }
+        } else {
+            // Default format based on type
+            match expr_type {
+                Type::I8 | Type::I16 | Type::I32 | Type::Isize => c_format.push('d'),
+                Type::I64 => c_format.push_str("lld"),
+                Type::U8 | Type::U16 | Type::U32 | Type::Usize => c_format.push('u'),
+                Type::U64 => c_format.push_str("llu"),
+                Type::F32 | Type::F64 => c_format.push('g'),
+                Type::String => c_format.push('s'),
+                Type::Bool => c_format.push('s'), // We'll handle bool conversion separately
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("default formatting for type {:?}", expr_type),
+                        phase: "Phase 6b-ii".to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(c_format)
+    }
+
+    fn generate_format_expression_with_cast(&mut self, expr_type: &Type, expr: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate appropriate casting based on expression type and format requirements
+        match expr_type {
+            Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
+                self.output.push_str("(int)");
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::I64 => {
+                self.output.push_str("(long long)");
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
+                self.output.push_str("(unsigned int)");
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::U64 => {
+                self.output.push_str("(unsigned long long)");
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::F32 => {
+                self.output.push_str("(double)");
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::F64 => {
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::String => {
+                self.generate_expression(expr, type_checker)?;
+            }
+            Type::Bool => {
+                self.output.push_str("(");
+                self.generate_expression(expr, type_checker)?;
+                self.output.push_str(") ? \"true\" : \"false\"");
+            }
+            _ => {
+                self.generate_expression(expr, type_checker)?;
+            }
+        }
         Ok(())
     }
 }
