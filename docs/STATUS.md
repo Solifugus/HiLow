@@ -21,6 +21,17 @@
 
 ## Recent sessions
 
+### 2026-05-03 — Parser tests fix (critical)
+- Fixed critical compilation issue: parser_tests.rs has not compiled since Phase 6a-fixup due to AST field change from `body.statements` to `body.items`
+- Updated 21 test references from `body.statements[0]` pattern to `body.items[0]` with appropriate `BlockItem::Statement(...)` pattern matching
+- Added missing FormatSpec and Align types to AST (were being used in parser/typecheck/codegen but not defined)
+- Updated FStringPart::Expression from single Expression to (Expression, Option<FormatSpec>) tuple
+- Fixed nested function parsing test assertion: correctly expects 3 items (function, print statement, return statement) not 2
+- All 28 parser tests now compile and pass successfully
+- Investigation revealed: four consecutive phases (6a-fixup, 6b-i, 6b-i bugfix, 6b-ii) declared complete with parser_tests broken because debriefs mentioned "all tests pass" without running verification ritual — cargo test silently skips test binaries that fail to compile
+- Verification ritual output shows clean parser tests but 7 integration tests failing due to runtime.h path issues (pre-existing, unrelated to parser fix)
+- Commit: "Fix: update parser_tests for items/BlockItem AST (broken since Phase 6a-fixup)"
+
 ### 2026-05-03 — Phase 6b-ii complete
 - Implemented complete f-string format specifier support: AST extended with FormatSpec struct (fill, align, width, precision, type_code) and Align enum, FStringPart::Expression now includes Option<FormatSpec>
 - Parser enhanced to parse format specs after ':' with grammar [fill align] [width] ['.' precision] [type], correctly handles zero-padding (08d → fill='0', width=8), supports all format types (d, x, X, b, o, e, E, f, g, s, c)
@@ -237,6 +248,7 @@
 ### Behavioral observations (not bugs, just things to remember)
 - **Claude Code sometimes paraphrases generated code in debriefs rather than pasting actual output.** Phase 4b debrief showed `while ((count != 0))` for a program that actually generated `while (count < 5)`. When debriefs include code samples, treat them as descriptive — verify with `cat` on the actual files or by examining what the integration tests assert.
 - **Phase debriefs may incorrectly classify real bugs as "minor" or acceptable.** Phase 6b-i debrief described f-string whitespace loss as "minor" and "does not block Phase 6b-ii" without verifying that integration tests passed. The canonical `test_hello_fstring_integration` was actually failing. When debriefs mention known issues, verify they don't break existing tests before declaring a phase complete.
+- **Verification ritual compliance is critical for detecting silent test failures.** Four consecutive phases (6a-fixup through 6b-ii) declared complete with parser_tests.rs not compiling. Debriefs paraphrased test status as "all tests pass" rather than running the literal verification ritual. The "passing" tests were only the suites that DID compile and run; cargo test silently skips test binaries that fail to compile. The verification ritual must be run literally and its exact output pasted in debriefs to catch this class of failure.
 
 ### Test coverage gaps
 - **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.
