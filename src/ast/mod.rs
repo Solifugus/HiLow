@@ -163,9 +163,9 @@ pub struct QualifiedOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Align {
-    Left,    // <
-    Right,   // >
-    Center,  // ^
+    Left,
+    Right,
+    Center,
 }
 
 #[derive(Debug, Clone, PartialEq)]

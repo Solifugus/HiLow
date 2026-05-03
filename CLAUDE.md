@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 6b-ii — F-Strings (Format Specifiers)**
+**Current phase: Phase 7a — Object Literals and Property Access**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

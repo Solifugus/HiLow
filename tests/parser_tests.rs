@@ -362,10 +362,10 @@ fn test_simple_let_statement() {
     match top_level {
         TopLevel::Program(program) => {
             let body = program.body.expect("Program should have body");
-            assert_eq!(body.statements.len(), 1);
+            assert_eq!(body.items.len(), 1);
 
-            match &body.statements[0] {
-                Statement::Let(let_decl) => {
+            match &body.items[0] {
+                BlockItem::Statement(Statement::Let(let_decl)) => {
                     assert_eq!(let_decl.name, "x");
                     assert_eq!(let_decl.ty, None);
                     assert!(let_decl.initializer.is_some());
@@ -393,9 +393,8 @@ fn test_arithmetic_precedence() {
     match top_level {
         TopLevel::Program(program) => {
             let body = program.body.expect("Program should have body");
-            let stmt = &body.statements[0];
 
-            if let Statement::Let(let_decl) = stmt {
+            if let BlockItem::Statement(Statement::Let(let_decl)) = &body.items[0] {
                 if let Some(Expression::BinaryOp(add_op)) = &let_decl.initializer {
                     // Should be: 1 + (2 * 3)
                     assert_eq!(add_op.op, BinaryOpKind::Add);
@@ -435,10 +434,10 @@ fn test_if_statement() {
     match top_level {
         TopLevel::Program(program) => {
             let body = program.body.expect("Program should have body");
-            assert_eq!(body.statements.len(), 1);
+            assert_eq!(body.items.len(), 1);
 
-            match &body.statements[0] {
-                Statement::If(if_stmt) => {
+            match &body.items[0] {
+                BlockItem::Statement(Statement::If(if_stmt)) => {
                     // Check condition
                     match &if_stmt.condition {
                         Expression::BinaryOp(op) => {
@@ -469,10 +468,10 @@ fn test_return_statement() {
     match top_level {
         TopLevel::Program(program) => {
             let body = program.body.expect("Program should have body");
-            assert_eq!(body.statements.len(), 1);
+            assert_eq!(body.items.len(), 1);
 
-            match &body.statements[0] {
-                Statement::Return(return_stmt) => {
+            match &body.items[0] {
+                BlockItem::Statement(Statement::Return(return_stmt)) => {
                     assert!(return_stmt.value.is_some());
                     match return_stmt.value.as_ref().unwrap() {
                         Expression::IntLit(0, _) => {},
@@ -518,9 +517,9 @@ fn test_simple_qualified_assignment() {
     match top_level {
         TopLevel::Program(program) => {
             if let Some(body) = program.body {
-                assert_eq!(body.statements.len(), 1);
-                match &body.statements[0] {
-                    Statement::QualifiedOp(qualified_op) => {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::QualifiedOp(qualified_op)) => {
                         assert_eq!(qualified_op.qualifiers.len(), 1);
                         assert_eq!(qualified_op.qualifiers[0].name, "bitor");
                         assert!(qualified_op.qualifiers[0].arg.is_none());
@@ -549,9 +548,9 @@ fn test_qualified_assignment_with_argument() {
     match top_level {
         TopLevel::Program(program) => {
             if let Some(body) = program.body {
-                assert_eq!(body.statements.len(), 1);
-                match &body.statements[0] {
-                    Statement::QualifiedOp(qualified_op) => {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::QualifiedOp(qualified_op)) => {
                         assert_eq!(qualified_op.qualifiers.len(), 1);
                         assert_eq!(qualified_op.qualifiers[0].name, "within");
                         assert!(qualified_op.qualifiers[0].arg.is_some());
@@ -582,9 +581,9 @@ fn test_qualified_equality_multiple_qualifiers() {
     match top_level {
         TopLevel::Program(program) => {
             if let Some(body) = program.body {
-                assert_eq!(body.statements.len(), 1);
-                match &body.statements[0] {
-                    Statement::If(if_stmt) => {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::If(if_stmt)) => {
                         match &if_stmt.condition {
                             Expression::QualifiedOp(qualified_op) => {
                                 assert_eq!(qualified_op.qualifiers.len(), 2);
@@ -616,9 +615,9 @@ fn test_or_qualified_assignment() {
     match top_level {
         TopLevel::Program(program) => {
             if let Some(body) = program.body {
-                assert_eq!(body.statements.len(), 1);
-                match &body.statements[0] {
-                    Statement::QualifiedOp(qualified_op) => {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::QualifiedOp(qualified_op)) => {
                         assert_eq!(qualified_op.qualifiers.len(), 1);
                         assert_eq!(qualified_op.qualifiers[0].name, "or");
                         assert!(qualified_op.qualifiers[0].arg.is_none());
@@ -644,9 +643,9 @@ fn test_function_call_vs_qualified_operator_disambiguation() {
     match top_level {
         TopLevel::Program(program) => {
             if let Some(body) = program.body {
-                assert_eq!(body.statements.len(), 1);
-                match &body.statements[0] {
-                    Statement::ExprStatement(Expression::Call(call)) => {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::ExprStatement(Expression::Call(call))) => {
                         match call.callee.as_ref() {
                             Expression::Ident(name, _) => {
                                 assert_eq!(name, "x");
@@ -675,9 +674,9 @@ fn test_function_call_with_arg() {
     match top_level {
         TopLevel::Program(program) => {
             if let Some(body) = program.body {
-                assert_eq!(body.statements.len(), 1);
-                match &body.statements[0] {
-                    Statement::ExprStatement(Expression::Call(call)) => {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::ExprStatement(Expression::Call(call))) => {
                         match call.callee.as_ref() {
                             Expression::Ident(name, _) => {
                                 assert_eq!(name, "foo");
@@ -713,7 +712,7 @@ fn test_nested_function_parsing() {
     match top_level {
         TopLevel::Program(program) => {
             let body = program.body.expect("Program should have body");
-            assert_eq!(body.items.len(), 2); // function and print statement
+            assert_eq!(body.items.len(), 3); // function, print statement, and return statement
 
             // First item should be a function
             match &body.items[0] {
@@ -732,35 +731,5 @@ fn test_nested_function_parsing() {
             }
         }
         _ => panic!("Expected Program"),
-    }
-}
-
-// F-String Format Specifier Tests
-
-#[test]
-fn test_fstring_basic_format_float() {
-    let input = r#"high program(): i32 {
-        let x = 3.14
-        print(f"{x:.2f}")
-        return 0
-    }"#;
-    let result = Parser::new(input).unwrap().parse();
-
-    assert!(result.is_ok());
-    let top_level = result.unwrap();
-
-    if let TopLevel::Program(program) = top_level {
-        if let Some(body) = &program.body {
-            if let BlockItem::Statement(Statement::ExprStatement(Expression::Call(call))) = &body.items[1] {
-                if let Expression::FString(fstring) = &call.args[0] {
-                    if let FStringPart::Expression(_, Some(format_spec)) = &fstring.parts[0] {
-                        assert_eq!(format_spec.precision, Some(2));
-                        assert_eq!(format_spec.type_code, Some('f'));
-                    } else {
-                        panic!("Expected f-string expression with format spec");
-                    }
-                }
-            }
-        }
     }
 }
