@@ -52,30 +52,36 @@ fn compile_program(input_path: &str, output_path: &str) -> Result<(), Box<dyn st
     let c_code = codegen.generate(&ast, &type_checker)
         .map_err(|e| format!("Code generation error: {}", e))?;
 
-    // Write C code to a temporary file
-    let temp_c_file = format!("/tmp/hilow_{}.c", std::process::id());
+    // Create a unique temporary directory per process to avoid race conditions
+    let pid = std::process::id();
+    let temp_dir = format!("/tmp/hilow_{}", pid);
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("Failed to create temporary directory: {}", e))?;
+
+    // Write C code to the temporary directory
+    let temp_c_file = format!("{}/main.c", temp_dir);
     fs::write(&temp_c_file, c_code)
         .map_err(|e| format!("Failed to write temporary C file: {}", e))?;
 
-    // Copy runtime files to temporary directory
+    // Copy runtime files to the temporary directory
     let runtime_h_content = include_str!("runtime/runtime.h");
     let runtime_c_content = include_str!("runtime/runtime.c");
 
-    let temp_runtime_h = format!("/tmp/runtime.h");
-    let temp_runtime_c = format!("/tmp/hilow_{}_runtime.c", std::process::id());
+    let temp_runtime_h = format!("{}/runtime.h", temp_dir);
+    let temp_runtime_c = format!("{}/runtime.c", temp_dir);
 
     fs::write(&temp_runtime_h, runtime_h_content)
         .map_err(|e| format!("Failed to write runtime.h: {}", e))?;
     fs::write(&temp_runtime_c, runtime_c_content)
         .map_err(|e| format!("Failed to write runtime.c: {}", e))?;
 
-    // Compile with cc
+    // Compile with cc, using the unique temp directory for includes
     let status = Command::new("cc")
         .arg("-o")
         .arg(output_path)
         .arg(&temp_c_file)
         .arg(&temp_runtime_c)
-        .arg("-I/tmp") // Include directory for runtime.h
+        .arg(format!("-I{}", temp_dir)) // Include directory for runtime.h
         .status()
         .map_err(|e| format!("Failed to invoke C compiler: {}", e))?;
 
@@ -83,10 +89,10 @@ fn compile_program(input_path: &str, output_path: &str) -> Result<(), Box<dyn st
         return Err("C compilation failed".into());
     }
 
-    // Clean up temporary files
-    let _ = fs::remove_file(&temp_c_file);
-    let _ = fs::remove_file(&temp_runtime_h);
-    let _ = fs::remove_file(&temp_runtime_c);
+    // Clean up the temporary directory and all files
+    // Note: Using per-process temp directories prevents race conditions when
+    // multiple hilowc invocations run concurrently (e.g., during parallel cargo test)
+    let _ = fs::remove_dir_all(&temp_dir);
 
     println!("Successfully compiled {} to {}", input_path, output_path);
     Ok(())

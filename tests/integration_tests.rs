@@ -565,17 +565,24 @@ fn test_arithmetic_fstring_integration() {
 }
 
 #[test]
-fn test_format_spec_error_integration() {
-    // This test verifies that format specifiers produce the exact error message required
-    let result = compile_program("tests/programs/format_spec_error.hl");
+fn test_format_spec_basic_integration() {
+    // This test verifies that format specifiers work correctly (converted from error test in Phase 6b-ii)
+    let executable = compile_program("tests/programs/format_spec_basic.hl")
+        .expect("Failed to compile format_spec_basic.hl");
 
-    match result {
-        Ok(_) => panic!("Expected compilation to fail for format specifiers"),
-        Err(error_message) => {
-            assert!(error_message.contains("format specifiers are not yet supported (Phase 6b-ii)"),
-                    "Error message should contain exact Phase 6b-ii text. Got: {}", error_message);
-        }
-    }
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run format_spec_basic program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/format_spec_basic.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
 }
 
 // Whitespace preservation regression tests
