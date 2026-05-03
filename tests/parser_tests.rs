@@ -338,12 +338,150 @@ fn test_unclosed_function_body() {
     let result = Parser::new(input).unwrap().parse();
 
     assert!(result.is_err());
+    // Phase 2b: Now that we parse statements, the error occurs when trying to parse expressions
     if let Err(error) = result {
         match error {
-            hilowc::parser::ParseError::UnexpectedEof { expected, .. } => {
-                assert!(expected.contains("'}'"));
+            hilowc::parser::ParseError::UnexpectedToken { found, .. } => {
+                assert_eq!(found, hilowc::lexer::TokenKind::Eof);
             }
-            _ => panic!("Expected UnexpectedEof error for unclosed body, got {:?}", error),
+            _ => panic!("Expected UnexpectedToken error for EOF, got {:?}", error),
         }
+    }
+}
+
+// Phase 2b tests
+
+#[test]
+fn test_simple_let_statement() {
+    let input = "high program(): i32 { let x = 5 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.statements.len(), 1);
+
+            match &body.statements[0] {
+                Statement::Let(let_decl) => {
+                    assert_eq!(let_decl.name, "x");
+                    assert_eq!(let_decl.ty, None);
+                    assert!(let_decl.initializer.is_some());
+
+                    match let_decl.initializer.as_ref().unwrap() {
+                        Expression::IntLit(5, _) => {},
+                        _ => panic!("Expected integer literal 5"),
+                    }
+                }
+                _ => panic!("Expected let statement"),
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_arithmetic_precedence() {
+    let input = "high program(): i32 { let x = 1 + 2 * 3 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            let stmt = &body.statements[0];
+
+            if let Statement::Let(let_decl) = stmt {
+                if let Some(Expression::BinaryOp(add_op)) = &let_decl.initializer {
+                    // Should be: 1 + (2 * 3)
+                    assert_eq!(add_op.op, BinaryOpKind::Add);
+
+                    // Left side should be 1
+                    match add_op.lhs.as_ref() {
+                        Expression::IntLit(1, _) => {},
+                        _ => panic!("Expected left side to be 1"),
+                    }
+
+                    // Right side should be 2 * 3
+                    match add_op.rhs.as_ref() {
+                        Expression::BinaryOp(mul_op) => {
+                            assert_eq!(mul_op.op, BinaryOpKind::Mul);
+                        }
+                        _ => panic!("Expected right side to be multiplication"),
+                    }
+                } else {
+                    panic!("Expected binary operation in let initializer");
+                }
+            } else {
+                panic!("Expected let statement");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_if_statement() {
+    let input = "high program(): i32 { if (x > 5) { let y = 10 } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.statements.len(), 1);
+
+            match &body.statements[0] {
+                Statement::If(if_stmt) => {
+                    // Check condition
+                    match &if_stmt.condition {
+                        Expression::BinaryOp(op) => {
+                            assert_eq!(op.op, BinaryOpKind::Greater);
+                        }
+                        _ => panic!("Expected comparison in if condition"),
+                    }
+
+                    // Check then block
+                    assert_eq!(if_stmt.then_block.statements.len(), 1);
+                    assert!(if_stmt.else_block.is_none());
+                }
+                _ => panic!("Expected if statement"),
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_return_statement() {
+    let input = "high program(): i32 { return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.statements.len(), 1);
+
+            match &body.statements[0] {
+                Statement::Return(return_stmt) => {
+                    assert!(return_stmt.value.is_some());
+                    match return_stmt.value.as_ref().unwrap() {
+                        Expression::IntLit(0, _) => {},
+                        _ => panic!("Expected return value 0"),
+                    }
+                }
+                _ => panic!("Expected return statement"),
+            }
+        }
+        _ => panic!("Expected Program"),
     }
 }

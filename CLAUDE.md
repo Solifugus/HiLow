@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 2b — Statements and Basic Expressions**
+**Current phase: Phase 3 — AST and Basic Type System**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

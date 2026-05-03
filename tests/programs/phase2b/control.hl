@@ -1,0 +1,18 @@
+high program(): i32 {
+  let x = 10
+  if (x > 5) {
+    let y = x * 2
+  } else {
+    let y = x / 2
+  }
+
+  while (x > 0) {
+    x -= 1
+  }
+
+  loop {
+    break
+  }
+
+  return 0
+}

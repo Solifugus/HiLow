@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 2b — Statements and Basic Expressions
+**Phase:** Phase 3 — AST and Basic Type System
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 2a: Program/module structure and signatures
+**Last commit:** Phase 2b: Statements and expressions
 
 ---
 
@@ -20,6 +20,18 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 2b complete
+- Extended AST with full Phase 2b nodes: Statement enum (Let, Return, If, While, Loop, Break, Continue, Assign, ExprStatement), Expression enum (IntLit, FloatLit, BoolLit, Ident, BinaryOp, UnaryOp, Call, MemberAccess, IndexAccess, IsCheck), and supporting structures (BinaryOpKind, UnaryOpKind, AssignOpKind)
+- Implemented comprehensive statement parsing: let declarations (with optional type, optional initializer), return statements, if/else statements, while/loop statements, break/continue statements, assignment statements (=, +=, -=, *=, /=, %=), expression statements
+- Implemented Pratt parser for expression parsing with 12-level operator precedence: or(1) < and(2) < comparison(4) < bitwise_or(5) < bitwise_xor(6) < bitwise_and(7) < shifts(8) < add/sub(9) < mul/div/mod(10), plus unary and postfix
+- Function calls, member access (.), and array indexing ([]) parsing implemented
+- Replaced body placeholder system with direct statement/block parsing in programs and functions
+- Updated Program and Function AST to include both body_placeholder and body fields for compatibility
+- All verification programs parse successfully: arith.hl (arithmetic precedence), control.hl (control flow), equality.hl (equality operators including ?=, !=, is)
+- Added 4 comprehensive parser tests for Phase 2b functionality plus 3 verification tests
+- All 104 tests passing (81 lexer + 20 parser + 3 verification)
+- Commit: "Phase 2b: Statements and expressions"
 
 ### 2026-05-02 — Phase 2a complete
 - Implemented parser foundation with hand-written recursive descent parser

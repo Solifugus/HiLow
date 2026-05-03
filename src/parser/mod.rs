@@ -73,17 +73,25 @@ impl Parser {
         self.expect_token(TokenKind::Colon, "Expected ':' after parameter list")?;
         let return_type = self.parse_type()?;
 
-        // Parse body (skip with brace counting)
-        let body = self.parse_body_placeholder()?;
+        // Parse body - Phase 2b: parse actual statements
+        let body_start = self.peek()?.position.clone();
+        let body = self.parse_block()?;
 
         // Expect EOF
         self.expect_token(TokenKind::Eof, "Expected end of file")?;
+
+        // Create placeholder for compatibility
+        let body_placeholder = BodyPlaceholder {
+            start_position: body_start.clone(),
+            end_position: body.position.clone(),
+        };
 
         Ok(Program {
             mode,
             params,
             return_type,
-            body,
+            body_placeholder,
+            body: Some(body),
             position: start_pos,
         })
     }
@@ -149,15 +157,23 @@ impl Parser {
         self.expect_token(TokenKind::Colon, "Expected ':' after parameter list")?;
         let return_type = self.parse_type()?;
 
-        // Parse body (skip with brace counting)
-        let body = self.parse_body_placeholder()?;
+        // Parse body - Phase 2b: parse actual statements
+        let body_start = self.peek()?.position.clone();
+        let body = self.parse_block()?;
+
+        // Create placeholder for compatibility
+        let body_placeholder = BodyPlaceholder {
+            start_position: body_start.clone(),
+            end_position: body.position.clone(),
+        };
 
         Ok(Function {
             name,
             mode: function_mode,
             params,
             return_type,
-            body,
+            body_placeholder,
+            body: Some(body),
             is_export,
             position: start_pos,
         })
@@ -321,6 +337,401 @@ impl Parser {
             start_position,
             end_position,
         })
+    }
+
+    // Phase 2b: Statement and Expression Parsing
+
+    fn parse_block(&mut self) -> Result<Block, ParseError> {
+        let start_token = self.expect_token(TokenKind::LeftBrace, "Expected '{'")?;
+        let position = start_token.position;
+
+        let mut statements = Vec::new();
+
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            statements.push(self.parse_statement()?);
+        }
+
+        self.expect_token(TokenKind::RightBrace, "Expected '}'")?;
+
+        Ok(Block { statements, position })
+    }
+
+    fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        match &self.peek()?.kind {
+            TokenKind::Let => self.parse_let_statement(),
+            TokenKind::Return => self.parse_return_statement(),
+            TokenKind::If => self.parse_if_statement(),
+            TokenKind::While => self.parse_while_statement(),
+            TokenKind::Loop => self.parse_loop_statement(),
+            TokenKind::Break => self.parse_break_statement(),
+            TokenKind::Continue => self.parse_continue_statement(),
+            _ => {
+                // Try to parse assignment or expression statement
+                let checkpoint = self.current;
+
+                // Try assignment first
+                if let Ok(assignment) = self.try_parse_assignment() {
+                    return Ok(Statement::Assign(assignment));
+                }
+
+                // Reset and parse as expression statement
+                self.current = checkpoint;
+                let expr = self.parse_expression()?;
+                Ok(Statement::ExprStatement(expr))
+            }
+        }
+    }
+
+    fn parse_let_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'let'
+
+        let name_token = self.expect_identifier("Expected variable name after 'let'")?;
+        let name = name_token.lexeme;
+
+        // Optional type annotation
+        let ty = if self.check(&TokenKind::Colon) {
+            self.advance()?; // consume ':'
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Optional initializer
+        let initializer = if self.check(&TokenKind::Equal) {
+            self.advance()?; // consume '='
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        Ok(Statement::Let(LetDecl {
+            name,
+            ty,
+            initializer,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_return_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'return'
+
+        // Optional return value
+        let value = if self.check(&TokenKind::RightBrace) ||
+                       self.check(&TokenKind::Semicolon) ||
+                       self.is_at_end() {
+            None
+        } else {
+            Some(self.parse_expression()?)
+        };
+
+        Ok(Statement::Return(ReturnStmt {
+            value,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_if_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'if'
+
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'if'")?;
+        let condition = self.parse_expression()?;
+        self.expect_token(TokenKind::RightParen, "Expected ')' after if condition")?;
+
+        let then_block = self.parse_block()?;
+
+        let else_block = if self.check(&TokenKind::Else) {
+            self.advance()?; // consume 'else'
+
+            if self.check(&TokenKind::If) {
+                // else if - we'll need to handle this by wrapping the if statement in a block
+                let if_stmt = self.parse_if_statement()?;
+                if let Statement::If(if_stmt) = if_stmt {
+                    Some(Block {
+                        statements: vec![Statement::If(if_stmt)],
+                        position: start_pos.clone(),
+                    })
+                } else {
+                    unreachable!()
+                }
+            } else {
+                // else block
+                Some(self.parse_block()?)
+            }
+        } else {
+            None
+        };
+
+        Ok(Statement::If(IfStmt {
+            condition,
+            then_block,
+            else_block,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_while_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'while'
+
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'while'")?;
+        let condition = self.parse_expression()?;
+        self.expect_token(TokenKind::RightParen, "Expected ')' after while condition")?;
+
+        let body = self.parse_block()?;
+
+        Ok(Statement::While(WhileStmt {
+            condition,
+            body,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_loop_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'loop'
+        let body = self.parse_block()?;
+
+        Ok(Statement::Loop(LoopStmt {
+            body,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_break_statement(&mut self) -> Result<Statement, ParseError> {
+        let pos = self.advance()?.position; // consume 'break'
+        Ok(Statement::Break(pos))
+    }
+
+    fn parse_continue_statement(&mut self) -> Result<Statement, ParseError> {
+        let pos = self.advance()?.position; // consume 'continue'
+        Ok(Statement::Continue(pos))
+    }
+
+    fn try_parse_assignment(&mut self) -> Result<AssignStmt, ParseError> {
+        let target = self.parse_primary_expression()?;
+
+        let op_token = self.peek()?;
+        let op = match &op_token.kind {
+            TokenKind::Equal => AssignOpKind::Assign,
+            TokenKind::PlusEqual => AssignOpKind::AddAssign,
+            TokenKind::MinusEqual => AssignOpKind::SubAssign,
+            TokenKind::StarEqual => AssignOpKind::MulAssign,
+            TokenKind::SlashEqual => AssignOpKind::DivAssign,
+            TokenKind::PercentEqual => AssignOpKind::ModAssign,
+            _ => {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "assignment operator".to_string(),
+                    found: op_token.kind.clone(),
+                    position: op_token.position.clone(),
+                });
+            }
+        };
+
+        let position = self.advance()?.position; // consume assignment operator
+        let value = self.parse_expression()?;
+
+        Ok(AssignStmt {
+            target,
+            op,
+            value,
+            position,
+        })
+    }
+
+    // Expression parsing with Pratt parser for operator precedence
+
+    fn parse_expression(&mut self) -> Result<Expression, ParseError> {
+        self.parse_expression_with_precedence(0)
+    }
+
+    fn parse_expression_with_precedence(&mut self, min_prec: u8) -> Result<Expression, ParseError> {
+        let mut left = self.parse_unary_expression()?;
+
+        while !self.is_at_end() {
+            let op_token = self.peek()?;
+
+            if let Some((op, prec, _)) = self.get_binary_operator_info(&op_token.kind) {
+                if prec < min_prec {
+                    break;
+                }
+
+                let position = self.advance()?.position; // consume operator
+                let right = self.parse_expression_with_precedence(prec + 1)?;
+
+                left = Expression::BinaryOp(BinaryOp {
+                    lhs: Box::new(left),
+                    op,
+                    rhs: Box::new(right),
+                    position,
+                });
+            } else {
+                break;
+            }
+        }
+
+        Ok(left)
+    }
+
+    fn parse_unary_expression(&mut self) -> Result<Expression, ParseError> {
+        let token = self.peek()?;
+
+        match &token.kind {
+            TokenKind::Minus => {
+                let position = self.advance()?.position;
+                let operand = self.parse_unary_expression()?;
+                Ok(Expression::UnaryOp(UnaryOp {
+                    op: UnaryOpKind::Neg,
+                    operand: Box::new(operand),
+                    position,
+                }))
+            }
+            TokenKind::Not => {
+                let position = self.advance()?.position;
+                let operand = self.parse_unary_expression()?;
+                Ok(Expression::UnaryOp(UnaryOp {
+                    op: UnaryOpKind::Not,
+                    operand: Box::new(operand),
+                    position,
+                }))
+            }
+            TokenKind::Tilde => {
+                let position = self.advance()?.position;
+                let operand = self.parse_unary_expression()?;
+                Ok(Expression::UnaryOp(UnaryOp {
+                    op: UnaryOpKind::BitNot,
+                    operand: Box::new(operand),
+                    position,
+                }))
+            }
+            _ => self.parse_postfix_expression(),
+        }
+    }
+
+    fn parse_postfix_expression(&mut self) -> Result<Expression, ParseError> {
+        let mut expr = self.parse_primary_expression()?;
+
+        loop {
+            match &self.peek()?.kind {
+                TokenKind::LeftParen => {
+                    // Function call
+                    let position = self.advance()?.position; // consume '('
+                    let mut args = Vec::new();
+
+                    if !self.check(&TokenKind::RightParen) {
+                        args.push(self.parse_expression()?);
+
+                        while self.check(&TokenKind::Comma) {
+                            self.advance()?; // consume ','
+                            args.push(self.parse_expression()?);
+                        }
+                    }
+
+                    self.expect_token(TokenKind::RightParen, "Expected ')' after function arguments")?;
+
+                    expr = Expression::Call(Call {
+                        callee: Box::new(expr),
+                        args,
+                        position,
+                    });
+                }
+                TokenKind::Dot => {
+                    // Member access
+                    let position = self.advance()?.position; // consume '.'
+                    let member_token = self.expect_identifier("Expected member name after '.'")?;
+
+                    expr = Expression::MemberAccess(MemberAccess {
+                        object: Box::new(expr),
+                        member: member_token.lexeme,
+                        position,
+                    });
+                }
+                TokenKind::LeftBracket => {
+                    // Index access
+                    let position = self.advance()?.position; // consume '['
+                    let index = self.parse_expression()?;
+                    self.expect_token(TokenKind::RightBracket, "Expected ']' after array index")?;
+
+                    expr = Expression::IndexAccess(IndexAccess {
+                        object: Box::new(expr),
+                        index: Box::new(index),
+                        position,
+                    });
+                }
+                _ => break,
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
+        let token = self.advance()?;
+
+        match token.kind {
+            TokenKind::Integer(n) => Ok(Expression::IntLit(n, token.position)),
+            TokenKind::Float(f) => Ok(Expression::FloatLit(f, token.position)),
+            TokenKind::True => Ok(Expression::BoolLit(true, token.position)),
+            TokenKind::False => Ok(Expression::BoolLit(false, token.position)),
+            TokenKind::Identifier => Ok(Expression::Ident(token.lexeme, token.position)),
+            TokenKind::LeftParen => {
+                // Parenthesized expression
+                let expr = self.parse_expression()?;
+                self.expect_token(TokenKind::RightParen, "Expected ')' after expression")?;
+                Ok(expr)
+            }
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "expression".to_string(),
+                found: token.kind,
+                position: token.position,
+            }),
+        }
+    }
+
+    fn get_binary_operator_info(&self, token_kind: &TokenKind) -> Option<(BinaryOpKind, u8, bool)> {
+        // Returns (operator, precedence, is_right_associative)
+        // Precedence levels (higher number = higher precedence):
+        match token_kind {
+            // Level 1: or
+            TokenKind::Or => Some((BinaryOpKind::Or, 1, false)),
+
+            // Level 2: and
+            TokenKind::And => Some((BinaryOpKind::And, 2, false)),
+
+            // Level 4: comparisons (note: 'not' is unary, handled elsewhere)
+            TokenKind::EqStrict => Some((BinaryOpKind::Eq, 4, false)),
+            TokenKind::NotEq => Some((BinaryOpKind::NotEq, 4, false)),
+            TokenKind::NotLess => Some((BinaryOpKind::NotLess, 4, false)),
+            TokenKind::NotGreater => Some((BinaryOpKind::NotGreater, 4, false)),
+            TokenKind::Less => Some((BinaryOpKind::Less, 4, false)),
+            TokenKind::Greater => Some((BinaryOpKind::Greater, 4, false)),
+            TokenKind::LessEqual => Some((BinaryOpKind::LessEq, 4, false)),
+            TokenKind::GreaterEqual => Some((BinaryOpKind::GreaterEq, 4, false)),
+            TokenKind::Is => Some((BinaryOpKind::Is, 4, false)),
+
+            // Level 5: bitwise or
+            TokenKind::Pipe => Some((BinaryOpKind::BitOr, 5, false)),
+
+            // Level 6: bitwise xor
+            TokenKind::Caret => Some((BinaryOpKind::BitXor, 6, false)),
+
+            // Level 7: bitwise and
+            TokenKind::Ampersand => Some((BinaryOpKind::BitAnd, 7, false)),
+
+            // Level 8: shifts
+            TokenKind::LeftShift => Some((BinaryOpKind::ShiftLeft, 8, false)),
+            TokenKind::RightShift => Some((BinaryOpKind::ShiftRight, 8, false)),
+
+            // Level 9: addition, subtraction
+            TokenKind::Plus => Some((BinaryOpKind::Add, 9, false)),
+            TokenKind::Minus => Some((BinaryOpKind::Sub, 9, false)),
+
+            // Level 10: multiplication, division, modulo
+            TokenKind::Star => Some((BinaryOpKind::Mul, 10, false)),
+            TokenKind::Slash => Some((BinaryOpKind::Div, 10, false)),
+            TokenKind::Percent => Some((BinaryOpKind::Mod, 10, false)),
+
+            // Levels 11-12 are unary and postfix, handled separately
+
+            _ => None,
+        }
     }
 
     // Utility methods

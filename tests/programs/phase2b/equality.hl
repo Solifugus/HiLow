@@ -1,0 +1,15 @@
+high program(): i32 {
+  let a = 5
+  let b = 5
+  let c = 6
+  if (a ?= b) {
+    return 0
+  }
+  if (a != c) {
+    return 1
+  }
+  if (a is i32) {
+    return 2
+  }
+  return 3
+}
