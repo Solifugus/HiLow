@@ -577,3 +577,64 @@ fn test_format_spec_error_integration() {
         }
     }
 }
+
+// Whitespace preservation regression tests
+#[test]
+fn test_fstring_whitespace1_integration() {
+    let executable = compile_program("tests/programs/fstring_whitespace1.hl")
+        .expect("Failed to compile fstring_whitespace1.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run fstring_whitespace1 program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/fstring_whitespace1.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_fstring_whitespace2_integration() {
+    let executable = compile_program("tests/programs/fstring_whitespace2.hl")
+        .expect("Failed to compile fstring_whitespace2.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run fstring_whitespace2 program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/fstring_whitespace2.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_fstring_whitespace3_integration() {
+    let executable = compile_program("tests/programs/fstring_whitespace3.hl")
+        .expect("Failed to compile fstring_whitespace3.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run fstring_whitespace3 program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/fstring_whitespace3.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

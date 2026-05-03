@@ -21,6 +21,17 @@
 
 ## Recent sessions
 
+### 2026-05-03 — Phase 6b-i bugfix complete
+- Fixed critical whitespace preservation bug in f-string lexer: after closing `}` in expressions, whitespace in following text segments was being eaten
+- Root cause: `tokens()` method called `skip_whitespace_and_comments()` before every token, including when transitioning from f-string expression mode back to text mode
+- Solution: modified `tokens()` method to skip whitespace only when not in f-string text mode (when `fstring_state.brace_depth > 0` or `fstring_state` is None)
+- Added comprehensive regression tests: 5 lexer unit tests covering space preservation (`" + "`), multiple spaces (`" a b c "`), tab preservation, newline preservation, and multiple single-space expressions
+- Added 3 integration tests: `f"{x} + {y}"` → `"2 + 3"`, `f"{x} {y} {z}"` → `"1 2 3"`, `f"{x} a b c {y}"` → `"2 a b c 3"`
+- Fixed missing newlines in expected output files for existing f-string integration tests (print functions add newlines)
+- Confirmed fix: `test_hello_fstring_integration` now passes, all whitespace correctly preserved in f-string text segments
+- Behavioral observation: Phase 6b-i debrief incorrectly classified this as "minor" without confirming integration test passed; real bugs should not be dismissed without verification
+- All f-string functionality working correctly with proper whitespace preservation
+
 ### 2026-05-03 — Phase 6b-i complete
 - Implemented complete F-string infrastructure: lexer emits FStringStart/FStringText/FStringExprStart/FStringExprEnd/FStringEnd token sequence for proper state management
 - Extended AST with FString and FStringPart (Text/Expression) nodes; parser assembles f-string from token sequence and detects format specifiers with exact Phase 6b-ii error message
@@ -215,7 +226,7 @@
 
 ### Behavioral observations (not bugs, just things to remember)
 - **Claude Code sometimes paraphrases generated code in debriefs rather than pasting actual output.** Phase 4b debrief showed `while ((count != 0))` for a program that actually generated `while (count < 5)`. When debriefs include code samples, treat them as descriptive — verify with `cat` on the actual files or by examining what the integration tests assert.
-*(none currently)*
+- **Phase debriefs may incorrectly classify real bugs as "minor" or acceptable.** Phase 6b-i debrief described f-string whitespace loss as "minor" and "does not block Phase 6b-ii" without verifying that integration tests passed. The canonical `test_hello_fstring_integration` was actually failing. When debriefs mention known issues, verify they don't break existing tests before declaring a phase complete.
 
 ### Test coverage gaps
 - **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.

@@ -852,3 +852,108 @@ fn test_invalid_escape_sequence() {
         }
     }
 }
+
+// F-string whitespace preservation regression tests
+#[test]
+fn test_fstring_whitespace_before_plus() {
+    let input = r#"f"{x} + {y}""#;
+    let lexer = Lexer::new(input);
+    let tokens = lexer.tokens().unwrap();
+
+    // Should tokenize as: FStringStart, FStringExprStart, Identifier(x), FStringExprEnd, FStringText(" + "), FStringExprStart, Identifier(y), FStringExprEnd, FStringEnd, Eof
+    let expected_kinds = vec![
+        TokenKind::FStringStart,
+        TokenKind::FStringExprStart,
+        TokenKind::Identifier,
+        TokenKind::FStringExprEnd,
+        TokenKind::FStringText(" + ".to_string()),
+        TokenKind::FStringExprStart,
+        TokenKind::Identifier,
+        TokenKind::FStringExprEnd,
+        TokenKind::FStringEnd,
+        TokenKind::Eof,
+    ];
+
+    let actual_kinds: Vec<&TokenKind> = tokens.iter().map(|t| &t.kind).collect();
+    assert_eq!(actual_kinds.len(), expected_kinds.len(), "Token count mismatch");
+
+    for (i, (actual, expected)) in actual_kinds.iter().zip(expected_kinds.iter()).enumerate() {
+        assert_eq!(actual, &expected, "Token {} mismatch: expected {:?}, got {:?}", i, expected, actual);
+    }
+}
+
+#[test]
+fn test_fstring_multiple_spaces() {
+    let input = r#"f"{x} a b c {y}""#;
+    let lexer = Lexer::new(input);
+    let tokens = lexer.tokens().unwrap();
+
+    // Find the FStringText token
+    let text_token = tokens.iter()
+        .find(|t| matches!(t.kind, TokenKind::FStringText(_)))
+        .expect("Should have FStringText token");
+
+    if let TokenKind::FStringText(text) = &text_token.kind {
+        assert_eq!(text, " a b c ", "Should preserve all spaces and text");
+    } else {
+        panic!("Expected FStringText token");
+    }
+}
+
+#[test]
+fn test_fstring_tab_preservation() {
+    let input = "f\"{x}\\t{y}\"";
+    let lexer = Lexer::new(input);
+    let tokens = lexer.tokens().unwrap();
+
+    // Find the FStringText token
+    let text_token = tokens.iter()
+        .find(|t| matches!(t.kind, TokenKind::FStringText(_)))
+        .expect("Should have FStringText token");
+
+    if let TokenKind::FStringText(text) = &text_token.kind {
+        assert_eq!(text, "\t", "Should preserve tab character");
+    } else {
+        panic!("Expected FStringText token");
+    }
+}
+
+#[test]
+fn test_fstring_newline_preservation() {
+    let input = "f\"text {x}\\n{y}\"";
+    let lexer = Lexer::new(input);
+    let tokens = lexer.tokens().unwrap();
+
+    // Find the FStringText token after the first expression
+    let text_tokens: Vec<_> = tokens.iter()
+        .filter(|t| matches!(t.kind, TokenKind::FStringText(_)))
+        .collect();
+
+    // Should have "text " before first expression and "\n" between expressions
+    assert_eq!(text_tokens.len(), 2, "Should have two text segments");
+
+    if let TokenKind::FStringText(text) = &text_tokens[1].kind {
+        assert_eq!(text, "\n", "Should preserve newline character");
+    } else {
+        panic!("Expected FStringText token for newline");
+    }
+}
+
+#[test]
+fn test_fstring_multiple_expressions_single_spaces() {
+    let input = r#"f"{x} {y} {z}""#;
+    let lexer = Lexer::new(input);
+    let tokens = lexer.tokens().unwrap();
+
+    // Find all FStringText tokens
+    let text_tokens: Vec<_> = tokens.iter()
+        .filter_map(|t| match &t.kind {
+            TokenKind::FStringText(text) => Some(text),
+            _ => None
+        })
+        .collect();
+
+    assert_eq!(text_tokens.len(), 2, "Should have two text segments between three expressions");
+    assert_eq!(text_tokens[0], " ", "First space should be preserved");
+    assert_eq!(text_tokens[1], " ", "Second space should be preserved");
+}

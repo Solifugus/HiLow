@@ -256,7 +256,19 @@ impl Lexer {
         let mut tokens = Vec::new();
 
         loop {
-            self.skip_whitespace_and_comments()?;
+            // Only skip whitespace if we're not in f-string text mode
+            // (preserve whitespace in f-string text segments)
+            if let Some(state) = &self.fstring_state {
+                if state.brace_depth == 0 {
+                    // We're in f-string text mode - don't skip whitespace
+                } else {
+                    // We're in f-string expression mode - skip whitespace normally
+                    self.skip_whitespace_and_comments()?;
+                }
+            } else {
+                // Not in f-string mode - skip whitespace normally
+                self.skip_whitespace_and_comments()?;
+            }
 
             if self.is_at_end() {
                 tokens.push(Token {
