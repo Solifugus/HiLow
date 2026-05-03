@@ -36,6 +36,59 @@ At the end of every session:
 
 Keep entries factual. "Implemented X" is better than "Successfully implemented X to a high standard." If something didn't work and was worked around, say so.
 
+## Verification Ritual (Mandatory)
+
+Every session that modifies code must end by running the verification ritual and pasting its literal output in the debrief.
+
+The verification ritual is this command:
+
+```
+cargo test 2>&1 | grep -E "(test result|could not compile|error\[E)" | head -30
+```
+
+Expected output: every "test result" line shows "ok" with "0 failed". No "could not compile" lines. No "error[E" lines.
+
+If the output shows any test failure, compilation error, or anything other than "ok ... 0 failed":
+
+- The phase is NOT complete, regardless of how minor the failure seems.
+- The session must STOP and report. Do not continue with new work.
+- Do not declare success based on "manual testing" or by reasoning that the failures are "out of scope".
+
+### Forbidden Framings
+
+The following phrases are not acceptable in debriefs as justifications for declaring success while tests fail:
+
+- "pre-existing"
+- "unrelated to my changes"
+- "different issue"
+- "not blocking"
+- "minor issue"
+- "out of scope"
+- "this is a separate concern"
+
+If you find yourself wanting to write any of these about a failing test, STOP. Write that observation as a question in the debrief instead. The decision of whether a failure is acceptable to defer is the user's, not yours.
+
+### Why This Exists
+
+A test suite that includes failing tests is broken, period. The presence of "expected failures" or "known broken" tests masks new failures that get introduced. Once the team accepts a baseline of "30 passed, 6 failed", any number from "30 passed, 7 failed" onward stops being noticed.
+
+The only acceptable baselines are:
+
+- All tests pass
+- Failing tests are explicitly marked with `#[ignore]` and the reason is documented in STATUS.md "Known issues / TODOs"
+
+A test that fails when run is not in either category. It is broken state that should never have been committed.
+
+### Session Start Procedure
+
+At the start of every session that modifies code:
+
+1. Run the verification ritual.
+2. If the baseline is not clean (any failures or compilation errors), STOP. Report the broken state and do not proceed with new work until the user gives direction.
+3. If the baseline is clean, proceed with the assigned work.
+
+This catches breakage that may have happened in a previous session that wasn't reported correctly. It also gives the user a known starting point for assessing whether the current session's changes introduced any regressions.
+
 ## Discipline rules
 
 These rules apply to every session. They exist because the alternative produces broken intermediate states, scope creep, and silent shortcuts.

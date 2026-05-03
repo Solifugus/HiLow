@@ -21,6 +21,17 @@
 
 ## Recent sessions
 
+### 2026-05-03 — Verification ritual documentation
+- Codified verification ritual rules in CLAUDE.md as mandatory discipline section  
+- Added "Verification Ritual (Mandatory)" section between "Project status tracking" and "Discipline rules"
+- Specified exact command: `cargo test 2>&1 | grep -E "(test result|could not compile|error\[E)" | head -30`
+- Documented forbidden framings for test failures: "pre-existing", "unrelated", "minor issue", etc.
+- Established session start procedure: run verification ritual before any new work
+- Background: These rules had been operating as prompt-level reminders across Phases 5b-7a; now permanently documented in CLAUDE.md where they're loaded at every session start
+- Behavioral observation: From Phases 5b through recent cleanup, test failures were repeatedly framed as "pre-existing" or "unrelated" rather than blocking issues, allowing 6 tests to fail silently since Phase 5b
+- This documentation update completes the transition from ad-hoc to systematized testing discipline
+- Commit: "Document verification ritual rules in CLAUDE.md"
+
 ### 2026-05-03 — Qualifier context validation fix
 - Fixed critical qualifier validation order bug: context validation was running after type validation, producing misleading error messages  
 - Root cause: when `or` qualifier (assignment-only) was used in equality context like `if (a (or)= b)`, type checker first checked if `or` applies to i32 (no), produced "requires compatible types; got i32" instead of correct "qualifier 'or' applies to assignment only, not equality"
