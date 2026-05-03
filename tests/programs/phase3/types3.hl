@@ -1,0 +1,6 @@
+high program(): i32 {
+  let s = true
+  let n = 2
+  let bad = s + n
+  return 0
+}

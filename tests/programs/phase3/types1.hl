@@ -1,0 +1,7 @@
+high program(): i32 {
+  let x: i32 = 42
+  let y = 3.14
+  let z: bool = true
+  let sum = x + 100
+  return 0
+}

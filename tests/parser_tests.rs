@@ -485,3 +485,22 @@ fn test_return_statement() {
         _ => panic!("Expected Program"),
     }
 }
+
+#[test]
+fn test_assignment_not_allowed_in_expression_position() {
+    let input = "high program(): i32 { if (x = 5) { } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err(), "Assignment should not be allowed in expression position");
+
+    if let Err(error) = result {
+        match error {
+            hilowc::parser::ParseError::UnexpectedToken { expected, found, .. } => {
+                // Should find the equals token where an expression continuation was expected
+                assert_eq!(found, hilowc::lexer::TokenKind::Equal);
+                assert!(expected.contains(")"));
+            }
+            _ => panic!("Expected UnexpectedToken error, got {:?}", error),
+        }
+    }
+}

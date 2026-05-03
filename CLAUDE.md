@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 3 — AST and Basic Type System**
+**Current phase: Phase 4a — Codegen Foundation and Basic Programs**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

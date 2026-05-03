@@ -41,12 +41,6 @@ pub struct Parameter {
     pub position: Position,
 }
 
-/// A function body placeholder that stores source positions for later parsing
-#[derive(Debug, Clone, PartialEq)]
-pub struct BodyPlaceholder {
-    pub start_position: Position,
-    pub end_position: Position,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOpKind {
@@ -226,7 +220,6 @@ pub struct Function {
     pub mode: Mode,           // Effective mode after inheritance
     pub params: Vec<Parameter>,
     pub return_type: Type,
-    pub body_placeholder: BodyPlaceholder, // For re-parsing
     pub body: Option<Block>,  // Parsed body (None in Phase 2a, Some in Phase 2b)
     pub is_export: bool,
     pub position: Position,
@@ -237,7 +230,6 @@ pub struct Program {
     pub mode: Mode,
     pub params: Vec<Parameter>,
     pub return_type: Type,
-    pub body_placeholder: BodyPlaceholder,
     pub body: Option<Block>, // Parsed body
     pub position: Position,
 }

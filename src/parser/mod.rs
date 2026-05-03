@@ -74,23 +74,15 @@ impl Parser {
         let return_type = self.parse_type()?;
 
         // Parse body - Phase 2b: parse actual statements
-        let body_start = self.peek()?.position.clone();
         let body = self.parse_block()?;
 
         // Expect EOF
         self.expect_token(TokenKind::Eof, "Expected end of file")?;
 
-        // Create placeholder for compatibility
-        let body_placeholder = BodyPlaceholder {
-            start_position: body_start.clone(),
-            end_position: body.position.clone(),
-        };
-
         Ok(Program {
             mode,
             params,
             return_type,
-            body_placeholder,
             body: Some(body),
             position: start_pos,
         })
@@ -158,21 +150,13 @@ impl Parser {
         let return_type = self.parse_type()?;
 
         // Parse body - Phase 2b: parse actual statements
-        let body_start = self.peek()?.position.clone();
         let body = self.parse_block()?;
-
-        // Create placeholder for compatibility
-        let body_placeholder = BodyPlaceholder {
-            start_position: body_start.clone(),
-            end_position: body.position.clone(),
-        };
 
         Ok(Function {
             name,
             mode: function_mode,
             params,
             return_type,
-            body_placeholder,
             body: Some(body),
             is_export,
             position: start_pos,
@@ -307,37 +291,6 @@ impl Parser {
         Ok(Type::Primitive(primitive))
     }
 
-    fn parse_body_placeholder(&mut self) -> Result<BodyPlaceholder, ParseError> {
-        let start_token = self.expect_token(TokenKind::LeftBrace, "Expected '{' for function body")?;
-        let start_position = start_token.position;
-
-        // Skip body with brace counting
-        let mut brace_count = 1;
-        let mut end_position = start_position.clone();
-
-        while brace_count > 0 && !self.is_at_end() {
-            let token = self.advance()?;
-            end_position = token.position;
-
-            match token.kind {
-                TokenKind::LeftBrace => brace_count += 1,
-                TokenKind::RightBrace => brace_count -= 1,
-                _ => {}
-            }
-        }
-
-        if brace_count > 0 {
-            return Err(ParseError::UnexpectedEof {
-                expected: "'}' to close function body".to_string(),
-                position: end_position,
-            });
-        }
-
-        Ok(BodyPlaceholder {
-            start_position,
-            end_position,
-        })
-    }
 
     // Phase 2b: Statement and Expression Parsing
 
@@ -403,6 +356,15 @@ impl Parser {
         } else {
             None
         };
+
+        // Require at least a type or an initializer
+        if ty.is_none() && initializer.is_none() {
+            return Err(ParseError::UnexpectedToken {
+                expected: "type annotation (': type') or initializer ('= value')".to_string(),
+                found: self.peek()?.kind.clone(),
+                position: start_pos,
+            });
+        }
 
         Ok(Statement::Let(LetDecl {
             name,
@@ -553,15 +515,59 @@ impl Parser {
                     break;
                 }
 
+                let op_kind = op_token.kind.clone(); // Clone for potential error message
                 let position = self.advance()?.position; // consume operator
-                let right = self.parse_expression_with_precedence(prec + 1)?;
 
-                left = Expression::BinaryOp(BinaryOp {
-                    lhs: Box::new(left),
-                    op,
-                    rhs: Box::new(right),
-                    position,
-                });
+                // Special handling for 'is' and 'is not' to create IsCheck nodes
+                if matches!(op, BinaryOpKind::Is | BinaryOpKind::IsNot) {
+                    // Parse the type name
+                    let type_token = self.expect_identifier("Expected type name after 'is'")?;
+                    let type_name = &type_token.lexeme;
+
+                    // Convert type name to Type
+                    let ty = match type_name.as_str() {
+                        "i8" => Type::Primitive(PrimitiveType::I8),
+                        "i16" => Type::Primitive(PrimitiveType::I16),
+                        "i32" => Type::Primitive(PrimitiveType::I32),
+                        "i64" => Type::Primitive(PrimitiveType::I64),
+                        "i128" => Type::Primitive(PrimitiveType::I128),
+                        "u8" => Type::Primitive(PrimitiveType::U8),
+                        "u16" => Type::Primitive(PrimitiveType::U16),
+                        "u32" => Type::Primitive(PrimitiveType::U32),
+                        "u64" => Type::Primitive(PrimitiveType::U64),
+                        "u128" => Type::Primitive(PrimitiveType::U128),
+                        "f32" => Type::Primitive(PrimitiveType::F32),
+                        "f64" => Type::Primitive(PrimitiveType::F64),
+                        "bool" => Type::Primitive(PrimitiveType::Bool),
+                        "string" => Type::Primitive(PrimitiveType::String),
+                        "usize" => Type::Primitive(PrimitiveType::Usize),
+                        "isize" => Type::Primitive(PrimitiveType::Isize),
+                        "nothing" => Type::Primitive(PrimitiveType::Nothing),
+                        _ => {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "valid type name".to_string(),
+                                found: op_kind,
+                                position: type_token.position,
+                            });
+                        }
+                    };
+
+                    left = Expression::IsCheck(IsCheck {
+                        expression: Box::new(left),
+                        ty,
+                        negated: matches!(op, BinaryOpKind::IsNot),
+                        position,
+                    });
+                } else {
+                    let right = self.parse_expression_with_precedence(prec + 1)?;
+
+                    left = Expression::BinaryOp(BinaryOp {
+                        lhs: Box::new(left),
+                        op,
+                        rhs: Box::new(right),
+                        position,
+                    });
+                }
             } else {
                 break;
             }

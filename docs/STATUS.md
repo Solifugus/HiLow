@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 3 — AST and Basic Type System
+**Phase:** Phase 4a — Codegen Foundation and Basic Programs
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 2b: Statements and expressions
+**Last commit:** Phase 3: Basic type system and type checker
 
 ---
 
@@ -20,6 +20,23 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 3 complete
+- Removed vestigial body_placeholder fields from Function and Program AST nodes after Phase 2b made them obsolete
+- Implemented comprehensive Type enum in src/types/mod.rs covering all primitive types, arrays, with helper methods for numeric type checking, literal fitting, and type conversion
+- Built TypeChecker in src/typecheck/mod.rs with lexical scoping, symbol table management, and comprehensive type checking for all Phase 3 requirements
+- Implemented numeric literal type inference: bare integers default to i32 (if fits) or i64, floats default to f64, with context-sensitive fitting (42 fits in u8 when declared as u8)
+- Strict NO coercion policy: i32 + f64, bool + i32, "string" + i32 all produce type errors with clear messages suggesting explicit conversion
+- Type checking for all operators: arithmetic (same numeric type), comparison (same numeric type → bool), equality (same type → bool), logical (bool → bool), bitwise (same integer type)
+- Condition type checking: if/while/loop conditions must be exactly bool in Phase 3 (truthy/falsy deferred to Phase 4b)
+- Symbol table with lexical scoping: each block/function has own scope, inner scopes see outer scopes, shadowing allowed
+- Enhanced parser to create IsCheck AST nodes for 'x is type' expressions instead of treating as binary operations
+- Enhanced parser to require either type annotation OR initializer for let statements (let x with neither is now a parse error)
+- Created 24 comprehensive type checker tests covering successful cases and all error scenarios
+- Created 3 verification programs and tests: types1.hl (passes), types2.hl (i32+f64 error), types3.hl (bool+i32 error)
+- Added test for assignment-not-allowed-in-expressions from Phase 2b
+- All 132 tests passing (81 lexer + 21 parser + 24 typecheck + 3 verify_phase2b + 3 verify_phase3)
+- Commit: "Phase 3: Basic type system and type checker"
 
 ### 2026-05-02 — Phase 2b complete
 - Extended AST with full Phase 2b nodes: Statement enum (Let, Return, If, While, Loop, Break, Continue, Assign, ExprStatement), Expression enum (IntLit, FloatLit, BoolLit, Ident, BinaryOp, UnaryOp, Call, MemberAccess, IndexAccess, IsCheck), and supporting structures (BinaryOpKind, UnaryOpKind, AssignOpKind)

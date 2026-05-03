@@ -1,0 +1,6 @@
+high program(): i32 {
+  let x: i32 = 42
+  let y: f64 = 3.14
+  let bad = x + y
+  return 0
+}
