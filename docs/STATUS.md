@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 1a — Basic Tokens (restart against refreshed spec)
+**Phase:** Phase 2a — Program/Module Structure and Top-Level
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Design refresh: layered proofs, stealth blocks, qualifier coerce, set constraints, !</!>
+**Last commit:** Phase 1b: Equality operators and negation comparators
 
 ---
 
@@ -20,6 +20,27 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 1b complete
+- Implemented equality operators and negation comparators
+- New TokenKind variants: EqStrict (?=), NotEq (!=), NotLess (!<), NotGreater (!>)
+- Proper disambiguation: ?= vs bare ?, != vs !< vs !>, with multi-character lookahead
+- Error handling for invalid operators: == (suggests ?=), !<= and !>= (redundant), bare ! (use 'not')
+- Added 13 comprehensive tests for new operators and error cases
+- All 81 tests passing (68 Phase 1a + 13 Phase 1b)
+- Multi-character lookahead correctly handles !<= and !>= disambiguation
+- Commit: "Phase 1b: Equality operators and negation comparators"
+
+### 2026-05-02 — Phase 1a (restart) complete
+- Implemented complete lexer against refreshed specification
+- Token types: identifiers, keywords, integer/float/boolean literals, punctuation, operators (excluding equality)
+- 46 keywords from refreshed spec (note: spec count appears to be 46, not 41 as initially mentioned)
+- Numeric literals: decimal, hex (0x), binary (0b), floats with scientific notation, underscore separators
+- Comments: line (//) and block (/* */) with proper nesting support
+- Source position tracking (line, column) for all tokens
+- Comprehensive test suite with 68 tests covering all requirements
+- All verification cases from development plan implemented and passing
+- Commit: "Phase 1a (restart): Basic tokens against refreshed spec"
 
 ### 2026-05-02 — Design refresh
 - Substantive design changes following hands-on syntax exploration:

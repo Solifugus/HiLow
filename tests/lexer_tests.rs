@@ -571,3 +571,178 @@ fn test_position_tracking() {
     assert_eq!(tokens[3].position.line, 2);
     assert_eq!(tokens[3].position.column, 3);
 }
+
+// Phase 1b: Equality operators and negation comparators tests
+
+#[test]
+fn test_equality_operator() {
+    let input = "x ?= y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, ?=, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "x");
+    assert_eq!(tokens[1].kind, TokenKind::EqStrict);
+    assert_eq!(tokens[1].lexeme, "?=");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+    assert_eq!(tokens[2].lexeme, "y");
+}
+
+#[test]
+fn test_inequality_operator() {
+    let input = "x != y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, !=, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "x");
+    assert_eq!(tokens[1].kind, TokenKind::NotEq);
+    assert_eq!(tokens[1].lexeme, "!=");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+    assert_eq!(tokens[2].lexeme, "y");
+}
+
+#[test]
+fn test_not_less_operator() {
+    let input = "x !< y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, !<, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "x");
+    assert_eq!(tokens[1].kind, TokenKind::NotLess);
+    assert_eq!(tokens[1].lexeme, "!<");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+    assert_eq!(tokens[2].lexeme, "y");
+}
+
+#[test]
+fn test_not_greater_operator() {
+    let input = "x !> y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, !>, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "x");
+    assert_eq!(tokens[1].kind, TokenKind::NotGreater);
+    assert_eq!(tokens[1].lexeme, "!>");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+    assert_eq!(tokens[2].lexeme, "y");
+}
+
+#[test]
+fn test_question_token_alone() {
+    let input = "x ? y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, ?, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "x");
+    assert_eq!(tokens[1].kind, TokenKind::Question);
+    assert_eq!(tokens[1].lexeme, "?");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+    assert_eq!(tokens[2].lexeme, "y");
+}
+
+#[test]
+fn test_less_equal_regression() {
+    let input = "x <= y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, <=, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[1].kind, TokenKind::LessEqual);
+    assert_eq!(tokens[1].lexeme, "<=");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+}
+
+#[test]
+fn test_greater_equal_regression() {
+    let input = "x >= y";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // x, >=, y, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[1].kind, TokenKind::GreaterEqual);
+    assert_eq!(tokens[1].lexeme, ">=");
+    assert_eq!(tokens[2].kind, TokenKind::Identifier);
+}
+
+#[test]
+fn test_double_equals_error() {
+    let input = "x == y";
+    let result = Lexer::new(input).tokens();
+    assert!(result.is_err());
+    if let Err(error) = result {
+        match error {
+            hilowc::lexer::LexError::InvalidOperator { suggestion, .. } => {
+                assert!(suggestion.contains("use '?='"));
+            }
+            _ => panic!("Expected InvalidOperator error"),
+        }
+    }
+}
+
+#[test]
+fn test_not_less_equal_error() {
+    let input = "x !<= y";
+    let result = Lexer::new(input).tokens();
+    assert!(result.is_err());
+    if let Err(error) = result {
+        match error {
+            hilowc::lexer::LexError::InvalidOperator { suggestion, .. } => {
+                assert!(suggestion.contains("redundant"));
+                assert!(suggestion.contains("'>' instead"));
+            }
+            _ => panic!("Expected InvalidOperator error"),
+        }
+    }
+}
+
+#[test]
+fn test_not_greater_equal_error() {
+    let input = "x !>= y";
+    let result = Lexer::new(input).tokens();
+    assert!(result.is_err());
+    if let Err(error) = result {
+        match error {
+            hilowc::lexer::LexError::InvalidOperator { suggestion, .. } => {
+                assert!(suggestion.contains("redundant"));
+                assert!(suggestion.contains("'<' instead"));
+            }
+            _ => panic!("Expected InvalidOperator error"),
+        }
+    }
+}
+
+#[test]
+fn test_bare_exclamation_error() {
+    let input = "!flag";
+    let result = Lexer::new(input).tokens();
+    assert!(result.is_err());
+    if let Err(error) = result {
+        match error {
+            hilowc::lexer::LexError::InvalidOperator { suggestion, .. } => {
+                assert!(suggestion.contains("not"));
+            }
+            _ => panic!("Expected InvalidOperator error"),
+        }
+    }
+}
+
+#[test]
+fn test_tilde_regression() {
+    let input = "~x";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 3); // ~, x, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Tilde);
+    assert_eq!(tokens[0].lexeme, "~");
+    assert_eq!(tokens[1].kind, TokenKind::Identifier);
+    assert_eq!(tokens[1].lexeme, "x");
+}
+
+#[test]
+fn test_result_is_unknown() {
+    let input = "result is unknown";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 4); // result, is, unknown, EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "result");
+    assert_eq!(tokens[1].kind, TokenKind::Is);
+    assert_eq!(tokens[1].lexeme, "is");
+    assert_eq!(tokens[2].kind, TokenKind::Unknown);
+    assert_eq!(tokens[2].lexeme, "unknown");
+}

@@ -17,7 +17,7 @@ pub enum TokenKind {
     // Identifiers
     Identifier,
 
-    // Keywords (41 total as specified)
+    // Keywords (46 total as specified)
     And,
     Arena,
     Async,
@@ -84,11 +84,19 @@ pub enum TokenKind {
     Slash,        // /
     Percent,      // %
 
-    // Comparison operators (excluding equality)
+    // Comparison operators
     Less,         // <
     Greater,      // >
     LessEqual,    // <=
     GreaterEqual, // >=
+
+    // Equality operators
+    EqStrict,     // ?=
+    NotEq,        // !=
+
+    // Negation comparators
+    NotLess,      // !<
+    NotGreater,   // !>
 
     // Assignment operators
     Equal,        // =
@@ -125,6 +133,7 @@ pub enum LexError {
     UnexpectedCharacter { char: char, position: Position },
     UnterminatedBlockComment { position: Position },
     InvalidNumber { text: String, position: Position },
+    InvalidOperator { operator: String, position: Position, suggestion: String },
 }
 
 pub struct Lexer {
@@ -139,7 +148,7 @@ impl Lexer {
     pub fn new(input: &str) -> Self {
         let mut keywords = HashMap::new();
 
-        // Insert all 41 keywords
+        // Insert all 46 keywords
         keywords.insert("and".to_string(), TokenKind::And);
         keywords.insert("arena".to_string(), TokenKind::Arena);
         keywords.insert("async".to_string(), TokenKind::Async);
@@ -345,7 +354,14 @@ impl Lexer {
             ',' => Ok(self.make_token(TokenKind::Comma, start_pos, ",".to_string())),
             ';' => Ok(self.make_token(TokenKind::Semicolon, start_pos, ";".to_string())),
             ':' => Ok(self.make_token(TokenKind::Colon, start_pos, ":".to_string())),
-            '?' => Ok(self.make_token(TokenKind::Question, start_pos, "?".to_string())),
+            '?' => {
+                if self.peek() == '=' {
+                    self.advance();
+                    Ok(self.make_token(TokenKind::EqStrict, start_pos, "?=".to_string()))
+                } else {
+                    Ok(self.make_token(TokenKind::Question, start_pos, "?".to_string()))
+                }
+            }
             '@' => Ok(self.make_token(TokenKind::At, start_pos, "@".to_string())),
             '&' => Ok(self.make_token(TokenKind::Ampersand, start_pos, "&".to_string())),
             '|' => Ok(self.make_token(TokenKind::Pipe, start_pos, "|".to_string())),
@@ -423,7 +439,56 @@ impl Lexer {
                     Ok(self.make_token(TokenKind::Greater, start_pos, ">".to_string()))
                 }
             }
-            '=' => Ok(self.make_token(TokenKind::Equal, start_pos, "=".to_string())),
+            '=' => {
+                if self.peek() == '=' {
+                    Err(LexError::InvalidOperator {
+                        operator: "==".to_string(),
+                        position: start_pos,
+                        suggestion: "'==' is not a valid operator in HiLow; use '?=' for equality or '=' for assignment".to_string(),
+                    })
+                } else {
+                    Ok(self.make_token(TokenKind::Equal, start_pos, "=".to_string()))
+                }
+            }
+            '!' => {
+                match self.peek() {
+                    '=' => {
+                        self.advance();
+                        Ok(self.make_token(TokenKind::NotEq, start_pos, "!=".to_string()))
+                    }
+                    '<' => {
+                        self.advance(); // consume '<'
+                        if self.peek() == '=' {
+                            Err(LexError::InvalidOperator {
+                                operator: "!<=".to_string(),
+                                position: start_pos,
+                                suggestion: "'!<=' is redundant; use '>' instead".to_string(),
+                            })
+                        } else {
+                            Ok(self.make_token(TokenKind::NotLess, start_pos, "!<".to_string()))
+                        }
+                    }
+                    '>' => {
+                        self.advance(); // consume '>'
+                        if self.peek() == '=' {
+                            Err(LexError::InvalidOperator {
+                                operator: "!>=".to_string(),
+                                position: start_pos,
+                                suggestion: "'!>=' is redundant; use '<' instead".to_string(),
+                            })
+                        } else {
+                            Ok(self.make_token(TokenKind::NotGreater, start_pos, "!>".to_string()))
+                        }
+                    }
+                    _ => {
+                        Err(LexError::InvalidOperator {
+                            operator: "!".to_string(),
+                            position: start_pos,
+                            suggestion: "'!' is not a valid operator in HiLow; use the 'not' keyword for logical negation".to_string(),
+                        })
+                    }
+                }
+            }
 
             // Numbers
             '0'..='9' => self.number(start_pos),
