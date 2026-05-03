@@ -136,6 +136,27 @@ pub enum LexError {
     InvalidOperator { operator: String, position: Position, suggestion: String },
 }
 
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LexError::UnexpectedCharacter { char, position } => {
+                write!(f, "Unexpected character '{}' at line {}, column {}", char, position.line, position.column)
+            }
+            LexError::UnterminatedBlockComment { position } => {
+                write!(f, "Unterminated block comment at line {}, column {}", position.line, position.column)
+            }
+            LexError::InvalidNumber { text, position } => {
+                write!(f, "Invalid number '{}' at line {}, column {}", text, position.line, position.column)
+            }
+            LexError::InvalidOperator { operator, position, suggestion } => {
+                write!(f, "Invalid operator '{}' at line {}, column {}: {}", operator, position.line, position.column, suggestion)
+            }
+        }
+    }
+}
+
+impl std::error::Error for LexError {}
+
 pub struct Lexer {
     input: Vec<char>,
     current: usize,

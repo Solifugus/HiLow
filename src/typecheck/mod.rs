@@ -458,6 +458,13 @@ impl TypeChecker {
     }
 
     fn check_call(&mut self, call: &Call) -> Type {
+        // Check if this is the special print() function
+        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+            if func_name == "print" {
+                return self.check_print_call(call);
+            }
+        }
+
         // Type check the callee
         self.check_expression(&call.callee);
 
@@ -469,6 +476,41 @@ impl TypeChecker {
         // TODO: Implement proper function type checking
         // For now, just return unknown
         Type::Unknown
+    }
+
+    /// Special handling for print() built-in function
+    /// Phase 4a-only: print() is treated as a magic function known to both type checker and codegen.
+    /// This will be replaced with proper module imports in later phases.
+    fn check_print_call(&mut self, call: &Call) -> Type {
+        if call.args.len() != 1 {
+            self.add_error(
+                "print() function expects exactly one argument".to_string(),
+                call.position.clone()
+            );
+            return Type::Unknown;
+        }
+
+        let arg = &call.args[0];
+        let arg_type = self.check_expression(arg);
+
+        // Check if the argument type is printable
+        match arg_type {
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+            Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize => {
+                // These types are printable
+            }
+            _ => {
+                self.add_error(
+                    format!("Cannot print value of type {}", arg_type),
+                    call.position.clone()
+                );
+                return Type::Unknown;
+            }
+        }
+
+        // print() returns i32 for now (will be nothing in Phase 9)
+        Type::I32
     }
 
     // Scope management

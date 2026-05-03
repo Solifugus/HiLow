@@ -1,0 +1,3 @@
+high program(): i32 {
+  return 0
+}

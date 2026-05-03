@@ -1,0 +1,475 @@
+use crate::ast::*;
+use crate::types::Type;
+use crate::typecheck::TypeChecker;
+use std::collections::HashMap;
+
+/// Errors that can occur during code generation
+#[derive(Debug)]
+pub enum CodegenError {
+    UnsupportedFeature {
+        feature: String,
+        phase: String,
+    },
+}
+
+impl std::fmt::Display for CodegenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CodegenError::UnsupportedFeature { feature, phase } => {
+                write!(f, "Unsupported feature '{}' - will be implemented in {}", feature, phase)
+            }
+        }
+    }
+}
+
+impl std::error::Error for CodegenError {}
+
+/// C code generator
+pub struct CodeGenerator {
+    /// Output C code
+    output: String,
+    /// Variable counter for generating unique names
+    var_counter: usize,
+    /// Function symbols - maps function name to its signature
+    functions: HashMap<String, String>,
+    /// Variable types - maps variable name to its type
+    variable_types: HashMap<String, Type>,
+}
+
+impl CodeGenerator {
+    pub fn new() -> Self {
+        Self {
+            output: String::new(),
+            var_counter: 0,
+            functions: HashMap::new(),
+            variable_types: HashMap::new(),
+        }
+    }
+
+    /// Generate C code for the entire program
+    pub fn generate(&mut self, top_level: &TopLevel, type_checker: &TypeChecker) -> Result<String, CodegenError> {
+        // Add standard C includes
+        self.emit_includes();
+
+        match top_level {
+            TopLevel::Program(program) => {
+                self.generate_program(program, type_checker)?;
+            }
+            TopLevel::Module(module) => {
+                self.generate_module(module, type_checker)?;
+            }
+        }
+
+        Ok(self.output.clone())
+    }
+
+    fn emit_includes(&mut self) {
+        self.output.push_str("#include <stdint.h>\n");
+        self.output.push_str("#include <stdbool.h>\n");
+        self.output.push_str("#include \"runtime.h\"\n");
+        self.output.push_str("\n");
+    }
+
+    fn generate_program(&mut self, program: &Program, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate function declarations first (if any functions are defined in the program body)
+        // For Phase 4a, we support functions at the top level within the program
+        if let Some(body) = &program.body {
+            // First pass: collect function declarations
+            for statement in &body.statements {
+                if let Statement::ExprStatement(Expression::Call(call)) = statement {
+                    // Check if this is a function definition (this is a placeholder -
+                    // actual function definitions would need proper AST support)
+                }
+            }
+        }
+
+        // Generate the main function
+        self.output.push_str("int main() {\n");
+
+        if let Some(body) = &program.body {
+            self.generate_block(body, type_checker)?;
+        }
+
+        self.output.push_str("}\n");
+        Ok(())
+    }
+
+    fn generate_module(&mut self, module: &Module, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate each function in the module
+        for function in &module.items {
+            self.generate_function(function, type_checker)?;
+        }
+        Ok(())
+    }
+
+    fn generate_function(&mut self, function: &Function, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Convert return type to C
+        let c_return_type = self.hilow_type_to_c(&Type::from_ast_type(&function.return_type));
+
+        // Generate function signature
+        self.output.push_str(&format!("{} {}(", c_return_type, function.name));
+
+        // Generate parameters
+        for (i, param) in function.params.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            let c_type = self.hilow_type_to_c(&Type::from_ast_type(&param.ty));
+            self.output.push_str(&format!("{} {}", c_type, param.name));
+        }
+
+        self.output.push_str(") {\n");
+
+        // Generate function body
+        if let Some(body) = &function.body {
+            self.generate_block(body, type_checker)?;
+        }
+
+        self.output.push_str("}\n\n");
+        Ok(())
+    }
+
+    fn generate_block(&mut self, block: &Block, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        for statement in &block.statements {
+            self.generate_statement(statement, type_checker)?;
+        }
+        Ok(())
+    }
+
+    fn generate_statement(&mut self, statement: &Statement, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        match statement {
+            Statement::Let(let_decl) => {
+                self.generate_let_statement(let_decl, type_checker)?;
+            }
+            Statement::Return(return_stmt) => {
+                self.generate_return_statement(return_stmt, type_checker)?;
+            }
+            Statement::ExprStatement(expr) => {
+                // Generate the expression and add semicolon
+                self.generate_expression(expr, type_checker)?;
+                self.output.push_str(";\n");
+            }
+            Statement::If(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "if statements".to_string(),
+                    phase: "Phase 4b".to_string(),
+                });
+            }
+            Statement::While(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "while loops".to_string(),
+                    phase: "Phase 4b".to_string(),
+                });
+            }
+            Statement::Loop(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "loop statements".to_string(),
+                    phase: "Phase 4b".to_string(),
+                });
+            }
+            Statement::Break(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "break statements".to_string(),
+                    phase: "Phase 4b".to_string(),
+                });
+            }
+            Statement::Continue(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "continue statements".to_string(),
+                    phase: "Phase 4b".to_string(),
+                });
+            }
+            Statement::Assign(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "assignment statements".to_string(),
+                    phase: "Phase 4b".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_let_statement(&mut self, let_decl: &LetDecl, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Determine the type
+        let var_type = if let Some(ref ty) = let_decl.ty {
+            Type::from_ast_type(ty)
+        } else if let Some(ref initializer) = let_decl.initializer {
+            // Type inference - for Phase 4a, we'll use simple literal types
+            match initializer {
+                Expression::IntLit(value, _) => Type::default_integer_type(*value),
+                Expression::FloatLit(_, _) => Type::default_float_type(),
+                Expression::BoolLit(_, _) => Type::Bool,
+                _ => {
+                    // For complex expressions, we'd need full type checking context
+                    // For now, assume i32 as a fallback
+                    Type::I32
+                }
+            }
+        } else {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: "uninitialized variables".to_string(),
+                phase: "Phase 9 (nothing type)".to_string(),
+            });
+        };
+
+        let c_type = self.hilow_type_to_c(&var_type);
+        self.output.push_str(&format!("  {} {}", c_type, let_decl.name));
+
+        if let Some(ref initializer) = let_decl.initializer {
+            self.output.push_str(" = ");
+            self.generate_expression(initializer, type_checker)?;
+        }
+
+        self.output.push_str(";\n");
+
+        // Track the variable type for later reference
+        self.variable_types.insert(let_decl.name.clone(), var_type);
+
+        Ok(())
+    }
+
+    fn generate_return_statement(&mut self, return_stmt: &ReturnStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("  return");
+        if let Some(ref value) = return_stmt.value {
+            self.output.push_str(" ");
+            self.generate_expression(value, type_checker)?;
+        }
+        self.output.push_str(";\n");
+        Ok(())
+    }
+
+    fn generate_expression(&mut self, expression: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        match expression {
+            Expression::IntLit(value, _) => {
+                self.output.push_str(&value.to_string());
+            }
+            Expression::FloatLit(value, _) => {
+                self.output.push_str(&value.to_string());
+            }
+            Expression::BoolLit(value, _) => {
+                self.output.push_str(if *value { "true" } else { "false" });
+            }
+            Expression::Ident(name, _) => {
+                self.output.push_str(name);
+            }
+            Expression::BinaryOp(binary_op) => {
+                self.generate_binary_op(binary_op, type_checker)?;
+            }
+            Expression::UnaryOp(unary_op) => {
+                self.generate_unary_op(unary_op, type_checker)?;
+            }
+            Expression::Call(call) => {
+                self.generate_call(call, type_checker)?;
+            }
+            Expression::MemberAccess(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "member access".to_string(),
+                    phase: "Phase 7 (objects)".to_string(),
+                });
+            }
+            Expression::IndexAccess(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "index access".to_string(),
+                    phase: "Phase 6 (arrays)".to_string(),
+                });
+            }
+            Expression::IsCheck(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "is checks".to_string(),
+                    phase: "Phase 9 (runtime type info)".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn generate_binary_op(&mut self, binary_op: &BinaryOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        self.output.push_str("(");
+        self.generate_expression(&binary_op.lhs, type_checker)?;
+
+        let op_str = match binary_op.op {
+            BinaryOpKind::Add => " + ",
+            BinaryOpKind::Sub => " - ",
+            BinaryOpKind::Mul => " * ",
+            BinaryOpKind::Div => " / ",
+            BinaryOpKind::Mod => " % ",
+            BinaryOpKind::Less => " < ",
+            BinaryOpKind::Greater => " > ",
+            BinaryOpKind::LessEq => " <= ",
+            BinaryOpKind::GreaterEq => " >= ",
+            BinaryOpKind::Eq => " == ",
+            BinaryOpKind::NotEq => " != ",
+            BinaryOpKind::And => " && ",
+            BinaryOpKind::Or => " || ",
+            BinaryOpKind::BitAnd => " & ",
+            BinaryOpKind::BitOr => " | ",
+            BinaryOpKind::BitXor => " ^ ",
+            BinaryOpKind::ShiftLeft => " << ",
+            BinaryOpKind::ShiftRight => " >> ",
+            _ => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("binary operator {:?}", binary_op.op),
+                    phase: "later phases".to_string(),
+                });
+            }
+        };
+
+        self.output.push_str(op_str);
+        self.generate_expression(&binary_op.rhs, type_checker)?;
+        self.output.push_str(")");
+        Ok(())
+    }
+
+    fn generate_unary_op(&mut self, unary_op: &UnaryOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        let op_str = match unary_op.op {
+            UnaryOpKind::Neg => "-",
+            UnaryOpKind::Not => "!",
+            UnaryOpKind::BitNot => "~",
+        };
+
+        self.output.push_str(op_str);
+        self.generate_expression(&unary_op.operand, type_checker)?;
+        Ok(())
+    }
+
+    fn generate_call(&mut self, call: &Call, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Check if this is the special print() function
+        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+            if func_name == "print" {
+                return self.generate_print_call(call, type_checker);
+            }
+        }
+
+        // Regular function call
+        self.generate_expression(&call.callee, type_checker)?;
+        self.output.push_str("(");
+
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.generate_expression(arg, type_checker)?;
+        }
+
+        self.output.push_str(")");
+        Ok(())
+    }
+
+    /// Special handling for print() built-in function
+    /// Phase 4a-only: print() is treated as a magic function known to both type checker and codegen.
+    /// This will be replaced with proper module imports in later phases.
+    fn generate_print_call(&mut self, call: &Call, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        if call.args.len() != 1 {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: "print() with != 1 argument".to_string(),
+                phase: "Phase 6 (proper print implementation)".to_string(),
+            });
+        }
+
+        let arg = &call.args[0];
+
+        // Determine the type of the argument to call the right runtime function
+        // For Phase 4a, we'll use a simple approach based on the expression type
+        let arg_type = self.infer_expression_type(arg);
+
+        let runtime_func = match arg_type {
+            Type::I8 | Type::I16 | Type::I32 | Type::Isize => "print_i32",
+            Type::I64 => "print_i64",
+            Type::I128 => "print_i64", // Fall back to i64 for now
+            Type::U8 | Type::U16 | Type::U32 | Type::Usize => "print_u32",
+            Type::U64 | Type::U128 => "print_u64",
+            Type::F32 => "print_f32",
+            Type::F64 => "print_f64",
+            Type::Bool => "print_bool",
+            _ => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("print() for type {}", arg_type),
+                    phase: "later phases".to_string(),
+                });
+            }
+        };
+
+        self.output.push_str(runtime_func);
+        self.output.push_str("(");
+        self.generate_expression(arg, type_checker)?;
+        self.output.push_str(")");
+
+        Ok(())
+    }
+
+    /// Convert a HiLow type to a C type string
+    fn hilow_type_to_c(&self, hilow_type: &Type) -> String {
+        match hilow_type {
+            Type::I8 => "int8_t".to_string(),
+            Type::I16 => "int16_t".to_string(),
+            Type::I32 => "int32_t".to_string(),
+            Type::I64 => "int64_t".to_string(),
+            Type::I128 => "int64_t".to_string(), // Fall back to 64-bit for now
+            Type::U8 => "uint8_t".to_string(),
+            Type::U16 => "uint16_t".to_string(),
+            Type::U32 => "uint32_t".to_string(),
+            Type::U64 => "uint64_t".to_string(),
+            Type::U128 => "uint64_t".to_string(), // Fall back to 64-bit for now
+            Type::F32 => "float".to_string(),
+            Type::F64 => "double".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::String => "char*".to_string(), // Will be properly implemented in Phase 6
+            Type::Usize => "size_t".to_string(),
+            Type::Isize => "ssize_t".to_string(),
+            Type::Nothing => "void".to_string(),
+            Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
+            Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
+            Type::Unknown => "void".to_string(),
+        }
+    }
+
+    fn next_var_name(&mut self) -> String {
+        let name = format!("_v{}", self.var_counter);
+        self.var_counter += 1;
+        name
+    }
+
+    /// Simple type inference for expressions in Phase 4a
+    /// This is a simplified version that doesn't use the full type checker context
+    fn infer_expression_type(&self, expr: &Expression) -> Type {
+        match expr {
+            Expression::IntLit(_, _) => Type::I32, // Default integer type
+            Expression::FloatLit(_, _) => Type::F64, // Default float type
+            Expression::BoolLit(_, _) => Type::Bool,
+            Expression::Ident(name, _) => {
+                // Look up the variable type from our tracking
+                self.variable_types.get(name).cloned().unwrap_or(Type::I32)
+            }
+            Expression::BinaryOp(op) => {
+                // Infer based on the operator
+                match op.op {
+                    BinaryOpKind::Add | BinaryOpKind::Sub | BinaryOpKind::Mul |
+                    BinaryOpKind::Div | BinaryOpKind::Mod => {
+                        // Arithmetic operations - check operands
+                        let lhs_type = self.infer_expression_type(&op.lhs);
+                        let rhs_type = self.infer_expression_type(&op.rhs);
+
+                        // If either operand is float, result is float
+                        if matches!(lhs_type, Type::F32 | Type::F64) ||
+                           matches!(rhs_type, Type::F32 | Type::F64) {
+                            Type::F64
+                        } else {
+                            Type::I32
+                        }
+                    }
+                    BinaryOpKind::Less | BinaryOpKind::Greater | BinaryOpKind::LessEq |
+                    BinaryOpKind::GreaterEq | BinaryOpKind::Eq | BinaryOpKind::NotEq |
+                    BinaryOpKind::And | BinaryOpKind::Or => Type::Bool,
+                    _ => Type::I32, // Default for other ops
+                }
+            }
+            Expression::UnaryOp(op) => {
+                match op.op {
+                    UnaryOpKind::Not => Type::Bool,
+                    _ => self.infer_expression_type(&op.operand),
+                }
+            }
+            _ => Type::I32, // Default fallback
+        }
+    }
+}

@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 4a — Codegen Foundation and Basic Programs
+**Phase:** Phase 4b — Control Flow, Loops, Truthy/Falsy
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 3: Basic type system and type checker
+**Last commit:** Phase 4a: First runnable HiLow programs
 
 ---
 
@@ -20,6 +20,19 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 4a complete
+- Implemented C code generation backend in src/codegen/mod.rs with comprehensive AST-to-C translation for programs, functions, statements, and expressions
+- Created C runtime library (runtime.h/runtime.c) with print_i32, print_i64, print_u32, print_u64, print_f32, print_f64, print_bool functions
+- Built complete compilation pipeline: parse → typecheck → codegen → invoke cc to produce executable binary
+- Extended type checker to handle print() as magic built-in function accepting any printable type, returning i32 (temporary until nothing type in Phase 9)
+- Implemented variable type tracking in codegen for proper print function dispatch (print_i32 vs print_bool vs print_f64 based on actual variable types)
+- Created comprehensive test suite: 7 codegen unit tests + 7 integration end-to-end tests covering compilation, execution, stdout capture, exit code verification
+- Added Display trait implementations for ParseError and LexError to enable proper error propagation in main compilation pipeline
+- Full pipeline orchestration with temporary file management, runtime embedding via include_str!, and cc invocation for linking
+- Verification programs working: hello_int.hl prints "42", arithmetic.hl prints all operations, return values propagate correctly as exit codes
+- All 146 tests passing (up from 132): working HiLow-to-executable compiler for Phase 4a subset
+- Commit: "Phase 4a: First runnable HiLow programs"
 
 ### 2026-05-02 — Phase 3 complete
 - Removed vestigial body_placeholder fields from Function and Program AST nodes after Phase 2b made them obsolete

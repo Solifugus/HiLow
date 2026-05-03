@@ -20,6 +20,30 @@ pub enum ParseError {
     LexError(LexError),
 }
 
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseError::UnexpectedToken { expected, found, position } => {
+                write!(f, "Unexpected token at line {}, column {}: expected {}, found {:?}",
+                       position.line, position.column, expected, found)
+            }
+            ParseError::UnexpectedEof { expected, position } => {
+                write!(f, "Unexpected end of file at line {}, column {}: expected {}",
+                       position.line, position.column, expected)
+            }
+            ParseError::UnsupportedFeature { feature, position, suggestion } => {
+                write!(f, "Unsupported feature '{}' at line {}, column {}: {}",
+                       feature, position.line, position.column, suggestion)
+            }
+            ParseError::LexError(lex_error) => {
+                write!(f, "Lexer error: {}", lex_error)
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,

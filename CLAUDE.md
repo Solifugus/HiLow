@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 4a — Codegen Foundation and Basic Programs**
+**Current phase: Phase 4b — Control Flow, Loops, Truthy/Falsy**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

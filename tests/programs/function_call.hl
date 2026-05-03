@@ -1,0 +1,4 @@
+high program(): i32 {
+  print(21 * 2)
+  return 0
+}
