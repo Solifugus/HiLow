@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>  // for malloc
+#include <string.h>  // for strcat
+#include <stdio.h>   // for sprintf
 
 // Print functions for primitive types
 // Each function prints the value followed by a newline

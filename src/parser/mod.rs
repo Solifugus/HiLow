@@ -738,21 +738,10 @@ impl Parser {
             TokenKind::Integer(n) => Ok(Expression::IntLit(n, token.position)),
             TokenKind::Float(f) => Ok(Expression::FloatLit(f, token.position)),
             TokenKind::StringLit(s) => Ok(Expression::StringLit(s, token.position)),
+            TokenKind::FStringStart => self.parse_f_string(token.position),
             TokenKind::True => Ok(Expression::BoolLit(true, token.position)),
             TokenKind::False => Ok(Expression::BoolLit(false, token.position)),
             TokenKind::Identifier => {
-                // Check for f-string deferral
-                if token.lexeme == "f" {
-                    if let Ok(next_token) = self.peek() {
-                        if matches!(next_token.kind, TokenKind::StringLit(_)) {
-                            return Err(ParseError::UnsupportedFeature {
-                                feature: "f-strings".to_string(),
-                                position: token.position,
-                                suggestion: "f-strings are implemented in Phase 6b".to_string(),
-                            });
-                        }
-                    }
-                }
                 Ok(Expression::Ident(token.lexeme, token.position))
             }
             TokenKind::LeftParen => {
@@ -1019,5 +1008,57 @@ impl Parser {
             rhs: Box::new(rhs),
             position,
         }))
+    }
+
+    fn parse_f_string(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        let mut parts = Vec::new();
+
+        // Parse f-string parts until we hit FStringEnd
+        loop {
+            let token = self.advance()?;
+            match token.kind {
+                TokenKind::FStringText(text) => {
+                    parts.push(FStringPart::Text(text));
+                }
+                TokenKind::FStringExprStart => {
+                    // Parse expression until FStringExprEnd
+                    let expr = self.parse_f_string_expression()?;
+                    parts.push(FStringPart::Expression(expr));
+                }
+                TokenKind::FStringEnd => {
+                    // End of f-string
+                    break;
+                }
+                _ => return Err(ParseError::UnexpectedToken {
+                    expected: "f-string content or end".to_string(),
+                    found: token.kind,
+                    position: token.position,
+                }),
+            }
+        }
+
+        Ok(Expression::FString(FString {
+            parts,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_f_string_expression(&mut self) -> Result<Expression, ParseError> {
+        let expr = self.parse_expression()?;
+
+        // Check for format specifiers (colon after expression)
+        if self.check(&TokenKind::Colon) {
+            let colon_token = self.advance()?;
+            return Err(ParseError::UnsupportedFeature {
+                feature: "format specifiers".to_string(),
+                position: colon_token.position,
+                suggestion: "format specifiers are not yet supported (Phase 6b-ii)".to_string(),
+            });
+        }
+
+        // Expect FStringExprEnd
+        self.expect_token(TokenKind::FStringExprEnd, "Expected '}' after f-string expression")?;
+
+        Ok(expr)
     }
 }

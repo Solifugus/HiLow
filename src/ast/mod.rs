@@ -162,10 +162,23 @@ pub struct QualifiedOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FStringPart {
+    Text(String),
+    Expression(Expression),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FString {
+    pub parts: Vec<FStringPart>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
     StringLit(String, Position),
+    FString(FString),
     BoolLit(bool, Position),
     Ident(String, Position),
     BinaryOp(BinaryOp),

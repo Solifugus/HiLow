@@ -355,6 +355,9 @@ impl CodeGenerator {
                 }
                 self.output.push('"');
             }
+            Expression::FString(fstring) => {
+                self.generate_fstring(fstring, type_checker)?;
+            }
             Expression::BoolLit(value, _) => {
                 self.output.push_str(if *value { "true" } else { "false" });
             }
@@ -576,6 +579,7 @@ impl CodeGenerator {
             Expression::IntLit(_, _) => Type::I32, // Default integer type
             Expression::FloatLit(_, _) => Type::F64, // Default float type
             Expression::StringLit(_, _) => Type::String,
+            Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident(name, _) => {
                 // Look up the variable type from our tracking
@@ -677,6 +681,114 @@ impl CodeGenerator {
 
         self.output.push_str(c_operator);
         self.generate_expression(&qualified_op.rhs, type_checker)?;
+
+        Ok(())
+    }
+
+    fn generate_fstring(&mut self, fstring: &FString, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Use malloc'd buffer approach as specified in Phase 6b-i requirements
+        // Memory leak is acceptable for Phase 6b-i, will be fixed in Phase 8
+
+        // Calculate buffer size estimate (4KB default with some buffer)
+        let buffer_size = 4096;
+
+        // Generate: malloc'd buffer with snprintf chain
+        self.output.push_str("({ char* __fstring_buf = malloc(");
+        self.output.push_str(&buffer_size.to_string());
+        self.output.push_str("); __fstring_buf[0] = '\\0'; ");
+
+        // Track position for potential future use
+
+        for part in &fstring.parts {
+            match part {
+                FStringPart::Text(text) => {
+                    if !text.is_empty() {
+                        self.output.push_str("strcat(__fstring_buf, ");
+                        // Emit C string literal for text part
+                        self.output.push('"');
+                        for ch in text.chars() {
+                            match ch {
+                                '"' => self.output.push_str("\\\""),
+                                '\\' => self.output.push_str("\\\\"),
+                                '\n' => self.output.push_str("\\n"),
+                                '\t' => self.output.push_str("\\t"),
+                                '\r' => self.output.push_str("\\r"),
+                                c if (c as u32) < 0x20 && c != '\n' && c != '\t' && c != '\r' => {
+                                    self.output.push_str(&format!("\\x{:02x}", c as u8));
+                                }
+                                c => {
+                                    self.output.push(c);
+                                }
+                            }
+                        }
+                        self.output.push_str("\"); ");
+                    }
+                }
+                FStringPart::Expression(expr) => {
+                    let expr_type = self.infer_expression_type(expr);
+
+                    // Generate appropriate format string and conversion
+                    match expr_type {
+                        Type::String => {
+                            // String: concatenate directly
+                            self.output.push_str("strcat(__fstring_buf, ");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); ");
+                        }
+                        Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
+                            // 32-bit integers
+                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", (int)");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                        }
+                        Type::I64 => {
+                            // 64-bit integers
+                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", (long long)");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                        }
+                        Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
+                            // 32-bit unsigned integers
+                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", (unsigned int)");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                        }
+                        Type::U64 => {
+                            // 64-bit unsigned integers
+                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", (unsigned long long)");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                        }
+                        Type::F32 => {
+                            // 32-bit floats
+                            self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", (double)");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                        }
+                        Type::F64 => {
+                            // 64-bit floats
+                            self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                        }
+                        Type::Bool => {
+                            // Boolean: "true" or "false"
+                            self.output.push_str("strcat(__fstring_buf, (");
+                            self.generate_expression(expr, type_checker)?;
+                            self.output.push_str(") ? \"true\" : \"false\"); ");
+                        }
+                        _ => {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("f-string interpolation of type {:?}", expr_type),
+                                phase: "Phase 6b-i".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        self.output.push_str("__fstring_buf; })");
 
         Ok(())
     }

@@ -15,6 +15,13 @@ pub enum TokenKind {
     True,
     False,
 
+    // F-string tokens
+    FStringStart,
+    FStringText(String),
+    FStringExprStart,
+    FStringExprEnd,
+    FStringEnd,
+
     // Identifiers
     Identifier,
 
@@ -172,6 +179,15 @@ pub struct Lexer {
     line: usize,
     column: usize,
     keywords: HashMap<String, TokenKind>,
+    // F-string state
+    fstring_state: Option<FStringState>,
+}
+
+#[derive(Debug, Clone)]
+struct FStringState {
+    quote_count: usize,
+    is_raw: bool,
+    brace_depth: usize,
 }
 
 impl Lexer {
@@ -232,6 +248,7 @@ impl Lexer {
             line: 1,
             column: 1,
             keywords,
+            fstring_state: None,
         }
     }
 
@@ -371,14 +388,47 @@ impl Lexer {
             column: self.column,
         };
 
+        // Check if we're in f-string mode
+        if let Some(state) = &self.fstring_state.clone() {
+            let ch = self.peek();
+
+            // If we're in an expression (brace_depth > 0), handle normally
+            if state.brace_depth > 0 {
+                // Let normal tokenization handle the content
+                // Update brace depth tracking
+                if ch == '{' {
+                    if let Some(ref mut state) = &mut self.fstring_state {
+                        state.brace_depth += 1;
+                    }
+                } else if ch == '}' {
+                    if let Some(ref mut state) = &mut self.fstring_state {
+                        state.brace_depth -= 1;
+                        if state.brace_depth == 0 {
+                            // This closes the expression
+                            self.advance(); // consume '}'
+                            return Ok(self.make_token(TokenKind::FStringExprEnd, start_pos, "}".to_string()));
+                        }
+                    }
+                }
+                // Continue with normal tokenization for expression content
+            } else {
+                // We're in f-string text mode (brace_depth == 0)
+                return self.f_string_content(start_pos);
+            }
+        }
+
         let ch = self.advance();
 
         match ch {
             // Single-character tokens
             '(' => Ok(self.make_token(TokenKind::LeftParen, start_pos, "(".to_string())),
             ')' => Ok(self.make_token(TokenKind::RightParen, start_pos, ")".to_string())),
-            '{' => Ok(self.make_token(TokenKind::LeftBrace, start_pos, "{".to_string())),
-            '}' => Ok(self.make_token(TokenKind::RightBrace, start_pos, "}".to_string())),
+            '{' => {
+                Ok(self.make_token(TokenKind::LeftBrace, start_pos, "{".to_string()))
+            }
+            '}' => {
+                Ok(self.make_token(TokenKind::RightBrace, start_pos, "}".to_string()))
+            }
             '[' => Ok(self.make_token(TokenKind::LeftBracket, start_pos, "[".to_string())),
             ']' => Ok(self.make_token(TokenKind::RightBracket, start_pos, "]".to_string())),
             ',' => Ok(self.make_token(TokenKind::Comma, start_pos, ",".to_string())),
@@ -526,12 +576,37 @@ impl Lexer {
             // String literals
             '"' => self.string_literal(start_pos, false),
 
-            // Identifiers and keywords (including raw strings)
+            // Identifiers and keywords (including raw strings and f-strings)
             'a'..='z' | 'A'..='Z' | '_' => {
-                // Check for raw string prefix 'r"'
+                // Check for string prefixes
                 if ch == 'r' && self.peek() == '"' {
+                    // Raw string: r"..."
                     self.advance(); // consume '"'
                     self.string_literal(start_pos, true)
+                } else if ch == 'f' && self.peek() == '"' {
+                    // F-string: f"..."
+                    self.advance(); // consume '"'
+                    self.f_string(start_pos, false)
+                } else if ch == 'r' && self.peek() == 'f' {
+                    // Check for raw f-string: rf"..."
+                    let lookahead = self.current + 1;
+                    if lookahead < self.input.len() && self.input[lookahead] == '"' {
+                        self.advance(); // consume 'f'
+                        self.advance(); // consume '"'
+                        self.f_string(start_pos, true)
+                    } else {
+                        self.identifier_or_keyword(start_pos)
+                    }
+                } else if ch == 'f' && self.peek() == 'r' {
+                    // Check for raw f-string: fr"..."
+                    let lookahead = self.current + 1;
+                    if lookahead < self.input.len() && self.input[lookahead] == '"' {
+                        self.advance(); // consume 'r'
+                        self.advance(); // consume '"'
+                        self.f_string(start_pos, true)
+                    } else {
+                        self.identifier_or_keyword(start_pos)
+                    }
                 } else {
                     self.identifier_or_keyword(start_pos)
                 }
@@ -851,5 +926,161 @@ impl Lexer {
             }
         }
         Ok(chars)
+    }
+
+    fn f_string(&mut self, start_pos: Position, is_raw: bool) -> Result<Token, LexError> {
+        // Count the opening quotes
+        let mut quote_count = 1; // We already consumed the first quote
+        while !self.is_at_end() && self.peek() == '"' {
+            self.advance();
+            quote_count += 1;
+        }
+
+        // Initialize f-string state
+        self.fstring_state = Some(FStringState {
+            quote_count,
+            is_raw,
+            brace_depth: 0,
+        });
+
+        // Create lexeme for debugging
+        let prefix = if is_raw { "rf" } else { "f" };
+        let quotes = "\"".repeat(quote_count);
+        let lexeme = format!("{}{}", prefix, quotes);
+
+        Ok(self.make_token(TokenKind::FStringStart, start_pos, lexeme))
+    }
+
+    fn f_string_content(&mut self, start_pos: Position) -> Result<Token, LexError> {
+        let state = self.fstring_state.as_ref().unwrap();
+        let quote_count = state.quote_count;
+        let is_raw = state.is_raw;
+
+        // First check if we're immediately at the end of the f-string
+        if self.peek() == '"' {
+            // Count quotes to see if this is the end
+            let mut quotes_found = 0;
+            let mut temp_pos = self.current;
+            while temp_pos < self.input.len() && self.input[temp_pos] == '"' {
+                quotes_found += 1;
+                temp_pos += 1;
+            }
+
+            if quotes_found >= quote_count {
+                // This is the end - consume the quotes and end the f-string
+                for _ in 0..quote_count {
+                    self.advance();
+                }
+                self.fstring_state = None;
+                let lexeme = "\"".repeat(quote_count);
+                return Ok(self.make_token(TokenKind::FStringEnd, start_pos, lexeme));
+            }
+        }
+
+        let mut content = String::new();
+
+        // Read content until we find a delimiter (closing quotes, {, or })
+        while !self.is_at_end() {
+            let ch = self.peek();
+
+            if ch == '"' {
+                // Check if this is the closing quote sequence
+                let mut quotes_found = 0;
+                let mut temp_pos = self.current;
+                while temp_pos < self.input.len() && self.input[temp_pos] == '"' {
+                    quotes_found += 1;
+                    temp_pos += 1;
+                }
+
+                if quotes_found >= quote_count {
+                    // This is the end - return any accumulated text first
+                    if !content.is_empty() {
+                        return Ok(self.make_token(TokenKind::FStringText(content.clone()), start_pos, content));
+                    } else {
+                        // No content, end the f-string
+                        for _ in 0..quote_count {
+                            self.advance();
+                        }
+                        self.fstring_state = None;
+                        let lexeme = "\"".repeat(quote_count);
+                        return Ok(self.make_token(TokenKind::FStringEnd, start_pos, lexeme));
+                    }
+                } else {
+                    // Not enough quotes - treat as literal content
+                    for _ in 0..quotes_found {
+                        self.advance();
+                        content.push('"');
+                    }
+                    continue;
+                }
+            }
+
+            if ch == '{' {
+                // Start of expression or {{ escape
+                if self.peek_next() == '{' {
+                    // {{ escape - literal {
+                    self.advance(); // consume first {
+                    self.advance(); // consume second {
+                    content.push('{');
+                    continue;
+                } else {
+                    // Start of expression
+                    if !content.is_empty() {
+                        // Return accumulated text first
+                        return Ok(self.make_token(TokenKind::FStringText(content.clone()), start_pos, content));
+                    } else {
+                        // Start expression immediately
+                        self.advance(); // consume {
+                        // Update brace depth to indicate we're in an expression
+                        if let Some(ref mut state) = &mut self.fstring_state {
+                            state.brace_depth = 1;
+                        }
+                        return Ok(self.make_token(TokenKind::FStringExprStart, start_pos, "{".to_string()));
+                    }
+                }
+            }
+
+            if ch == '}' {
+                // }} escape or error
+                if self.peek_next() == '}' {
+                    // }} escape - literal }
+                    self.advance(); // consume first }
+                    self.advance(); // consume second }
+                    content.push('}');
+                    continue;
+                } else {
+                    // Unexpected single } in f-string text
+                    return Err(LexError::UnexpectedCharacter { char: ch, position: start_pos });
+                }
+            }
+
+            // Regular character - add to content
+            self.advance();
+            if is_raw {
+                content.push(ch);
+            } else {
+                // Handle escape sequences (simplified for now)
+                if ch == '\\' && !self.is_at_end() {
+                    let escaped = self.advance();
+                    match escaped {
+                        'n' => content.push('\n'),
+                        't' => content.push('\t'),
+                        'r' => content.push('\r'),
+                        '\\' => content.push('\\'),
+                        '"' => content.push('"'),
+                        '{' => content.push('{'),
+                        '}' => content.push('}'),
+                        _ => {
+                            content.push('\\');
+                            content.push(escaped);
+                        }
+                    }
+                } else {
+                    content.push(ch);
+                }
+            }
+        }
+
+        Err(LexError::UnterminatedString { position: start_pos })
     }
 }

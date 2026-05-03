@@ -334,6 +334,7 @@ impl TypeChecker {
                 Type::default_float_type()
             },
             Expression::StringLit(_, _) => Type::String,
+            Expression::FString(fstring) => self.check_fstring(fstring),
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident(name, pos) => {
                 // Look up variable in symbol table
@@ -757,6 +758,41 @@ impl TypeChecker {
         }
     }
 
+    fn check_fstring(&mut self, fstring: &FString) -> Type {
+        // Check each part of the f-string
+        for part in &fstring.parts {
+            match part {
+                FStringPart::Text(_) => {
+                    // Text parts are always valid
+                }
+                FStringPart::Expression(expr) => {
+                    let expr_type = self.check_expression(expr);
+
+                    // Check if the expression type can be interpolated
+                    match expr_type {
+                        Type::String |
+                        Type::Bool |
+                        Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+                        Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+                        Type::Isize | Type::Usize |
+                        Type::F32 | Type::F64 => {
+                            // These types can be interpolated
+                        }
+                        _ => {
+                            self.add_error(
+                                format!("value of type {:?} cannot be interpolated in f-strings", expr_type),
+                                expr.position()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // F-strings always have type string
+        Type::String
+    }
+
     fn add_error(&mut self, message: String, position: Position) {
         self.errors.push(TypeError::new(message, position));
     }
@@ -773,6 +809,7 @@ impl HasPosition for Expression {
             Expression::IntLit(_, pos) => pos.clone(),
             Expression::FloatLit(_, pos) => pos.clone(),
             Expression::StringLit(_, pos) => pos.clone(),
+            Expression::FString(fstring) => fstring.position.clone(),
             Expression::BoolLit(_, pos) => pos.clone(),
             Expression::Ident(_, pos) => pos.clone(),
             Expression::BinaryOp(op) => op.position.clone(),

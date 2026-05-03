@@ -866,7 +866,7 @@ hilowc wrong_context.hl
 - Raw strings: `r"..."`
 
 **Out of scope:**
-- F-strings — Phase 6b
+- F-strings — Phase 6b-i (basic interpolation), 6b-ii (format specifiers)
 - String operations (`.length`, `.indexOf`, `.slice`, etc.) — Phase 16
 - String concatenation (use f-strings instead)
 
@@ -920,41 +920,88 @@ hilowc strings_basic.hl -o sb && ./sb
 
 **Note**: This was an unplanned consolidation phase to address issues discovered during Phase 6a verification. Fixed UTF-8 string literal corruption in generated C code (hex escapes caused parsing conflicts), implemented nested function definitions inside program bodies with name mangling to avoid C keyword conflicts, added missing multiline.hl integration test, and cleaned up dead placeholder code. Nested functions work as declaration-only (no variable capture) until closures are implemented in Phase 7c.
 
-### Phase 6b: F-Strings
+### Phase 6b-i: F-Strings (Basic, No Format Specifiers)
 
 **Scope:**
 - F-string parsing: `f"..."` with `{expr}` interpolation
-- F-string with format specifiers: `{expr:.2f}`, `{expr:x}`, `{expr:>10}`, etc. for primitives
+- Expression interpolation: primitives (i32, i64, f32, f64, bool, string) converted to default string representation
 - Multi-line f-strings
 - F-string with quote recursion: `f""embedded "quotes" with {var}""`
-- Raw f-strings: `rf"..."`
+- Raw f-strings: `rf"..."` (no escape processing in string parts, but expressions still interpolate)
+- Literal brace escaping: `{{` and `}}` for literal `{` and `}`
 
 **Out of scope:**
+- Format specifiers: `{expr:.2f}`, `{expr:x}`, `{expr:>10}` — Phase 6b-ii
 - F-string formatting for `time` and `money` — Phase 9
 - Custom format specifiers for user types — Phase 17
 
 **Tasks:**
 1. Lexer: emit `FStringStart`, `FStringText`, `FStringExprStart`, `FStringExprEnd`, `FStringEnd` token sequence
 2. Parser: assemble f-string into `FString { parts: Vec<FStringPart> }` where parts are either Text or Expression
-3. Format specifier parsing: after `:` inside `{}`, parse format spec
-4. Codegen: emit a series of `printf`-style calls or build a buffer; handle each format spec correctly for primitives
-5. Runtime: helpers for formatting (or rely on `snprintf` for simple cases)
+3. Detect format specifiers (`:` inside `{}`) and error with EXACT message: "format specifiers are not yet supported (Phase 6b-ii)"
+4. Codegen: malloc'd buffer with snprintf chain for building result string (memory leak acceptable for Phase 6b-i, documented for Phase 8)
+5. Runtime: no new helpers needed if using inline snprintf approach
 
 **Verification:**
 
 ```hilow
-// fstrings.hl
+// hello_fstring.hl
 high program(): i32 {
   let name = "Alice"
   let age = 30
-  print(f"Hello {name}! You are {age} years old.")
-  
+  print(f"Hello, {name}! You are {age} years old.")
+  return 0
+}
+```
+
+```hilow
+// arithmetic_fstring.hl
+high program(): i32 {
+  let x = 2
+  let y = 3
+  print(f"{x} + {y} = {x + y}")
+  return 0
+}
+```
+
+```hilow
+// format_spec_error.hl (should fail)
+high program(): i32 {
+  let x = 3.14159
+  print(f"Pi: {x:.2f}")  // Error: format specifiers not yet supported
+  return 0
+}
+```
+
+### Phase 6b-ii: F-Strings (Format Specifiers)
+
+**Scope:**
+- Format specifier parsing: after `:` inside `{}`, parse format spec
+- Format specifiers for primitives: decimal (d), hex (x/X), binary (b), float precision (.2f), padding (08d), alignment (>10, <10, ^10)
+- Format specifier codegen: emit correct snprintf format strings
+
+**Out of scope:**
+- F-string formatting for `time` and `money` — Phase 9
+- Custom format specifiers for user types — Phase 17
+
+**Tasks:**
+1. Parse format specifiers after `:` in expressions
+2. Validate format specs against expression types (e.g., hex only for integers)
+3. Codegen: translate format specs to snprintf format strings
+4. Enhanced verification program with all format specifier types
+
+**Verification:**
+
+```hilow
+// fstrings_formats.hl
+high program(): i32 {
   let pi = 3.14159
   print(f"Pi: {pi:.2f}")
   
   let n = 255
   print(f"Hex: {n:x}, Bin: {n:b}, Padded: {n:08d}")
   
+  let name = "Alice"
   print(f"|{name:>15}|")
   print(f"|{name:<15}|")
   
@@ -963,9 +1010,8 @@ high program(): i32 {
 ```
 
 ```bash
-hilowc fstrings.hl -o fs && ./fs
+hilowc fstrings_formats.hl -o fs && ./fs
 # Output:
-# Hello Alice! You are 30 years old.
 # Pi: 3.14
 # Hex: ff, Bin: 11111111, Padded: 00000255
 # |          Alice|

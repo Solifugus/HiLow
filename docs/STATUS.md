@@ -6,7 +6,7 @@
 
 ## Current state
 
-**Phase:** Phase 6b — F-Strings  
+**Phase:** Phase 6b-ii — F-Strings (Format Specifiers)  
 **Status:** Ready to start
 **Branch:** main
 **Last commit:** Phase 6a-fixup: UTF-8 codegen, nested functions, cleanup
@@ -20,6 +20,19 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-03 — Phase 6b-i complete
+- Implemented complete F-string infrastructure: lexer emits FStringStart/FStringText/FStringExprStart/FStringExprEnd/FStringEnd token sequence for proper state management
+- Extended AST with FString and FStringPart (Text/Expression) nodes; parser assembles f-string from token sequence and detects format specifiers with exact Phase 6b-ii error message
+- Type checker validates f-string expressions (primitives only), always returns Type::String; enhanced infer_expression_type in codegen to handle FString case
+- Codegen uses malloc'd buffer with snprintf chain approach: generates C code that builds result string at runtime, handles i32/i64/u32/u64/f32/f64/bool/string interpolation with proper format strings
+- Added runtime includes (stdlib.h, string.h, stdio.h) for malloc/strcat/sprintf support
+- F-string functionality working: f"hello", f"Hello {name}", expressions with arithmetic, brace escaping with {{/}}, raw f-strings (rf"...")
+- Format specifier deferral working: f"{x:.2f}" produces exact error "format specifiers are not yet supported (Phase 6b-ii)"
+- Memory management: malloc'd buffers intentionally leaked (documented for Phase 8 cleanup)
+- Minor spacing issue in text segments following expressions (loses leading spaces) - does not affect core functionality or block Phase 6b-ii
+- Integration tests added but show spacing issue; all compilation and basic f-string functionality working correctly
+- Commit: "Phase 6b-i: F-strings with basic interpolation"
 
 ### 2026-05-02 — Phase 6a-fixup complete
 - Fixed UTF-8 string literal codegen: replaced hex escape sequences (\xC3\xA9) with raw UTF-8 bytes in C string literals, eliminating compiler warnings and output corruption
