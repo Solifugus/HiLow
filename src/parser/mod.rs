@@ -534,7 +534,7 @@ impl Parser {
     }
 
     fn try_parse_assignment(&mut self) -> Result<AssignStmt, ParseError> {
-        let target = self.parse_primary_expression()?;
+        let target = self.parse_postfix_expression()?;
 
         let op_token = self.peek()?;
         let op = match &op_token.kind {
@@ -565,7 +565,7 @@ impl Parser {
     }
 
     fn try_parse_qualified_assignment(&mut self) -> Result<QualifiedOp, ParseError> {
-        // Parse left-hand side
+        // Parse left-hand side (qualified assignments expect simple identifiers)
         let lhs = self.parse_primary_expression()?;
 
         // Check if this looks like a qualified operator (next token should be '(')
@@ -802,6 +802,10 @@ impl Parser {
                 let expr = self.parse_expression()?;
                 self.expect_token(TokenKind::RightParen, "Expected ')' after expression")?;
                 Ok(expr)
+            }
+            TokenKind::LeftBrace => {
+                // Object literal (in expression position)
+                self.parse_object_literal(token.position)
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
@@ -1282,5 +1286,61 @@ impl Parser {
             type_code,
             position,
         })
+    }
+
+    fn parse_object_literal(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        let mut properties = Vec::new();
+
+        // Handle empty object literal: {}
+        if self.check(&TokenKind::RightBrace) {
+            self.advance()?; // consume '}'
+            return Ok(Expression::ObjectLiteral(ObjectLiteral {
+                properties,
+                position: start_pos,
+            }));
+        }
+
+        // Parse property list
+        loop {
+            // Parse property name (must be identifier)
+            let name_token = self.expect_token(TokenKind::Identifier, "Expected property name")?;
+            let prop_name = name_token.lexeme;
+
+            // Parse ':'
+            self.expect_token(TokenKind::Colon, "Expected ':' after property name")?;
+
+            // Parse property value
+            let value = self.parse_expression()?;
+
+            properties.push((prop_name, value));
+
+            // Check for ',' or '}'
+            let token = self.advance()?;
+            match token.kind {
+                TokenKind::Comma => {
+                    // Check for trailing comma (optional)
+                    if self.check(&TokenKind::RightBrace) {
+                        self.advance()?; // consume '}'
+                        break;
+                    }
+                    // Continue to next property
+                }
+                TokenKind::RightBrace => {
+                    break;
+                }
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "',' or '}'".to_string(),
+                        found: token.kind,
+                        position: token.position,
+                    });
+                }
+            }
+        }
+
+        Ok(Expression::ObjectLiteral(ObjectLiteral {
+            properties,
+            position: start_pos,
+        }))
     }
 }

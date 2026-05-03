@@ -85,3 +85,164 @@ char* hl_format_center(const char* value, int width) {
 
     return result;
 }
+
+// Object support implementation (Phase 7a)
+
+HiLowObject* hl_object_new(void) {
+    HiLowObject* obj = malloc(sizeof(HiLowObject));
+    obj->properties = NULL;
+    obj->property_count = 0;
+    obj->property_capacity = 0;
+    return obj;
+}
+
+// Helper function to find a property by key
+static Property* find_property(HiLowObject* obj, const char* key) {
+    for (size_t i = 0; i < obj->property_count; i++) {
+        if (strcmp(obj->properties[i].key, key) == 0) {
+            return &obj->properties[i];
+        }
+    }
+    return NULL;
+}
+
+// Helper function to ensure capacity for a new property
+static void ensure_capacity(HiLowObject* obj) {
+    if (obj->property_count >= obj->property_capacity) {
+        size_t new_capacity = obj->property_capacity == 0 ? 4 : obj->property_capacity * 2;
+        obj->properties = realloc(obj->properties, new_capacity * sizeof(Property));
+        obj->property_capacity = new_capacity;
+    }
+}
+
+// Helper function to add or update a property
+static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
+    Property* existing = find_property(obj, key);
+    if (existing) {
+        existing->value = value;
+    } else {
+        ensure_capacity(obj);
+        obj->properties[obj->property_count].key = strdup(key);  // Duplicate the key string
+        obj->properties[obj->property_count].value = value;
+        obj->property_count++;
+    }
+}
+
+void hl_object_set_i32(HiLowObject* obj, const char* key, int32_t value) {
+    HiLowValue val = { .type = HL_VALUE_I32, .value.i32_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_i64(HiLowObject* obj, const char* key, int64_t value) {
+    HiLowValue val = { .type = HL_VALUE_I64, .value.i64_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_u32(HiLowObject* obj, const char* key, uint32_t value) {
+    HiLowValue val = { .type = HL_VALUE_U32, .value.u32_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_u64(HiLowObject* obj, const char* key, uint64_t value) {
+    HiLowValue val = { .type = HL_VALUE_U64, .value.u64_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_f32(HiLowObject* obj, const char* key, float value) {
+    HiLowValue val = { .type = HL_VALUE_F32, .value.f32_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_f64(HiLowObject* obj, const char* key, double value) {
+    HiLowValue val = { .type = HL_VALUE_F64, .value.f64_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_bool(HiLowObject* obj, const char* key, bool value) {
+    HiLowValue val = { .type = HL_VALUE_BOOL, .value.bool_val = value };
+    set_property(obj, key, val);
+}
+
+void hl_object_set_str(HiLowObject* obj, const char* key, const char* value) {
+    HiLowValue val = { .type = HL_VALUE_STR, .value.str_val = strdup(value) };  // Duplicate string
+    set_property(obj, key, val);
+}
+
+void hl_object_set_object(HiLowObject* obj, const char* key, HiLowObject* value) {
+    HiLowValue val = { .type = HL_VALUE_OBJECT, .value.obj_val = value };
+    set_property(obj, key, val);
+}
+
+// Getter functions (these assume the property exists and has the correct type)
+int32_t hl_object_get_i32(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_I32) {
+        return prop->value.value.i32_val;
+    }
+    // Return 0 as default (error case should be caught by type checker)
+    return 0;
+}
+
+int64_t hl_object_get_i64(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_I64) {
+        return prop->value.value.i64_val;
+    }
+    return 0;
+}
+
+uint32_t hl_object_get_u32(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_U32) {
+        return prop->value.value.u32_val;
+    }
+    return 0;
+}
+
+uint64_t hl_object_get_u64(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_U64) {
+        return prop->value.value.u64_val;
+    }
+    return 0;
+}
+
+float hl_object_get_f32(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_F32) {
+        return prop->value.value.f32_val;
+    }
+    return 0.0f;
+}
+
+double hl_object_get_f64(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_F64) {
+        return prop->value.value.f64_val;
+    }
+    return 0.0;
+}
+
+bool hl_object_get_bool(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_BOOL) {
+        return prop->value.value.bool_val;
+    }
+    return false;
+}
+
+char* hl_object_get_str(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_STR) {
+        return prop->value.value.str_val;
+    }
+    return "";
+}
+
+HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key) {
+    Property* prop = find_property(obj, key);
+    if (prop && prop->value.type == HL_VALUE_OBJECT) {
+        return prop->value.value.obj_val;
+    }
+    return NULL;
+}

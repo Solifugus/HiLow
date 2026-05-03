@@ -23,6 +23,9 @@ pub enum Type {
     FixedArray(Box<Type>, usize),
     DynamicArray(Box<Type>),
 
+    /// Object type (structural)
+    Object(Vec<(String, Type)>), // properties and their types
+
     /// Unknown type (for error recovery)
     Unknown,
 }
@@ -112,6 +115,14 @@ impl Type {
             ast::Type::DynamicArray(element_type) => {
                 Type::DynamicArray(Box::new(Type::from_ast_type(element_type)))
             },
+            ast::Type::Object(properties) => {
+                Type::Object(
+                    properties
+                        .iter()
+                        .map(|(name, ty)| (name.clone(), Type::from_ast_type(ty)))
+                        .collect()
+                )
+            },
         }
     }
 }
@@ -138,6 +149,16 @@ impl std::fmt::Display for Type {
             Type::Nothing => write!(f, "nothing"),
             Type::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
             Type::DynamicArray(elem) => write!(f, "[{}]", elem),
+            Type::Object(properties) => {
+                write!(f, "{{")?;
+                for (i, (name, ty)) in properties.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", name, ty)?;
+                }
+                write!(f, "}}")
+            },
             Type::Unknown => write!(f, "<unknown>"),
         }
     }

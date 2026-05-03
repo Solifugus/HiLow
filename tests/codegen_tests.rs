@@ -114,20 +114,7 @@ fn test_float_literal_codegen() {
     assert!(c_code.contains("print_f64(pi)"));
 }
 
-#[test]
-fn test_unsupported_feature_error() {
-    let input = "high program(): i32 { x.y }";
-    let ast = Parser::new(input).unwrap().parse().unwrap();
-    let type_checker = TypeChecker::new();
-
-    let mut codegen = CodeGenerator::new();
-    let result = codegen.generate(&ast, &type_checker);
-
-    assert!(result.is_err());
-    let error = result.unwrap_err();
-    assert!(error.to_string().contains("member access"));
-    assert!(error.to_string().contains("Phase 7"));
-}
+// Note: Removed test_unsupported_feature_error since member access is now implemented in Phase 7a
 
 // Phase 4b codegen tests
 

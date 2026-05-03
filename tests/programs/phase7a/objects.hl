@@ -1,0 +1,11 @@
+// objects.hl - Phase 7a basic object support
+high program(): i32 {
+  let point = { x: 10, y: 20 }
+  print(point.x)               // 10
+  print(point.y)               // 20
+
+  point.x = 99
+  print(point.x)               // 99
+
+  return 0
+}

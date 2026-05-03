@@ -343,10 +343,7 @@ impl TypeChecker {
             Expression::BinaryOp(binary_op) => self.check_binary_op(binary_op),
             Expression::UnaryOp(unary_op) => self.check_unary_op(unary_op),
             Expression::Call(call) => self.check_call(call),
-            Expression::MemberAccess(_) => {
-                // TODO: Implement member access type checking
-                Type::Unknown
-            },
+            Expression::MemberAccess(member_access) => self.check_member_access(member_access),
             Expression::IndexAccess(_) => {
                 // TODO: Implement index access type checking
                 Type::Unknown
@@ -358,6 +355,7 @@ impl TypeChecker {
                 Type::Bool
             },
             Expression::QualifiedOp(qualified_op) => self.check_qualified_op_expression(qualified_op),
+            Expression::ObjectLiteral(obj_lit) => self.check_object_literal(obj_lit),
         }
     }
 
@@ -904,6 +902,92 @@ impl TypeChecker {
     fn add_error(&mut self, message: String, position: Position) {
         self.errors.push(TypeError::new(message, position));
     }
+
+    fn check_object_literal(&mut self, obj_lit: &ObjectLiteral) -> Type {
+        let mut properties = Vec::new();
+
+        for (prop_name, prop_expr) in &obj_lit.properties {
+            let prop_type = self.check_expression(prop_expr);
+            properties.push((prop_name.clone(), prop_type));
+        }
+
+        Type::Object(properties)
+    }
+
+    fn check_member_access(&mut self, member_access: &MemberAccess) -> Type {
+        let object_type = self.check_expression(&member_access.object);
+
+        match object_type {
+            Type::Object(ref properties) => {
+                // Look up the property in the object's type
+                for (prop_name, prop_type) in properties {
+                    if prop_name == &member_access.member {
+                        return prop_type.clone();
+                    }
+                }
+
+                // Property not found
+                self.add_error(
+                    format!("Object does not have property '{}' (Phase 9 will allow runtime property access)", member_access.member),
+                    member_access.position.clone()
+                );
+                Type::Unknown
+            },
+            Type::Unknown => Type::Unknown, // Error recovery
+            _ => {
+                self.add_error(
+                    format!("Cannot access property '{}' on non-object type {}", member_access.member, object_type),
+                    member_access.position.clone()
+                );
+                Type::Unknown
+            }
+        }
+    }
+
+    /// Public method for codegen to get expression types
+    pub fn get_expression_type(&self, expression: &Expression) -> Type {
+        // Create a temporary type checker to evaluate the expression type
+        // This is a simplified version that doesn't do error reporting
+        match expression {
+            Expression::IntLit(value, _) => Type::default_integer_type(*value),
+            Expression::FloatLit(_, _) => Type::default_float_type(),
+            Expression::StringLit(_, _) => Type::String,
+            Expression::BoolLit(_, _) => Type::Bool,
+            Expression::Ident(name, _) => {
+                // Look up in symbol table
+                for scope in self.scopes.iter().rev() {
+                    if let Some(symbol) = scope.lookup(name) {
+                        return symbol.ty.clone();
+                    }
+                }
+                Type::Unknown // Variable not found
+            }
+            Expression::MemberAccess(member_access) => {
+                let object_type = self.get_expression_type(&member_access.object);
+                match object_type {
+                    Type::Object(ref properties) => {
+                        for (prop_name, prop_type) in properties {
+                            if prop_name == &member_access.member {
+                                return prop_type.clone();
+                            }
+                        }
+                        Type::Unknown // Property not found
+                    }
+                    _ => Type::Unknown
+                }
+            }
+            Expression::ObjectLiteral(obj_lit) => {
+                let mut properties = Vec::new();
+                for (prop_name, prop_expr) in &obj_lit.properties {
+                    let prop_type = self.get_expression_type(prop_expr);
+                    properties.push((prop_name.clone(), prop_type));
+                }
+                Type::Object(properties)
+            }
+            // Add other expression types as needed
+            _ => Type::Unknown
+        }
+    }
 }
 
 // Helper trait to get position from expressions
@@ -927,6 +1011,7 @@ impl HasPosition for Expression {
             Expression::IndexAccess(access) => access.position.clone(),
             Expression::IsCheck(check) => check.position.clone(),
             Expression::QualifiedOp(qualified_op) => qualified_op.position.clone(),
+            Expression::ObjectLiteral(obj_lit) => obj_lit.position.clone(),
         }
     }
 }

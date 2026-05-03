@@ -32,6 +32,7 @@ pub enum Type {
     Primitive(PrimitiveType),
     FixedArray(Box<Type>, usize),
     DynamicArray(Box<Type>),
+    Object(Vec<(String, Type)>), // structural object type: properties and their types
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -191,6 +192,12 @@ pub struct FString {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ObjectLiteral {
+    pub properties: Vec<(String, Expression)>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
@@ -205,6 +212,7 @@ pub enum Expression {
     IndexAccess(IndexAccess),
     IsCheck(IsCheck),
     QualifiedOp(QualifiedOp),
+    ObjectLiteral(ObjectLiteral),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -373,11 +373,8 @@ impl CodeGenerator {
             Expression::Call(call) => {
                 self.generate_call(call, type_checker)?;
             }
-            Expression::MemberAccess(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "member access".to_string(),
-                    phase: "Phase 7 (objects)".to_string(),
-                });
+            Expression::MemberAccess(member_access) => {
+                self.generate_member_access(member_access, type_checker)?;
             }
             Expression::IndexAccess(_) => {
                 return Err(CodegenError::UnsupportedFeature {
@@ -390,6 +387,9 @@ impl CodeGenerator {
             }
             Expression::QualifiedOp(qualified_op) => {
                 self.generate_qualified_op_expression(qualified_op, type_checker)?;
+            }
+            Expression::ObjectLiteral(obj_lit) => {
+                self.generate_object_literal(obj_lit, type_checker)?;
             }
         }
         Ok(())
@@ -540,6 +540,7 @@ impl CodeGenerator {
             Type::Nothing => "void".to_string(),
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
+            Type::Object(_) => "HiLowObject*".to_string(),
             Type::Unknown => "void".to_string(),
         }
     }
@@ -972,6 +973,131 @@ impl CodeGenerator {
                 self.generate_expression(expr, type_checker)?;
             }
         }
+        Ok(())
+    }
+
+    fn generate_object_literal(&mut self, obj_lit: &ObjectLiteral, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate object creation: hl_object_new()
+        self.output.push_str("({\n");
+        self.output.push_str("    HiLowObject* obj = hl_object_new();\n");
+
+        // Generate property assignments
+        for (prop_name, prop_expr) in &obj_lit.properties {
+            self.output.push_str(&format!("    hl_object_set_"));
+
+            // Determine the type of the property to call the right setter
+            let expr_type = type_checker.get_expression_type(prop_expr);
+            match expr_type {
+                Type::I32 => {
+                    self.output.push_str("i32(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::I64 => {
+                    self.output.push_str("i64(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::U32 => {
+                    self.output.push_str("u32(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::U64 => {
+                    self.output.push_str("u64(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::F32 => {
+                    self.output.push_str("f32(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::F64 => {
+                    self.output.push_str("f64(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::Bool => {
+                    self.output.push_str("bool(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::String => {
+                    self.output.push_str("str(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                Type::Object(_) => {
+                    self.output.push_str("object(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("object property of type {}", expr_type),
+                        phase: "future phases".to_string(),
+                    });
+                }
+            }
+        }
+
+        self.output.push_str("    obj;\n");
+        self.output.push_str("})");
+
+        Ok(())
+    }
+
+    fn generate_member_access(&mut self, member_access: &MemberAccess, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate property access: hl_object_get_TYPE(obj, "property")
+
+        // Determine the type of the property to call the right getter
+        let member_type = type_checker.get_expression_type(&Expression::MemberAccess(member_access.clone()));
+
+        match member_type {
+            Type::I32 => self.output.push_str("hl_object_get_i32("),
+            Type::I64 => self.output.push_str("hl_object_get_i64("),
+            Type::U32 => self.output.push_str("hl_object_get_u32("),
+            Type::U64 => self.output.push_str("hl_object_get_u64("),
+            Type::F32 => self.output.push_str("hl_object_get_f32("),
+            Type::F64 => self.output.push_str("hl_object_get_f64("),
+            Type::Bool => self.output.push_str("hl_object_get_bool("),
+            Type::String => self.output.push_str("hl_object_get_str("),
+            Type::Object(_) => self.output.push_str("hl_object_get_object("),
+            _ => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("member access for type {}", member_type),
+                    phase: "future phases".to_string(),
+                });
+            }
+        }
+
+        // Generate the object expression
+        self.generate_expression(&member_access.object, type_checker)?;
+
+        // Generate the property name as a string literal
+        self.output.push_str(", \"");
+        self.output.push_str(&member_access.member);
+        self.output.push_str("\")");
+
         Ok(())
     }
 }
