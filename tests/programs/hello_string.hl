@@ -1,0 +1,4 @@
+high program(): i32 {
+  print("Hello, HiLow World!")
+  return 0
+}

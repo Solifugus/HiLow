@@ -183,6 +183,7 @@ impl CodeGenerator {
             match initializer {
                 Expression::IntLit(value, _) => Type::default_integer_type(*value),
                 Expression::FloatLit(_, _) => Type::default_float_type(),
+                Expression::StringLit(_, _) => Type::String,
                 Expression::BoolLit(_, _) => Type::Bool,
                 _ => {
                     // For complex expressions, we'd need full type checking context
@@ -317,6 +318,29 @@ impl CodeGenerator {
             }
             Expression::FloatLit(value, _) => {
                 self.output.push_str(&value.to_string());
+            }
+            Expression::StringLit(value, _) => {
+                // Emit C string literal with proper escaping
+                self.output.push('"');
+                for ch in value.chars() {
+                    match ch {
+                        '"' => self.output.push_str("\\\""),
+                        '\\' => self.output.push_str("\\\\"),
+                        '\n' => self.output.push_str("\\n"),
+                        '\t' => self.output.push_str("\\t"),
+                        '\r' => self.output.push_str("\\r"),
+                        c if c.is_ascii() && !c.is_control() => self.output.push(c),
+                        c => {
+                            // For non-ASCII or control chars, use hex escape
+                            let mut buf = [0; 4];
+                            let encoded = c.encode_utf8(&mut buf);
+                            for byte in encoded.bytes() {
+                                self.output.push_str(&format!("\\x{:02x}", byte));
+                            }
+                        }
+                    }
+                }
+                self.output.push('"');
             }
             Expression::BoolLit(value, _) => {
                 self.output.push_str(if *value { "true" } else { "false" });
@@ -455,6 +479,7 @@ impl CodeGenerator {
             Type::F32 => "print_f32",
             Type::F64 => "print_f64",
             Type::Bool => "print_bool",
+            Type::String => "print_str",
             _ => {
                 return Err(CodegenError::UnsupportedFeature {
                     feature: format!("print() for type {}", arg_type),
@@ -487,7 +512,7 @@ impl CodeGenerator {
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
             Type::Bool => "bool".to_string(),
-            Type::String => "char*".to_string(), // Will be properly implemented in Phase 6
+            Type::String => "const char*".to_string(),
             Type::Usize => "size_t".to_string(),
             Type::Isize => "ssize_t".to_string(),
             Type::Nothing => "void".to_string(),
@@ -526,6 +551,7 @@ impl CodeGenerator {
         match expr {
             Expression::IntLit(_, _) => Type::I32, // Default integer type
             Expression::FloatLit(_, _) => Type::F64, // Default float type
+            Expression::StringLit(_, _) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident(name, _) => {
                 // Look up the variable type from our tracking

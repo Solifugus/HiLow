@@ -1,0 +1,7 @@
+high program(): i32 {
+  print("tab\there")
+  print("new\nline")
+  print("quote\"inside")
+  print("backslash\\test")
+  return 0
+}

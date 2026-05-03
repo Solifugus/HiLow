@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 6a — Basic Strings and Quote Recursion  
+**Phase:** Phase 6b — F-Strings  
 **Status:** Ready to start
 **Branch:** main
-**Last commit:** Phase 5b: Qualified operators framework
+**Last commit:** Phase 6a: Strings with quote recursion
 
 ---
 
@@ -20,6 +20,17 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-02 — Phase 6a complete
+- Implemented complete string literal support with quote recursion algorithm: N adjacent quotes open/close strings, fewer quotes inside are literal
+- Added lexer support for string literals (TokenKind::StringLit), raw strings (r"..." prefix), escape sequences (\n, \t, \r, \\, \", \u{...}, \x..), multi-line strings with proper line tracking
+- Implemented string literal parsing in AST (Expression::StringLit), type checking (Type::String), and codegen (const char* variables, C string literals with proper escaping)
+- Added print_str runtime function and print() dispatch for strings; strings generate const char* variables, not int32_t
+- Deferred f-strings cleanly: lexer recognizes r"..." vs plain "...", parser detects f"..." and errors with "Phase 6b" message
+- Comprehensive testing: 12 new lexer tests (simple strings, quote recursion, raw strings, escapes, unicode, hex, multiline, errors), 4 integration tests covering basic usage, escape processing, raw strings, quote recursion
+- All string functionality working: quote recursion (""contains "quotes" inside""), raw strings (r"C:\path"), escape sequences (\n, \t, \", \\, \u{1F600}, \x41), multi-line support, UTF-8 pass-through
+- Test suite: 198 tests passing (up from 183), 6 failing (qualified operator issues from Phase 5b, not strings)
+- Commit: "Phase 6a: Strings with quote recursion"
 
 ### 2026-05-02 — Phase 5b complete
 - Implemented qualified operator framework with parser disambiguation between function calls `foo(arg)` and qualified operators `var (qualifier)=` using peek-ahead approach to check for `=` or `!=` after closing parenthesis

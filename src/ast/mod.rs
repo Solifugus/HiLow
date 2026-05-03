@@ -165,6 +165,7 @@ pub struct QualifiedOp {
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
+    StringLit(String, Position),
     BoolLit(bool, Position),
     Ident(String, Position),
     BinaryOp(BinaryOp),

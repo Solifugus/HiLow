@@ -1,0 +1,7 @@
+Hello, HiLow World!
+contains "quotes" inside
+
+  triple-quoted
+  multi-line
+  
+C:\Users\Alice

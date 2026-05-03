@@ -711,9 +711,24 @@ impl Parser {
         match token.kind {
             TokenKind::Integer(n) => Ok(Expression::IntLit(n, token.position)),
             TokenKind::Float(f) => Ok(Expression::FloatLit(f, token.position)),
+            TokenKind::StringLit(s) => Ok(Expression::StringLit(s, token.position)),
             TokenKind::True => Ok(Expression::BoolLit(true, token.position)),
             TokenKind::False => Ok(Expression::BoolLit(false, token.position)),
-            TokenKind::Identifier => Ok(Expression::Ident(token.lexeme, token.position)),
+            TokenKind::Identifier => {
+                // Check for f-string deferral
+                if token.lexeme == "f" {
+                    if let Ok(next_token) = self.peek() {
+                        if matches!(next_token.kind, TokenKind::StringLit(_)) {
+                            return Err(ParseError::UnsupportedFeature {
+                                feature: "f-strings".to_string(),
+                                position: token.position,
+                                suggestion: "f-strings are implemented in Phase 6b".to_string(),
+                            });
+                        }
+                    }
+                }
+                Ok(Expression::Ident(token.lexeme, token.position))
+            }
             TokenKind::LeftParen => {
                 // Parenthesized expression
                 let expr = self.parse_expression()?;

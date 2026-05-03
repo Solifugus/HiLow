@@ -28,3 +28,7 @@ void print_f64(double value) {
 void print_bool(bool value) {
     printf("%s\n", value ? "true" : "false");
 }
+
+void print_str(const char *value) {
+    printf("%s\n", value);
+}

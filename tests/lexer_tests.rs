@@ -746,3 +746,109 @@ fn test_result_is_unknown() {
     assert_eq!(tokens[2].kind, TokenKind::Unknown);
     assert_eq!(tokens[2].lexeme, "unknown");
 }
+
+// Phase 6a: String literal tests
+
+#[test]
+fn test_simple_string() {
+    let input = r#""hello""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2); // string, EOF
+    assert_eq!(tokens[0].kind, TokenKind::StringLit("hello".to_string()));
+    assert_eq!(tokens[0].lexeme, r#""hello""#);
+}
+
+#[test]
+fn test_double_quote_recursion() {
+    let input = r#"""contains "quotes" inside"""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit(r#"contains "quotes" inside"#.to_string()));
+}
+
+#[test]
+fn test_triple_quote_recursion() {
+    let input = r#""""triple-quoted""""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit("triple-quoted".to_string()));
+}
+
+#[test]
+fn test_string_with_escapes() {
+    let input = r#""hello\nworld""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit("hello\nworld".to_string()));
+}
+
+#[test]
+fn test_raw_string_simple() {
+    let input = r#"r"C:\Users\Alice""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit(r"C:\Users\Alice".to_string()));
+}
+
+#[test]
+fn test_raw_string_no_escape_processing() {
+    let input = r#"r"\n\t""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit(r"\n\t".to_string()));
+}
+
+#[test]
+fn test_unicode_escape() {
+    let input = r#""\u{1F600}""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    // U+1F600 is the grinning face emoji 😀
+    assert_eq!(tokens[0].kind, TokenKind::StringLit("😀".to_string()));
+}
+
+#[test]
+fn test_hex_escape() {
+    let input = r#""\x41""#;
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit("A".to_string()));
+}
+
+#[test]
+fn test_multiline_string() {
+    let input = "\"line1\nline2\nline3\"";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::StringLit("line1\nline2\nline3".to_string()));
+}
+
+#[test]
+fn test_unterminated_string_error() {
+    let input = r#""unterminated"#;
+    let result = Lexer::new(input).tokens();
+    assert!(result.is_err());
+    if let Err(error) = result {
+        match error {
+            hilowc::lexer::LexError::UnterminatedString { .. } => {
+                // Expected error
+            }
+            _ => panic!("Expected UnterminatedString error, got {:?}", error),
+        }
+    }
+}
+
+#[test]
+fn test_invalid_escape_sequence() {
+    let input = r#""\q""#;
+    let result = Lexer::new(input).tokens();
+    assert!(result.is_err());
+    if let Err(error) = result {
+        match error {
+            hilowc::lexer::LexError::InvalidEscapeSequence { sequence, .. } => {
+                assert_eq!(sequence, r"\q");
+            }
+            _ => panic!("Expected InvalidEscapeSequence error, got {:?}", error),
+        }
+    }
+}

@@ -14,5 +14,6 @@ void print_u64(uint64_t value);
 void print_f32(float value);
 void print_f64(double value);
 void print_bool(bool value);
+void print_str(const char *value);
 
 #endif // HILOW_RUNTIME_H

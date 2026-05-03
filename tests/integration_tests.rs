@@ -388,3 +388,81 @@ fn test_bad_qualifier_error_handling() {
 //     let error_msg = result.unwrap_err();
 //     assert!(error_msg.contains("qualifier 'or' applies to assignment only, not equality"));
 // }
+
+// Phase 6a: String integration tests
+
+#[test]
+fn test_strings_basic_integration() {
+    let executable = compile_program("tests/programs/strings_basic.hl")
+        .expect("Failed to compile strings_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run strings_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/strings_basic.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_hello_string_integration() {
+    let executable = compile_program("tests/programs/hello_string.hl")
+        .expect("Failed to compile hello_string.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run hello_string");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/hello_string.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_escape_chars_integration() {
+    let executable = compile_program("tests/programs/escape_chars.hl")
+        .expect("Failed to compile escape_chars.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run escape_chars");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/escape_chars.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_raw_path_integration() {
+    let executable = compile_program("tests/programs/raw_path.hl")
+        .expect("Failed to compile raw_path.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run raw_path");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/raw_path.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

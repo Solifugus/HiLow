@@ -11,6 +11,7 @@ pub enum TokenKind {
     // Literals
     Integer(i64),
     Float(f64),
+    StringLit(String),
     True,
     False,
 
@@ -134,6 +135,8 @@ pub enum LexError {
     UnterminatedBlockComment { position: Position },
     InvalidNumber { text: String, position: Position },
     InvalidOperator { operator: String, position: Position, suggestion: String },
+    UnterminatedString { position: Position },
+    InvalidEscapeSequence { sequence: String, position: Position },
 }
 
 impl std::fmt::Display for LexError {
@@ -150,6 +153,12 @@ impl std::fmt::Display for LexError {
             }
             LexError::InvalidOperator { operator, position, suggestion } => {
                 write!(f, "Invalid operator '{}' at line {}, column {}: {}", operator, position.line, position.column, suggestion)
+            }
+            LexError::UnterminatedString { position } => {
+                write!(f, "Unterminated string at line {}, column {}", position.line, position.column)
+            }
+            LexError::InvalidEscapeSequence { sequence, position } => {
+                write!(f, "Invalid escape sequence '{}' at line {}, column {}", sequence, position.line, position.column)
             }
         }
     }
@@ -514,8 +523,19 @@ impl Lexer {
             // Numbers
             '0'..='9' => self.number(start_pos),
 
-            // Identifiers and keywords
-            'a'..='z' | 'A'..='Z' | '_' => self.identifier_or_keyword(start_pos),
+            // String literals
+            '"' => self.string_literal(start_pos, false),
+
+            // Identifiers and keywords (including raw strings)
+            'a'..='z' | 'A'..='Z' | '_' => {
+                // Check for raw string prefix 'r"'
+                if ch == 'r' && self.peek() == '"' {
+                    self.advance(); // consume '"'
+                    self.string_literal(start_pos, true)
+                } else {
+                    self.identifier_or_keyword(start_pos)
+                }
+            }
 
             _ => Err(LexError::UnexpectedCharacter {
                 char: ch,
@@ -683,5 +703,153 @@ impl Lexer {
         } else {
             Ok(self.make_token(TokenKind::Identifier, start_pos, lexeme))
         }
+    }
+
+    fn string_literal(&mut self, start_pos: Position, is_raw: bool) -> Result<Token, LexError> {
+        // Count the opening quotes
+        let mut quote_count = 1; // We already consumed the first quote
+        while !self.is_at_end() && self.peek() == '"' {
+            self.advance();
+            quote_count += 1;
+        }
+
+        let mut content = String::new();
+        let mut consecutive_quotes = 0;
+
+        // Read content until we find N consecutive quotes
+        while !self.is_at_end() {
+            let ch = self.advance();
+
+            if ch == '"' {
+                consecutive_quotes += 1;
+                if consecutive_quotes == quote_count {
+                    // Found the closing quote sequence
+                    break;
+                }
+                // Don't add quotes to content yet - we might find more
+            } else {
+                // Reset quote counter and add any accumulated quotes
+                if consecutive_quotes > 0 {
+                    for _ in 0..consecutive_quotes {
+                        content.push('"');
+                    }
+                    consecutive_quotes = 0;
+                }
+
+                if is_raw {
+                    // Raw strings: no escape processing
+                    content.push(ch);
+                } else {
+                    // Regular strings: process escape sequences
+                    if ch == '\\' {
+                        if self.is_at_end() {
+                            return Err(LexError::UnterminatedString { position: start_pos });
+                        }
+                        let escaped_char = self.advance();
+                        match escaped_char {
+                            'n' => content.push('\n'),
+                            't' => content.push('\t'),
+                            'r' => content.push('\r'),
+                            '\\' => content.push('\\'),
+                            '"' => content.push('"'),
+                            'x' => {
+                                // \x followed by exactly 2 hex digits
+                                let hex_chars = self.read_hex_digits(2)?;
+                                if hex_chars.len() != 2 {
+                                    return Err(LexError::InvalidEscapeSequence {
+                                        sequence: format!("\\x{}", hex_chars),
+                                        position: start_pos,
+                                    });
+                                }
+                                if let Ok(byte_val) = u8::from_str_radix(&hex_chars, 16) {
+                                    content.push(byte_val as char);
+                                } else {
+                                    return Err(LexError::InvalidEscapeSequence {
+                                        sequence: format!("\\x{}", hex_chars),
+                                        position: start_pos,
+                                    });
+                                }
+                            }
+                            'u' => {
+                                // \u{...} with 1-6 hex digits
+                                if self.peek() != '{' {
+                                    return Err(LexError::InvalidEscapeSequence {
+                                        sequence: format!("\\u{}", escaped_char),
+                                        position: start_pos,
+                                    });
+                                }
+                                self.advance(); // consume '{'
+                                let hex_chars = self.read_until_char('}')?;
+                                if hex_chars.len() == 0 || hex_chars.len() > 6 {
+                                    return Err(LexError::InvalidEscapeSequence {
+                                        sequence: format!("\\u{{{}}}", hex_chars),
+                                        position: start_pos,
+                                    });
+                                }
+                                if let Ok(codepoint) = u32::from_str_radix(&hex_chars, 16) {
+                                    if let Some(unicode_char) = std::char::from_u32(codepoint) {
+                                        content.push(unicode_char);
+                                    } else {
+                                        return Err(LexError::InvalidEscapeSequence {
+                                            sequence: format!("\\u{{{}}}", hex_chars),
+                                            position: start_pos,
+                                        });
+                                    }
+                                } else {
+                                    return Err(LexError::InvalidEscapeSequence {
+                                        sequence: format!("\\u{{{}}}", hex_chars),
+                                        position: start_pos,
+                                    });
+                                }
+                                self.advance(); // consume '}'
+                            }
+                            _ => {
+                                return Err(LexError::InvalidEscapeSequence {
+                                    sequence: format!("\\{}", escaped_char),
+                                    position: start_pos,
+                                });
+                            }
+                        }
+                    } else {
+                        content.push(ch);
+                    }
+                }
+            }
+        }
+
+        if consecutive_quotes != quote_count {
+            return Err(LexError::UnterminatedString { position: start_pos });
+        }
+
+        // Create lexeme for debugging (include the quotes)
+        let prefix = if is_raw { "r" } else { "" };
+        let quotes = "\"".repeat(quote_count);
+        let lexeme = format!("{}{}{}{}", prefix, quotes, content, quotes);
+
+        Ok(self.make_token(TokenKind::StringLit(content), start_pos, lexeme))
+    }
+
+    fn read_hex_digits(&mut self, max_digits: usize) -> Result<String, LexError> {
+        let mut hex_chars = String::new();
+        for _ in 0..max_digits {
+            if self.is_at_end() || !self.peek().is_ascii_hexdigit() {
+                break;
+            }
+            hex_chars.push(self.advance());
+        }
+        Ok(hex_chars)
+    }
+
+    fn read_until_char(&mut self, delimiter: char) -> Result<String, LexError> {
+        let mut chars = String::new();
+        while !self.is_at_end() && self.peek() != delimiter {
+            let ch = self.advance();
+            if ch.is_ascii_hexdigit() {
+                chars.push(ch);
+            } else {
+                return Ok(chars); // Return what we have so far if non-hex found
+            }
+        }
+        Ok(chars)
     }
 }

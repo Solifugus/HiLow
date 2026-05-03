@@ -1,0 +1,2 @@
+C:\Users\Alice\Documents\file.txt
+\d+\.\d+

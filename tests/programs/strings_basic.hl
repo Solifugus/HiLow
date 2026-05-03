@@ -1,0 +1,18 @@
+high program(): i32 {
+  let a = "Hello, HiLow World!"
+  print(a)
+
+  let b = ""contains "quotes" inside""
+  print(b)
+
+  let c = """
+  triple-quoted
+  multi-line
+  """
+  print(c)
+
+  let d = r"C:\Users\Alice"
+  print(d)
+
+  return 0
+}

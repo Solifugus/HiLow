@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 6a — Basic Strings and Quote Recursion**
+**Current phase: Phase 6b — F-Strings**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

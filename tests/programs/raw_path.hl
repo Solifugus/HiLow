@@ -1,0 +1,7 @@
+high program(): i32 {
+  let path = r"C:\Users\Alice\Documents\file.txt"
+  print(path)
+  let pattern = r"\d+\.\d+"
+  print(pattern)
+  return 0
+}

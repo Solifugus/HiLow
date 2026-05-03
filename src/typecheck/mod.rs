@@ -306,6 +306,7 @@ impl TypeChecker {
                 // Apply float literal inference rules
                 Type::default_float_type()
             },
+            Expression::StringLit(_, _) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident(name, pos) => {
                 // Look up variable in symbol table
@@ -530,7 +531,7 @@ impl TypeChecker {
         match arg_type {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
-            Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize => {
+            Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String => {
                 // These types are printable
             }
             _ => {
@@ -730,6 +731,7 @@ impl HasPosition for Expression {
         match self {
             Expression::IntLit(_, pos) => pos.clone(),
             Expression::FloatLit(_, pos) => pos.clone(),
+            Expression::StringLit(_, pos) => pos.clone(),
             Expression::BoolLit(_, pos) => pos.clone(),
             Expression::Ident(_, pos) => pos.clone(),
             Expression::BinaryOp(op) => op.position.clone(),
