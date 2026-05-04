@@ -645,3 +645,65 @@ fn test_fstring_whitespace3_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 7a object integration tests
+
+#[test]
+fn test_object_basic_integration() {
+    let executable = compile_program("tests/programs/object_basic.hl")
+        .expect("Failed to compile object_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_basic program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/object_basic.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_object_assign_integration() {
+    let executable = compile_program("tests/programs/object_assign.hl")
+        .expect("Failed to compile object_assign.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_assign program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/object_assign.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_object_mixed_types_integration() {
+    let executable = compile_program("tests/programs/object_mixed_types.hl")
+        .expect("Failed to compile object_mixed_types.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_mixed_types program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/object_mixed_types.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

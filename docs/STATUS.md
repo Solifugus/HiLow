@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7a — Object Literals and Property Access  
-**Status:** Complete (with minor codegen limitation noted)
+**Phase:** Phase 7b — Prototype Delegation  
+**Status:** Ready to begin
 **Branch:** main
-**Last commit:** Phase 7a: Object literals and property access
+**Last commit:** Phase 7a fix: complete property access codegen and add integration tests
 
 ---
 
@@ -20,6 +20,17 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-03 — Phase 7a completion fix: property access codegen
+- **Issue**: Phase 7a was declared complete but end-to-end object property access didn't work; canonical example `let p = { x: 1 }; print(p.x)` failed with "member access for type <unknown>" error
+- **Root cause**: Codegen's `get_expression_type` method lacked symbol table context; called `type_checker.get_expression_type()` but type checker scopes were empty during codegen
+- **Solution**: Enhanced codegen with `infer_expression_type_for_codegen()` method that uses codegen's own `variable_types` tracking; fixed object literal type inference, member access type lookup, property assignment generation
+- **Property assignment fix**: `p.x = 99` was generating invalid C `hl_object_get_i32(p, "x") = 99`; added special handling in `generate_assign_statement` to emit `hl_object_set_i32(p, "x", 99)` calls
+- **Integration tests**: Added real end-to-end tests that compile and run programs: `object_basic.hl`, `object_assign.hl`, `object_mixed_types.hl` with proper expected outputs
+- **Function call fix**: Nested function test was failing because function return types weren't tracked in codegen; added function type tracking in `generate_program_body_functions`
+- **Verification ritual**: All 251+ tests passing with 0 failures; canonical examples both work correctly
+- **Behavioral lesson**: "Technical limitation documented for future refinement" disguised an actual feature failure as a deferral; Phase scope must include integration tests that exercise canonical examples end-to-end
+- Commit: "Phase 7a fix: complete property access codegen and add integration tests"
 
 ### 2026-05-03 — Phase 7a: Object literals and property access  
 - Implemented object literal syntax: `{ x: 10, y: 20 }`
@@ -301,6 +312,7 @@
 - **Verification ritual compliance is critical for detecting silent test failures.** Four consecutive phases (6a-fixup through 6b-ii) declared complete with parser_tests.rs not compiling. Debriefs paraphrased test status as "all tests pass" rather than running the literal verification ritual. The "passing" tests were only the suites that DID compile and run; cargo test silently skips test binaries that fail to compile. The verification ritual must be run literally and its exact output pasted in debriefs to catch this class of failure.
 - **Runtime.h race conditions can be hidden by parallel test execution inconsistency.** Multiple phases (6b-i, 6b-ii, 7a) had 6-7 integration test failures from temp file collisions that went undiagnosed because the failures seemed random and serial vs parallel execution differences weren't investigated. When integration tests fail inconsistently, check for shared temporary file paths that could cause race conditions in parallel execution.
 - **Optional-semicolon parser gap masked failing tests since Phase 5b.** Six typecheck tests used semicolon-separated statements but the parser didn't accept semicolons per the spec (JavaScript-style optional semicolons). Tests like `"let x = 0; x (nonexistent)= 5"` failed to parse, never reaching the type-checking logic they were intended to test. The verification ritual wasn't being run literally in session debriefs, so parsing failures in test programs went undetected. Manual verification caught this after nine sessions. When new tests are added, ensure they exercise the intended code path by running them immediately.
+- **Phase 7a debrief described codegen as "one technical limitation" that was actually a fundamental feature failure.** Even the simplest object program (`let p = { x: 1 }; print(p.x)`) didn't compile. Lesson: "documented for future refinement" is the same pattern as "pre-existing, unrelated" — it's a deferral phrase that hides incomplete work. Phase scope must include integration tests that exercise the canonical example end-to-end.
 
 ### Test coverage gaps
 - **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.

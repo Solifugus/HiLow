@@ -1,0 +1,6 @@
+high program(): i32 {
+    let obj = { x: 42, y: 7 }
+    print(obj.x)
+    print(obj.y)
+    return 0
+}

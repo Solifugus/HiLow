@@ -1,0 +1,9 @@
+high program(): i32 {
+    let point = { x: 10, y: 20 }
+    print(point.x)
+    point.x = 99
+    print(point.x)
+    point.y = 77
+    print(point.y)
+    return 0
+}

@@ -131,6 +131,14 @@ impl CodeGenerator {
     }
 
     fn generate_program_body_functions(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // First, track function types for later reference
+        for item in &body.items {
+            if let BlockItem::Function(function) = item {
+                let return_type = Type::from_ast_type(&function.return_type);
+                self.variable_types.insert(function.name.clone(), return_type);
+            }
+        }
+
         // Generate nested functions as top-level C functions
         for item in &body.items {
             if let BlockItem::Function(function) = item {
@@ -193,16 +201,24 @@ impl CodeGenerator {
         let var_type = if let Some(ref ty) = let_decl.ty {
             Type::from_ast_type(ty)
         } else if let Some(ref initializer) = let_decl.initializer {
-            // Type inference - for Phase 4a, we'll use simple literal types
+            // Type inference - need to handle object literals properly
             match initializer {
                 Expression::IntLit(value, _) => Type::default_integer_type(*value),
                 Expression::FloatLit(_, _) => Type::default_float_type(),
                 Expression::StringLit(_, _) => Type::String,
                 Expression::BoolLit(_, _) => Type::Bool,
+                Expression::ObjectLiteral(obj_lit) => {
+                    // Infer object type from literal
+                    let mut properties = Vec::new();
+                    for (prop_name, prop_expr) in &obj_lit.properties {
+                        let prop_type = self.infer_expression_type_for_codegen(prop_expr);
+                        properties.push((prop_name.clone(), prop_type));
+                    }
+                    Type::Object(properties)
+                }
                 _ => {
-                    // For complex expressions, we'd need full type checking context
-                    // For now, assume i32 as a fallback
-                    Type::I32
+                    // For other complex expressions, try to infer
+                    self.infer_expression_type_for_codegen(initializer)
                 }
             }
         } else {
@@ -279,27 +295,69 @@ impl CodeGenerator {
 
     fn generate_assign_statement(&mut self, assign_stmt: &AssignStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         self.output.push_str("  ");
-        self.generate_expression(&assign_stmt.target, type_checker)?;
 
-        let op_str = match assign_stmt.op {
-            AssignOpKind::Assign => " = ",
-            AssignOpKind::AddAssign => " += ",
-            AssignOpKind::SubAssign => " -= ",
-            AssignOpKind::MulAssign => " *= ",
-            AssignOpKind::DivAssign => " /= ",
-            AssignOpKind::ModAssign => " %= ",
-        };
+        // Check if we're assigning to a member access (property)
+        if let Expression::MemberAccess(member_access) = &assign_stmt.target {
+            // For member access assignment, generate a setter call
+            if assign_stmt.op != AssignOpKind::Assign {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "compound assignment to object properties".to_string(),
+                    phase: "future phases".to_string(),
+                });
+            }
 
-        self.output.push_str(op_str);
-        self.generate_expression(&assign_stmt.value, type_checker)?;
-        self.output.push_str(";\n");
+            // Determine the type of the value to call the right setter
+            let value_type = self.infer_expression_type_for_codegen(&assign_stmt.value);
+
+            match value_type {
+                Type::I32 => self.output.push_str("hl_object_set_i32("),
+                Type::I64 => self.output.push_str("hl_object_set_i64("),
+                Type::U32 => self.output.push_str("hl_object_set_u32("),
+                Type::U64 => self.output.push_str("hl_object_set_u64("),
+                Type::F32 => self.output.push_str("hl_object_set_f32("),
+                Type::F64 => self.output.push_str("hl_object_set_f64("),
+                Type::Bool => self.output.push_str("hl_object_set_bool("),
+                Type::String => self.output.push_str("hl_object_set_str("),
+                Type::Object(_) => self.output.push_str("hl_object_set_object("),
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("assignment of type {} to object property", value_type),
+                        phase: "future phases".to_string(),
+                    });
+                }
+            }
+
+            // Generate: object, property name, value
+            self.generate_expression(&member_access.object, type_checker)?;
+            self.output.push_str(", \"");
+            self.output.push_str(&member_access.member);
+            self.output.push_str("\", ");
+            self.generate_expression(&assign_stmt.value, type_checker)?;
+            self.output.push_str(");\n");
+        } else {
+            // Regular assignment to variables
+            self.generate_expression(&assign_stmt.target, type_checker)?;
+
+            let op_str = match assign_stmt.op {
+                AssignOpKind::Assign => " = ",
+                AssignOpKind::AddAssign => " += ",
+                AssignOpKind::SubAssign => " -= ",
+                AssignOpKind::MulAssign => " *= ",
+                AssignOpKind::DivAssign => " /= ",
+                AssignOpKind::ModAssign => " %= ",
+            };
+
+            self.output.push_str(op_str);
+            self.generate_expression(&assign_stmt.value, type_checker)?;
+            self.output.push_str(";\n");
+        }
         Ok(())
     }
 
     /// Phase 4b: Generate condition expressions with truthy/falsy dispatch
     fn generate_condition(&mut self, condition: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Determine the type of the condition
-        let condition_type = self.infer_expression_type(condition);
+        let condition_type = self.infer_expression_type_for_codegen(condition);
 
         match condition_type {
             Type::Bool => {
@@ -489,8 +547,8 @@ impl CodeGenerator {
         let arg = &call.args[0];
 
         // Determine the type of the argument to call the right runtime function
-        // For Phase 4a, we'll use a simple approach based on the expression type
-        let arg_type = self.infer_expression_type(arg);
+        // Use enhanced type inference that handles object properties
+        let arg_type = self.infer_expression_type_for_codegen(arg);
 
         let runtime_func = match arg_type {
             Type::I8 | Type::I16 | Type::I32 | Type::Isize => "print_i32",
@@ -626,6 +684,88 @@ impl CodeGenerator {
         }
     }
 
+    /// Enhanced type inference for codegen that handles object types
+    fn infer_expression_type_for_codegen(&self, expr: &Expression) -> Type {
+        match expr {
+            Expression::IntLit(_, _) => Type::I32,
+            Expression::FloatLit(_, _) => Type::F64,
+            Expression::StringLit(_, _) => Type::String,
+            Expression::FString(_) => Type::String,
+            Expression::BoolLit(_, _) => Type::Bool,
+            Expression::Ident(name, _) => {
+                // Look up the variable type from our tracking
+                self.variable_types.get(name).cloned().unwrap_or(Type::Unknown)
+            }
+            Expression::ObjectLiteral(obj_lit) => {
+                let mut properties = Vec::new();
+                for (prop_name, prop_expr) in &obj_lit.properties {
+                    let prop_type = self.infer_expression_type_for_codegen(prop_expr);
+                    properties.push((prop_name.clone(), prop_type));
+                }
+                Type::Object(properties)
+            }
+            Expression::MemberAccess(member_access) => {
+                let object_type = self.infer_expression_type_for_codegen(&member_access.object);
+                match object_type {
+                    Type::Object(properties) => {
+                        for (prop_name, prop_type) in properties {
+                            if prop_name == member_access.member {
+                                return prop_type;
+                            }
+                        }
+                        Type::Unknown // Property not found
+                    }
+                    _ => Type::Unknown
+                }
+            }
+            Expression::BinaryOp(op) => {
+                match op.op {
+                    BinaryOpKind::Add | BinaryOpKind::Sub | BinaryOpKind::Mul |
+                    BinaryOpKind::Div | BinaryOpKind::Mod => {
+                        let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
+                        let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
+                        if matches!(lhs_type, Type::F32 | Type::F64) ||
+                           matches!(rhs_type, Type::F32 | Type::F64) {
+                            Type::F64
+                        } else {
+                            Type::I32
+                        }
+                    }
+                    BinaryOpKind::Less | BinaryOpKind::Greater | BinaryOpKind::LessEq |
+                    BinaryOpKind::GreaterEq | BinaryOpKind::Eq | BinaryOpKind::NotEq |
+                    BinaryOpKind::And | BinaryOpKind::Or => Type::Bool,
+                    _ => Type::I32
+                }
+            }
+            Expression::UnaryOp(op) => {
+                match op.op {
+                    UnaryOpKind::Not => Type::Bool,
+                    _ => self.infer_expression_type_for_codegen(&op.operand),
+                }
+            }
+            Expression::IsCheck(_) => Type::Bool,
+            Expression::QualifiedOp(qualified_op) => {
+                match qualified_op.op {
+                    QualifiedOpKind::Assign => self.infer_expression_type_for_codegen(&qualified_op.lhs),
+                    QualifiedOpKind::Eq | QualifiedOpKind::NotEq => Type::Bool,
+                }
+            }
+            Expression::Call(call) => {
+                // For function calls, try to look up the return type
+                if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+                    if func_name == "print" {
+                        return Type::I32; // print() returns i32
+                    }
+                    // Look up the function's return type in our variable tracking
+                    self.variable_types.get(func_name).cloned().unwrap_or(Type::I32)
+                } else {
+                    Type::I32 // Default for complex call expressions
+                }
+            }
+            _ => Type::Unknown
+        }
+    }
+
     fn generate_qualified_op_statement(&mut self, qualified_op: &QualifiedOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         self.output.push_str("  ");
         self.generate_qualified_op_expression(qualified_op, type_checker)?;
@@ -726,7 +866,7 @@ impl CodeGenerator {
                     }
                 }
                 FStringPart::Expression(expr, format_spec) => {
-                    let expr_type = self.infer_expression_type(expr);
+                    let expr_type = self.infer_expression_type_for_codegen(expr);
 
                     if let Some(format_spec) = format_spec {
                         // Handle special binary format case
@@ -986,7 +1126,7 @@ impl CodeGenerator {
             self.output.push_str(&format!("    hl_object_set_"));
 
             // Determine the type of the property to call the right setter
-            let expr_type = type_checker.get_expression_type(prop_expr);
+            let expr_type = self.infer_expression_type_for_codegen(prop_expr);
             match expr_type {
                 Type::I32 => {
                     self.output.push_str("i32(obj, \"");
@@ -1069,8 +1209,22 @@ impl CodeGenerator {
     fn generate_member_access(&mut self, member_access: &MemberAccess, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Generate property access: hl_object_get_TYPE(obj, "property")
 
-        // Determine the type of the property to call the right getter
-        let member_type = type_checker.get_expression_type(&Expression::MemberAccess(member_access.clone()));
+        // Determine the type of the property by looking up the object type and property
+        let object_type = self.infer_expression_type_for_codegen(&member_access.object);
+        let member_type = match object_type {
+            Type::Object(properties) => {
+                // Look up the property in the object's type
+                let mut found_type = Type::Unknown;
+                for (prop_name, prop_type) in properties {
+                    if prop_name == member_access.member {
+                        found_type = prop_type;
+                        break;
+                    }
+                }
+                found_type
+            }
+            _ => Type::Unknown
+        };
 
         match member_type {
             Type::I32 => self.output.push_str("hl_object_get_i32("),
