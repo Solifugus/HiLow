@@ -1,0 +1,7 @@
+high program(): i32 {
+  let grandparent = { wisdom: "old" }
+  let parent = { proto: grandparent }
+  let child = { proto: parent }
+  print(child.wisdom)  // "old" — found two levels up
+  return 0
+}

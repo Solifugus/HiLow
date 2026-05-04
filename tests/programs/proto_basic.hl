@@ -1,0 +1,7 @@
+high program(): i32 {
+  let parent = { name: "Parent" }
+  let child = { proto: parent, age: 5 }
+  print(child.name)  // "Parent" — from prototype
+  print(child.age)   // 5 — from child itself
+  return 0
+}

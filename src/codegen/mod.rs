@@ -684,6 +684,38 @@ impl CodeGenerator {
         }
     }
 
+    /// Walk the prototype chain to find a property type (Phase 7b) - codegen version
+    fn find_property_type_in_chain(&self, object_type: &Type, property_name: &str, depth: usize) -> Option<Type> {
+        const MAX_PROTO_DEPTH: usize = 100;
+
+        if depth >= MAX_PROTO_DEPTH {
+            return None; // Cycle detected or too deep
+        }
+
+        match object_type {
+            Type::Object(ref properties) => {
+                // First, look for the property directly on this object
+                for (prop_name, prop_type) in properties {
+                    if prop_name == property_name {
+                        return Some(prop_type.clone());
+                    }
+                }
+
+                // Property not found on this object - check prototype
+                for (prop_name, prop_type) in properties {
+                    if prop_name == "proto" {
+                        // Found prototype property, recurse into it
+                        return self.find_property_type_in_chain(prop_type, property_name, depth + 1);
+                    }
+                }
+
+                // No prototype property found
+                None
+            },
+            _ => None // Not an object type
+        }
+    }
+
     /// Enhanced type inference for codegen that handles object types
     fn infer_expression_type_for_codegen(&self, expr: &Expression) -> Type {
         match expr {
@@ -707,13 +739,10 @@ impl CodeGenerator {
             Expression::MemberAccess(member_access) => {
                 let object_type = self.infer_expression_type_for_codegen(&member_access.object);
                 match object_type {
-                    Type::Object(properties) => {
-                        for (prop_name, prop_type) in properties {
-                            if prop_name == member_access.member {
-                                return prop_type;
-                            }
-                        }
-                        Type::Unknown // Property not found
+                    Type::Object(_) => {
+                        // Use prototype chain lookup (Phase 7b)
+                        self.find_property_type_in_chain(&object_type, &member_access.member, 0)
+                            .unwrap_or(Type::Unknown)
                     }
                     _ => Type::Unknown
                 }
@@ -1209,19 +1238,13 @@ impl CodeGenerator {
     fn generate_member_access(&mut self, member_access: &MemberAccess, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Generate property access: hl_object_get_TYPE(obj, "property")
 
-        // Determine the type of the property by looking up the object type and property
+        // Determine the type of the property using prototype chain lookup (Phase 7b)
         let object_type = self.infer_expression_type_for_codegen(&member_access.object);
         let member_type = match object_type {
-            Type::Object(properties) => {
-                // Look up the property in the object's type
-                let mut found_type = Type::Unknown;
-                for (prop_name, prop_type) in properties {
-                    if prop_name == member_access.member {
-                        found_type = prop_type;
-                        break;
-                    }
-                }
-                found_type
+            Type::Object(_) => {
+                // Use prototype chain lookup
+                self.find_property_type_in_chain(&object_type, &member_access.member, 0)
+                    .unwrap_or(Type::Unknown)
             }
             _ => Type::Unknown
         };

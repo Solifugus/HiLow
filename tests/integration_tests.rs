@@ -707,3 +707,105 @@ fn test_object_mixed_types_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 7b: Prototype delegation integration tests
+
+#[test]
+fn test_proto_basic_integration() {
+    let executable = compile_program("tests/programs/proto_basic.hl")
+        .expect("Failed to compile proto_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run proto_basic program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/proto_basic.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_proto_method_integration() {
+    let executable = compile_program("tests/programs/proto_method.hl")
+        .expect("Failed to compile proto_method.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run proto_method program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/proto_method.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_proto_override_integration() {
+    let executable = compile_program("tests/programs/proto_override.hl")
+        .expect("Failed to compile proto_override.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run proto_override program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/proto_override.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_proto_chain_integration() {
+    let executable = compile_program("tests/programs/proto_chain.hl")
+        .expect("Failed to compile proto_chain.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run proto_chain program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/proto_chain.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_proto_assign_local_integration() {
+    let executable = compile_program("tests/programs/proto_assign_local.hl")
+        .expect("Failed to compile proto_assign_local.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run proto_assign_local program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/proto_assign_local.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

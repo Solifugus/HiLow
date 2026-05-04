@@ -88,6 +88,12 @@ char* hl_format_center(const char* value, int width) {
 
 // Object support implementation (Phase 7a)
 
+// Prototype chain support (Phase 7b)
+#define MAX_PROTO_DEPTH 100
+
+// Forward declaration for prototype helper
+static HiLowObject* hl_object_get_proto(HiLowObject* obj);
+
 HiLowObject* hl_object_new(void) {
     HiLowObject* obj = malloc(sizeof(HiLowObject));
     obj->properties = NULL;
@@ -173,76 +179,283 @@ void hl_object_set_object(HiLowObject* obj, const char* key, HiLowObject* value)
     set_property(obj, key, val);
 }
 
-// Getter functions (these assume the property exists and has the correct type)
+// Getter functions with prototype chain support (Phase 7b)
 int32_t hl_object_get_i32(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_I32) {
-        return prop->value.value.i32_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_I32) {
+                return prop->value.value.i32_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        // Property not found on current object - check prototype
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    // Return 0 as default (error case should be caught by type checker)
-    return 0;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 int64_t hl_object_get_i64(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_I64) {
-        return prop->value.value.i64_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_I64) {
+                return prop->value.value.i64_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return 0;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 uint32_t hl_object_get_u32(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_U32) {
-        return prop->value.value.u32_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_U32) {
+                return prop->value.value.u32_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return 0;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 uint64_t hl_object_get_u64(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_U64) {
-        return prop->value.value.u64_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_U64) {
+                return prop->value.value.u64_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return 0;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 float hl_object_get_f32(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_F32) {
-        return prop->value.value.f32_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_F32) {
+                return prop->value.value.f32_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return 0.0f;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 double hl_object_get_f64(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_F64) {
-        return prop->value.value.f64_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_F64) {
+                return prop->value.value.f64_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return 0.0;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 bool hl_object_get_bool(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_BOOL) {
-        return prop->value.value.bool_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_BOOL) {
+                return prop->value.value.bool_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return false;
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 char* hl_object_get_str(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_STR) {
-        return prop->value.value.str_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_STR) {
+                return prop->value.value.str_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
     }
-    return "";
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
 }
 
 HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key) {
-    Property* prop = find_property(obj, key);
-    if (prop && prop->value.type == HL_VALUE_OBJECT) {
-        return prop->value.value.obj_val;
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_OBJECT) {
+                return prop->value.value.obj_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
+    }
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
+}
+
+// Helper function to get the proto property as an object (Phase 7b)
+static HiLowObject* hl_object_get_proto(HiLowObject* obj) {
+    Property* proto_prop = find_property(obj, "proto");
+    if (proto_prop && proto_prop->value.type == HL_VALUE_OBJECT) {
+        return proto_prop->value.value.obj_val;
     }
     return NULL;
 }

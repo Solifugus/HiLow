@@ -7,7 +7,7 @@
 ## Current state
 
 **Phase:** Phase 7b — Prototype Delegation  
-**Status:** Ready to begin
+**Status:** Complete - ready for Phase 7c
 **Branch:** main
 **Last commit:** Phase 7a fix: complete property access codegen and add integration tests
 
@@ -20,6 +20,16 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-03 — Phase 7b: Prototype delegation
+- **Scope**: Implemented prototype-based property delegation where objects can have a `proto` property that acts as their prototype
+- **Runtime**: Modified all `hl_object_get_*` functions to walk the prototype chain when properties aren't found on the immediate object; added cycle detection with max depth of 100
+- **Type system**: Extended type checker with `find_property_in_chain()` method that walks prototype chains during static type checking; ensures properties exist somewhere in the chain before codegen
+- **Codegen**: Updated `infer_expression_type_for_codegen()` and `generate_member_access()` to use prototype-aware type lookup for proper runtime call generation
+- **Property assignment**: Maintains JavaScript semantics where assignment always sets properties on the immediate object, never walking up the chain to find existing properties
+- **Integration tests**: Added 5 end-to-end tests covering basic prototype lookup, property override, multi-level chains, and assignment behavior
+- **Behavioral**: `proto` is treated as a regular property name (no special syntax); objects without `proto` property have no prototype; cycle detection prevents infinite loops
+- Commit: "Phase 7b: Prototype delegation"
 
 ### 2026-05-03 — Phase 7a completion fix: property access codegen
 - **Issue**: Phase 7a was declared complete but end-to-end object property access didn't work; canonical example `let p = { x: 1 }; print(p.x)` failed with "member access for type <unknown>" error

@@ -1,0 +1,6 @@
+high program(): i32 {
+  let parent = { greeting: "Hi" }
+  let child = { proto: parent, greeting: "Howdy" }
+  print(child.greeting)  // "Howdy" — child's own property wins
+  return 0
+}

@@ -1,0 +1,7 @@
+high program(): i32 {
+  let animal = { sound: "generic animal noise" }
+  let dog = { proto: animal, name: "Buddy" }
+  print(dog.sound)  // "generic animal noise" — from prototype
+  print(dog.name)   // "Buddy" — from dog itself
+  return 0
+}

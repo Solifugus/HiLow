@@ -1,0 +1,8 @@
+high program(): i32 {
+  let parent = { x: 1 }
+  let child = { proto: parent }
+  child.x = 99             // sets x on child, not on parent
+  print(child.x)           // 99
+  print(parent.x)          // 1 (unchanged)
+  return 0
+}
