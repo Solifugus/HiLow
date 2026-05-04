@@ -452,6 +452,12 @@ impl CodeGenerator {
             Expression::ObjectLiteral(obj_lit) => {
                 self.generate_object_literal(obj_lit, type_checker)?;
             }
+            Expression::FunctionExpr(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "function expressions".to_string(),
+                    phase: "Phase 7c-β".to_string(),
+                });
+            }
         }
         Ok(())
     }
@@ -602,6 +608,7 @@ impl CodeGenerator {
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
+            Type::Function(_, _) => "void*".to_string(), // Function pointer placeholder for Phase 7c-β
             Type::Unknown => "void".to_string(),
         }
     }
@@ -808,6 +815,14 @@ impl CodeGenerator {
                 } else {
                     Type::I32 // Default for complex call expressions
                 }
+            }
+            Expression::FunctionExpr(func_expr) => {
+                // For function expressions, return the function type
+                let param_types: Vec<Type> = func_expr.params.iter()
+                    .map(|p| Type::from_ast_type(&p.ty))
+                    .collect();
+                let return_type = Type::from_ast_type(&func_expr.return_type);
+                Type::Function(param_types, Box::new(return_type))
             }
             _ => Type::Unknown
         }

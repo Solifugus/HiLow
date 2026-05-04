@@ -33,6 +33,7 @@ pub enum Type {
     FixedArray(Box<Type>, usize),
     DynamicArray(Box<Type>),
     Object(Vec<(String, Type)>), // structural object type: properties and their types
+    Function(Vec<Type>, Box<Type>), // parameter types, return type
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +207,14 @@ pub struct ObjectLiteral {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FunctionExpr {
+    pub params: Vec<Parameter>,
+    pub return_type: Type,
+    pub body: Block,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
@@ -222,6 +231,7 @@ pub enum Expression {
     ObjectIsCheck(ObjectIsCheck),
     QualifiedOp(QualifiedOp),
     ObjectLiteral(ObjectLiteral),
+    FunctionExpr(FunctionExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -229,6 +229,11 @@ impl Parser {
                 position: pos,
                 suggestion: "pointers not yet supported (Phase 12)".to_string(),
             })
+        } else if self.check(&TokenKind::Function) {
+            // Simple function type for Phase 7c-α
+            self.advance()?; // consume 'function'
+            // For Phase 7c-α, return a simple function type with no parameters and unit return
+            Ok(Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))))
         } else {
             self.parse_primitive_type()
         }
@@ -840,6 +845,10 @@ impl Parser {
                 // Object literal (in expression position)
                 self.parse_object_literal(token.position)
             }
+            TokenKind::Function => {
+                // Function expression
+                self.parse_function_expression(token.position)
+            }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: token.kind,
@@ -1373,6 +1382,27 @@ impl Parser {
 
         Ok(Expression::ObjectLiteral(ObjectLiteral {
             properties,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_function_expression(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        // Parse parameter list
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'function'")?;
+        let params = self.parse_parameter_list()?;
+        self.expect_token(TokenKind::RightParen, "Expected ')' after parameter list")?;
+
+        // Parse return type
+        self.expect_token(TokenKind::Colon, "Expected ':' after parameter list")?;
+        let return_type = self.parse_type()?;
+
+        // Parse body
+        let body = self.parse_block()?;
+
+        Ok(Expression::FunctionExpr(FunctionExpr {
+            params,
+            return_type,
+            body,
             position: start_pos,
         }))
     }

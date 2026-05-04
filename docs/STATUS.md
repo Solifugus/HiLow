@@ -6,8 +6,8 @@
 
 ## Current state
 
-**Phase:** Phase 7b-extension — `is` Operator for Objects  
-**Status:** Complete - ready for Phase 7c-α
+**Phase:** Phase 7c-α — Function Expressions (Parser/AST Only)  
+**Status:** Complete - ready for Phase 7c-β
 **Branch:** main
 **Last commit:** Phase 7b-extension: `is` operator for object prototype membership
 
@@ -20,6 +20,17 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-03 — Phase 7c-α: Function Expressions (Parser/AST Only)
+- **Scope**: Implemented function expressions parsing and AST representation as mechanical infrastructure for closure work
+- **AST**: Added `FunctionExpr` struct with params, return_type, body, position; added `Expression::FunctionExpr` variant; added `Type::Function(Vec<Type>, Box<Type>)` to both AST and type system
+- **Parser**: Enhanced `parse_type()` to accept `function` as type name (returns placeholder function type); added `parse_function_expression()` method for `function(...) { ... }` syntax in expression contexts; disambiguates function declarations from function expressions by presence of name
+- **Type system**: Added `check_function_expression()` method that creates new scope, validates parameters and body statements, returns `Type::Function`; basic validation without return type checking or variable capture detection (deferred to future sub-phases)
+- **Codegen**: Explicit deferral with specific error "Unsupported feature 'function expressions' - will be implemented in Phase 7c-β"; added `Type::Function` case in type-to-C mapping as void* placeholder
+- **Tests**: Added 6 parser tests (no params, one param, two params, object literal context, function type declarations, function return types), 4 type checker tests (basic validation, parameters, return type placeholder, variable capture TODO), 1 integration test for codegen deferral error
+- **Deliberate limitations**: No return type validation, no variable capture detection, no codegen behavior - exactly the mechanical foundation needed for Phase 7c-β
+- **Verification**: All 266+ tests pass with 0 failures; function expressions parse correctly but fail compilation with expected Phase 7c-β error message
+- Commit: "Phase 7c-α: Function expressions in parser and AST"
 
 ### 2026-05-03 — Phase 7b-extension: `is` Operator for Objects
 - **Scope**: Implemented `is` operator for object prototype membership checks as focused extension to Phase 7b

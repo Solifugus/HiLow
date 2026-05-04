@@ -885,3 +885,18 @@ fn test_is_object_unrelated_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 7c-α: Function expression integration test for codegen deferral
+
+#[test]
+fn test_function_expression_codegen_deferral() {
+    // This test verifies that function expressions cause a specific error in codegen
+    let result = compile_program("tests/programs/func_expr_defer.hl");
+
+    // We expect compilation to FAIL with a specific error message
+    assert!(result.is_err(), "Function expression should cause compilation to fail");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("function expressions") && error_message.contains("Phase 7c-β"),
+            "Error should mention function expressions and Phase 7c-β deferral, got: {}", error_message);
+}

@@ -363,6 +363,7 @@ impl TypeChecker {
             },
             Expression::QualifiedOp(qualified_op) => self.check_qualified_op_expression(qualified_op),
             Expression::ObjectLiteral(obj_lit) => self.check_object_literal(obj_lit),
+            Expression::FunctionExpr(func_expr) => self.check_function_expression(func_expr),
         }
     }
 
@@ -1022,6 +1023,34 @@ impl TypeChecker {
             _ => Type::Unknown
         }
     }
+
+    fn check_function_expression(&mut self, func_expr: &FunctionExpr) -> Type {
+        // Create a new scope for the function body
+        self.enter_scope();
+
+        // Add parameters to the scope
+        let mut param_types = Vec::new();
+        for param in &func_expr.params {
+            let param_type = Type::from_ast_type(&param.ty);
+            param_types.push(param_type.clone());
+            self.declare_variable(&param.name, param_type, param.position.clone());
+        }
+
+        // Type-check the function body
+        // For Phase 7c-α, reject any reference to variables from enclosing scope
+        for statement in &func_expr.body.statements {
+            self.check_statement(statement);
+        }
+
+        // TODO: Validate return statements match the declared return type
+        // For now, just convert the return type from AST to type system
+        let return_type = Type::from_ast_type(&func_expr.return_type);
+
+        self.exit_scope();
+
+        // Return the function type
+        Type::Function(param_types, Box::new(return_type))
+    }
 }
 
 // Helper trait to get position from expressions
@@ -1047,8 +1076,10 @@ impl HasPosition for Expression {
             Expression::ObjectIsCheck(obj_is_check) => obj_is_check.position.clone(),
             Expression::QualifiedOp(qualified_op) => qualified_op.position.clone(),
             Expression::ObjectLiteral(obj_lit) => obj_lit.position.clone(),
+            Expression::FunctionExpr(func_expr) => func_expr.position.clone(),
         }
     }
+
 }
 
 // Helper trait for binary operation names

@@ -1,0 +1,4 @@
+high program(): i32 {
+  let f = function(): i32 { return 42 }
+  return 0
+}

@@ -825,3 +825,171 @@ fn test_leading_semicolon() {
         _ => panic!("Expected Program"),
     }
 }
+
+// Phase 7c-α: Function expression parser tests
+
+#[test]
+fn test_function_expression_no_params() {
+    let input = "high program(): i32 { let f = function(): i32 { return 42 }; return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Function expression with no params should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            assert_eq!(body.items.len(), 2); // let statement and return statement
+
+            // Check the let statement contains a function expression
+            if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
+                assert_eq!(let_stmt.name, "f");
+                if let Some(Expression::FunctionExpr(func_expr)) = &let_stmt.initializer {
+                    assert!(func_expr.params.is_empty());
+                    assert_eq!(func_expr.return_type, Type::Primitive(PrimitiveType::I32));
+                    assert_eq!(func_expr.body.statements.len(), 1);
+                } else {
+                    panic!("Expected function expression initializer");
+                }
+            } else {
+                panic!("Expected let statement");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_function_expression_one_param() {
+    let input = "high program(): i32 { let f = function(x: i32): i32 { return x }; return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Function expression with one param should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
+                if let Some(Expression::FunctionExpr(func_expr)) = &let_stmt.initializer {
+                    assert_eq!(func_expr.params.len(), 1);
+                    assert_eq!(func_expr.params[0].name, "x");
+                    assert_eq!(func_expr.params[0].ty, Type::Primitive(PrimitiveType::I32));
+                    assert_eq!(func_expr.return_type, Type::Primitive(PrimitiveType::I32));
+                } else {
+                    panic!("Expected function expression initializer");
+                }
+            } else {
+                panic!("Expected let statement");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_function_expression_two_params() {
+    let input = "high program(): i32 { let f = function(x: i32, y: i32): i32 { return x + y }; return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Function expression with two params should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
+                if let Some(Expression::FunctionExpr(func_expr)) = &let_stmt.initializer {
+                    assert_eq!(func_expr.params.len(), 2);
+                    assert_eq!(func_expr.params[0].name, "x");
+                    assert_eq!(func_expr.params[1].name, "y");
+                    assert_eq!(func_expr.params[0].ty, Type::Primitive(PrimitiveType::I32));
+                    assert_eq!(func_expr.params[1].ty, Type::Primitive(PrimitiveType::I32));
+                } else {
+                    panic!("Expected function expression initializer");
+                }
+            } else {
+                panic!("Expected let statement");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_function_expression_in_object_literal() {
+    let input = "high program(): i32 { let obj = { speak: function(): i32 { return 0 } }; return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Object literal with function expression should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
+                if let Some(Expression::ObjectLiteral(obj_lit)) = &let_stmt.initializer {
+                    assert_eq!(obj_lit.properties.len(), 1);
+                    assert_eq!(obj_lit.properties[0].0, "speak");
+                    if let Expression::FunctionExpr(func_expr) = &obj_lit.properties[0].1 {
+                        assert!(func_expr.params.is_empty());
+                        assert_eq!(func_expr.return_type, Type::Primitive(PrimitiveType::I32));
+                    } else {
+                        panic!("Expected function expression in object property");
+                    }
+                } else {
+                    panic!("Expected object literal initializer");
+                }
+            } else {
+                panic!("Expected let statement");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_function_type_in_variable_declaration() {
+    let input = "high program(): i32 { let f: function; return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Variable with function type should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
+                if let Some(declared_type) = &let_stmt.ty {
+                    assert_eq!(*declared_type, Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))));
+                } else {
+                    panic!("Expected type annotation");
+                }
+            } else {
+                panic!("Expected let statement");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_function_type_as_return_type() {
+    let input = "high program(): i32 { function maker(): function { return 42 } return 0 }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Function with function return type should parse");
+
+    let top_level = result.unwrap();
+    match top_level {
+        TopLevel::Program(program) => {
+            let body = program.body.expect("Program should have body");
+            if let BlockItem::Function(func) = &body.items[0] {
+                assert_eq!(func.return_type, Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))));
+            } else {
+                panic!("Expected function declaration");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
