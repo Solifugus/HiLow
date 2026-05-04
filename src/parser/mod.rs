@@ -229,8 +229,6 @@ impl Parser {
                 position: pos,
                 suggestion: "pointers not yet supported (Phase 12)".to_string(),
             })
-        } else if self.check(&TokenKind::Function) {
-            self.parse_function_type()
         } else {
             self.parse_primitive_type()
         }
@@ -627,79 +625,49 @@ impl Parser {
                     break;
                 }
 
-                let _op_kind = op_token.kind.clone(); // Clone for potential error message
+                let op_kind = op_token.kind.clone(); // Clone for potential error message
                 let position = self.advance()?.position; // consume operator
 
-                // Special handling for 'is' and 'is not' to create IsCheck or ObjectIsCheck nodes
+                // Special handling for 'is' and 'is not' to create IsCheck nodes
                 if matches!(op, BinaryOpKind::Is | BinaryOpKind::IsNot) {
-                    // Check if the next token is a type name or an expression
-                    let next_token = self.peek()?;
+                    // Parse the type name
+                    let type_token = self.expect_identifier("Expected type name after 'is'")?;
+                    let type_name = &type_token.lexeme;
 
-                    // Try to parse as type name first
-                    if let TokenKind::Identifier = next_token.kind {
-                        let type_name = &next_token.lexeme;
-
-                        // Check if it's a valid type name
-                        let is_type_name = matches!(type_name.as_str(),
-                            "i8" | "i16" | "i32" | "i64" | "i128" |
-                            "u8" | "u16" | "u32" | "u64" | "u128" |
-                            "f32" | "f64" | "bool" | "string" |
-                            "usize" | "isize" | "nothing"
-                        );
-
-                        if is_type_name {
-                            // Parse as type check
-                            let type_name_clone = type_name.clone();
-                            let _type_token = self.advance()?; // consume the type name
-                            let ty = match type_name_clone.as_str() {
-                                "i8" => Type::Primitive(PrimitiveType::I8),
-                                "i16" => Type::Primitive(PrimitiveType::I16),
-                                "i32" => Type::Primitive(PrimitiveType::I32),
-                                "i64" => Type::Primitive(PrimitiveType::I64),
-                                "i128" => Type::Primitive(PrimitiveType::I128),
-                                "u8" => Type::Primitive(PrimitiveType::U8),
-                                "u16" => Type::Primitive(PrimitiveType::U16),
-                                "u32" => Type::Primitive(PrimitiveType::U32),
-                                "u64" => Type::Primitive(PrimitiveType::U64),
-                                "u128" => Type::Primitive(PrimitiveType::U128),
-                                "f32" => Type::Primitive(PrimitiveType::F32),
-                                "f64" => Type::Primitive(PrimitiveType::F64),
-                                "bool" => Type::Primitive(PrimitiveType::Bool),
-                                "string" => Type::Primitive(PrimitiveType::String),
-                                "usize" => Type::Primitive(PrimitiveType::Usize),
-                                "isize" => Type::Primitive(PrimitiveType::Isize),
-                                "nothing" => Type::Primitive(PrimitiveType::Nothing),
-                                _ => unreachable!(), // We already checked this
-                            };
-
-                            left = Expression::IsCheck(IsCheck {
-                                expression: Box::new(left),
-                                ty,
-                                negated: matches!(op, BinaryOpKind::IsNot),
-                                position,
-                            });
-                        } else {
-                            // Parse as object prototype check
-                            let right = self.parse_expression_with_precedence(prec + 1)?;
-
-                            left = Expression::ObjectIsCheck(ObjectIsCheck {
-                                lhs: Box::new(left),
-                                rhs: Box::new(right),
-                                negated: matches!(op, BinaryOpKind::IsNot),
-                                position,
+                    // Convert type name to Type
+                    let ty = match type_name.as_str() {
+                        "i8" => Type::Primitive(PrimitiveType::I8),
+                        "i16" => Type::Primitive(PrimitiveType::I16),
+                        "i32" => Type::Primitive(PrimitiveType::I32),
+                        "i64" => Type::Primitive(PrimitiveType::I64),
+                        "i128" => Type::Primitive(PrimitiveType::I128),
+                        "u8" => Type::Primitive(PrimitiveType::U8),
+                        "u16" => Type::Primitive(PrimitiveType::U16),
+                        "u32" => Type::Primitive(PrimitiveType::U32),
+                        "u64" => Type::Primitive(PrimitiveType::U64),
+                        "u128" => Type::Primitive(PrimitiveType::U128),
+                        "f32" => Type::Primitive(PrimitiveType::F32),
+                        "f64" => Type::Primitive(PrimitiveType::F64),
+                        "bool" => Type::Primitive(PrimitiveType::Bool),
+                        "string" => Type::Primitive(PrimitiveType::String),
+                        "usize" => Type::Primitive(PrimitiveType::Usize),
+                        "isize" => Type::Primitive(PrimitiveType::Isize),
+                        "nothing" => Type::Primitive(PrimitiveType::Nothing),
+                        _ => {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "valid type name".to_string(),
+                                found: op_kind,
+                                position: type_token.position,
                             });
                         }
-                    } else {
-                        // Parse as object prototype check (RHS is an expression, not identifier)
-                        let right = self.parse_expression_with_precedence(prec + 1)?;
+                    };
 
-                        left = Expression::ObjectIsCheck(ObjectIsCheck {
-                            lhs: Box::new(left),
-                            rhs: Box::new(right),
-                            negated: matches!(op, BinaryOpKind::IsNot),
-                            position,
-                        });
-                    }
+                    left = Expression::IsCheck(IsCheck {
+                        expression: Box::new(left),
+                        ty,
+                        negated: matches!(op, BinaryOpKind::IsNot),
+                        position,
+                    });
                 } else {
                     let right = self.parse_expression_with_precedence(prec + 1)?;
 
@@ -829,9 +797,6 @@ impl Parser {
             TokenKind::Identifier => {
                 Ok(Expression::Ident(token.lexeme, token.position))
             }
-            TokenKind::This => {
-                Ok(Expression::Ident("this".to_string(), token.position))
-            }
             TokenKind::LeftParen => {
                 // Parenthesized expression
                 let expr = self.parse_expression()?;
@@ -841,10 +806,6 @@ impl Parser {
             TokenKind::LeftBrace => {
                 // Object literal (in expression position)
                 self.parse_object_literal(token.position)
-            }
-            TokenKind::Function => {
-                // Function expression
-                self.parse_function_expression(token.position)
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
@@ -1381,56 +1342,5 @@ impl Parser {
             properties,
             position: start_pos,
         }))
-    }
-
-    fn parse_function_expression(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
-        // Parse parameter list
-        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'function'")?;
-        let params = self.parse_parameter_list()?;
-        self.expect_token(TokenKind::RightParen, "Expected ')' after parameter list")?;
-
-        // Parse return type
-        self.expect_token(TokenKind::Colon, "Expected ':' after parameter list")?;
-        let return_type = self.parse_type()?;
-
-        // Parse body
-        let body = self.parse_block()?;
-
-        Ok(Expression::FunctionExpression(FunctionExpression {
-            params,
-            return_type,
-            body,
-            position: start_pos,
-        }))
-    }
-
-    fn parse_function_type(&mut self) -> Result<Type, ParseError> {
-        // Consume 'function'
-        self.expect_token(TokenKind::Function, "Expected 'function'")?;
-
-        // Parse parameter types
-        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'function'")?;
-        let mut param_types = Vec::new();
-
-        if !self.check(&TokenKind::RightParen) {
-            loop {
-                let param_type = self.parse_type()?;
-                param_types.push(param_type);
-
-                if self.check(&TokenKind::Comma) {
-                    self.advance()?; // consume comma
-                } else {
-                    break;
-                }
-            }
-        }
-
-        self.expect_token(TokenKind::RightParen, "Expected ')' after parameter types")?;
-
-        // Parse return type
-        self.expect_token(TokenKind::Colon, "Expected ':' after parameter types")?;
-        let return_type = self.parse_type()?;
-
-        Ok(Type::Function(param_types, Box::new(return_type)))
     }
 }

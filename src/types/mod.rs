@@ -26,9 +26,6 @@ pub enum Type {
     /// Object type (structural)
     Object(Vec<(String, Type)>), // properties and their types
 
-    /// Function type
-    Function(Vec<Type>, Box<Type>), // (parameter types, return type)
-
     /// Unknown type (for error recovery)
     Unknown,
 }
@@ -126,12 +123,6 @@ impl Type {
                         .collect()
                 )
             },
-            ast::Type::Function(param_types, return_type) => {
-                Type::Function(
-                    param_types.iter().map(|t| Type::from_ast_type(t)).collect(),
-                    Box::new(Type::from_ast_type(return_type))
-                )
-            },
         }
     }
 }
@@ -167,16 +158,6 @@ impl std::fmt::Display for Type {
                     write!(f, "{}: {}", name, ty)?;
                 }
                 write!(f, "}}")
-            },
-            Type::Function(param_types, return_type) => {
-                write!(f, "function(")?;
-                for (i, param_type) in param_types.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", param_type)?;
-                }
-                write!(f, "): {}", return_type)
             },
             Type::Unknown => write!(f, "<unknown>"),
         }

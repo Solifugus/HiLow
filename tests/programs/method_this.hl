@@ -1,8 +1,0 @@
-high program(): i32 {
-  let obj = {
-    name: "Test"
-  }
-  print(obj.name)
-  // Note: Method 'this' binding is partial in Phase 7c-i
-  return 0
-}

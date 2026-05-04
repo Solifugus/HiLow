@@ -443,12 +443,6 @@ impl CodeGenerator {
             Expression::IsCheck(is_check) => {
                 self.generate_is_check(is_check, type_checker)?;
             }
-            Expression::ObjectIsCheck(obj_is_check) => {
-                self.generate_object_is_check(obj_is_check, type_checker)?;
-            }
-            Expression::FunctionExpression(func_expr) => {
-                self.generate_function_expression(func_expr, type_checker)?;
-            }
             Expression::QualifiedOp(qualified_op) => {
                 self.generate_qualified_op_expression(qualified_op, type_checker)?;
             }
@@ -516,27 +510,6 @@ impl CodeGenerator {
             if func_name == "print" {
                 return self.generate_print_call(call, type_checker);
             }
-        }
-
-        // Check if this is a method call (obj.method())
-        if let Expression::MemberAccess(_member_access) = call.callee.as_ref() {
-            // This is a method call - implement this binding
-            // Phase 7c-i: for now, we'll get the function and call it directly
-            // TODO: Implement proper method dispatch with 'this' parameter
-            self.generate_expression(&call.callee, type_checker)?;
-            self.output.push_str("(");
-
-            // For now, generate arguments normally (without this binding)
-            // TODO: Add 'this' as first parameter in Phase 7c-i completion
-            for (i, arg) in call.args.iter().enumerate() {
-                if i > 0 {
-                    self.output.push_str(", ");
-                }
-                self.generate_expression(arg, type_checker)?;
-            }
-
-            self.output.push_str(")");
-            return Ok(());
         }
 
         // Regular function call - handle nested function name mangling
@@ -626,7 +599,6 @@ impl CodeGenerator {
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
-            Type::Function(_, _) => "void*".to_string(), // Placeholder for closure struct pointer
             Type::Unknown => "void".to_string(),
         }
     }
@@ -801,15 +773,6 @@ impl CodeGenerator {
                 }
             }
             Expression::IsCheck(_) => Type::Bool,
-            Expression::ObjectIsCheck(_) => Type::Bool,
-            Expression::FunctionExpression(func_expr) => {
-                // Return function type
-                let param_types = func_expr.params.iter()
-                    .map(|p| Type::from_ast_type(&p.ty))
-                    .collect();
-                let return_type = Type::from_ast_type(&func_expr.return_type);
-                Type::Function(param_types, Box::new(return_type))
-            }
             Expression::QualifiedOp(qualified_op) => {
                 match qualified_op.op {
                     QualifiedOpKind::Assign => self.infer_expression_type_for_codegen(&qualified_op.lhs),
@@ -1257,13 +1220,6 @@ impl CodeGenerator {
                     self.generate_expression(prop_expr, type_checker)?;
                     self.output.push_str(");\n");
                 }
-                Type::Function(_, _) => {
-                    self.output.push_str("function(obj, \"");
-                    self.output.push_str(prop_name);
-                    self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
-                    self.output.push_str(");\n");
-                }
                 _ => {
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("object property of type {}", expr_type),
@@ -1303,7 +1259,6 @@ impl CodeGenerator {
             Type::Bool => self.output.push_str("hl_object_get_bool("),
             Type::String => self.output.push_str("hl_object_get_str("),
             Type::Object(_) => self.output.push_str("hl_object_get_object("),
-            Type::Function(_, _) => self.output.push_str("hl_object_get_function("),
             _ => {
                 return Err(CodegenError::UnsupportedFeature {
                     feature: format!("member access for type {}", member_type),
@@ -1321,29 +1276,5 @@ impl CodeGenerator {
         self.output.push_str("\")");
 
         Ok(())
-    }
-
-    fn generate_object_is_check(&mut self, obj_is_check: &ObjectIsCheck, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Generate: hl_object_is(lhs, rhs) for obj is obj
-        if obj_is_check.negated {
-            self.output.push_str("!");
-        }
-        self.output.push_str("hl_object_is(");
-        self.generate_expression(&obj_is_check.lhs, type_checker)?;
-        self.output.push_str(", ");
-        self.generate_expression(&obj_is_check.rhs, type_checker)?;
-        self.output.push_str(")");
-        Ok(())
-    }
-
-    fn generate_function_expression(&mut self, _func_expr: &FunctionExpression, _type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Generate a closure: create environment struct, allocate it, create closure struct
-
-        // For now, generate a placeholder for the closure
-        // TODO: Implement full closure capture analysis and generation
-        return Err(CodegenError::UnsupportedFeature {
-            feature: "function expressions (closures)".to_string(),
-            phase: "Phase 7c-i (in progress)".to_string(),
-        });
     }
 }

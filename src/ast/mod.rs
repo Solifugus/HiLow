@@ -33,7 +33,6 @@ pub enum Type {
     FixedArray(Box<Type>, usize),
     DynamicArray(Box<Type>),
     Object(Vec<(String, Type)>), // structural object type: properties and their types
-    Function(Vec<Type>, Box<Type>), // (parameter types, return type)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,14 +140,6 @@ pub struct IsCheck {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ObjectIsCheck {
-    pub lhs: Box<Expression>,  // child object
-    pub rhs: Box<Expression>,  // parent object
-    pub negated: bool,         // true for "is not"
-    pub position: Position,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct QualifierSpec {
     pub name: String,
     pub arg: Option<Expression>,
@@ -207,14 +198,6 @@ pub struct ObjectLiteral {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunctionExpression {
-    pub params: Vec<Parameter>,
-    pub return_type: Type,
-    pub body: Block,
-    pub position: Position,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
@@ -228,10 +211,8 @@ pub enum Expression {
     MemberAccess(MemberAccess),
     IndexAccess(IndexAccess),
     IsCheck(IsCheck),
-    ObjectIsCheck(ObjectIsCheck),
     QualifiedOp(QualifiedOp),
     ObjectLiteral(ObjectLiteral),
-    FunctionExpression(FunctionExpression),
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,6 +1,0 @@
-high program(): i32 {
-  let x = 42
-  // Note: Full closure support is partial in Phase 7c-i
-  // This test verifies function expressions parse correctly
-  return 0
-}
