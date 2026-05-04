@@ -67,7 +67,7 @@ impl TypeChecker {
 
     fn check_program(&mut self, program: &Program) {
         // Check parameter types (they should all be valid)
-        for param in &program.params {
+        for _param in &program.params {
             // Parameters must have explicit types in Phase 3
             // No need to check - they're already parsed with types
         }
@@ -353,6 +353,16 @@ impl TypeChecker {
                 self.check_expression(&is_check.expression); // Type check the expression
                 // Note: The type in is_check.ty is already validated during parsing
                 Type::Bool
+            },
+            Expression::ObjectIsCheck(obj_is_check) => {
+                // obj is obj always returns bool
+                // Both sides should be objects, but we'll allow any type for flexibility
+                self.check_expression(&obj_is_check.lhs);
+                self.check_expression(&obj_is_check.rhs);
+                Type::Bool
+            },
+            Expression::FunctionExpression(func_expr) => {
+                self.check_function_expression(func_expr)
             },
             Expression::QualifiedOp(qualified_op) => self.check_qualified_op_expression(qualified_op),
             Expression::ObjectLiteral(obj_lit) => self.check_object_literal(obj_lit),
@@ -914,6 +924,30 @@ impl TypeChecker {
         Type::Object(properties)
     }
 
+    fn check_function_expression(&mut self, func_expr: &FunctionExpression) -> Type {
+        // Enter new scope for function
+        self.enter_scope();
+
+        // Add parameters to scope
+        for param in &func_expr.params {
+            let param_type = Type::from_ast_type(&param.ty);
+            self.declare_variable(&param.name, param_type, param.position.clone());
+        }
+
+        // Check function body
+        self.check_block(&func_expr.body);
+
+        // Exit function scope
+        self.exit_scope();
+
+        // Return the function type
+        let param_types = func_expr.params.iter()
+            .map(|p| Type::from_ast_type(&p.ty))
+            .collect();
+        let return_type = Type::from_ast_type(&func_expr.return_type);
+        Type::Function(param_types, Box::new(return_type))
+    }
+
     /// Walk the prototype chain to find a property type (Phase 7b)
     fn find_property_in_chain(&self, object_type: &Type, property_name: &str, depth: usize) -> Option<Type> {
         const MAX_PROTO_DEPTH: usize = 100;
@@ -1037,6 +1071,8 @@ impl HasPosition for Expression {
             Expression::MemberAccess(access) => access.position.clone(),
             Expression::IndexAccess(access) => access.position.clone(),
             Expression::IsCheck(check) => check.position.clone(),
+            Expression::ObjectIsCheck(obj_is_check) => obj_is_check.position.clone(),
+            Expression::FunctionExpression(func_expr) => func_expr.position.clone(),
             Expression::QualifiedOp(qualified_op) => qualified_op.position.clone(),
             Expression::ObjectLiteral(obj_lit) => obj_lit.position.clone(),
         }

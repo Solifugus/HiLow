@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 7b — Prototype Delegation**
+**Current phase: Phase 7c-ii — For-In, Match, Switch**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

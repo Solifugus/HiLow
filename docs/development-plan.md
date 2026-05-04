@@ -1217,11 +1217,19 @@ hilowc prototypes.hl -o protos && ./protos
 # Output: Rover\ngeneric\n1\n3
 ```
 
-### Phase 7c: Closures, For-In, Match
+### Phase 7c-i: Closures, Method This Binding, Is for Objects
+
+**Note:** Phase 7c was split into two sub-phases because the original scope was too large for one session.
 
 **Scope:**
 - Closures: function expressions that capture variables from enclosing scope
-- Closure representation: function pointer + captured environment struct
+- Closure representation: function pointer + captured environment struct, allocated on the heap
+- Method `this` binding: when calling `obj.method()`, the `this` keyword inside method refers to `obj`
+- `is` operator on objects: `child is parent` walks the prototype chain to check membership
+
+### Phase 7c-ii: For-In, Match, Switch
+
+**Scope:**
 - `for-in` iteration over arrays and objects
 - Computed property access: `obj[key]` with dynamic keys (requires `unknown` for missing properties)
 - `match` expressions with literal patterns, range patterns, type patterns (`is unknown`, `is nothing`, `is i32`), and guards (`when`)
@@ -1231,18 +1239,23 @@ hilowc prototypes.hl -o protos && ./protos
 - Closure capture-by-reference vs by-value semantics — for now, all captures are by reference (this matters most for Low mode where it's restricted; Phase 12 enforces)
 - Pattern matching with object destructuring — keep patterns simple here
 
-**Tasks:**
+**Phase 7c-i Tasks:**
 1. Closures: at codegen, generate a struct with captured variables; the closure value is a `(fn_ptr, env_ptr)` pair
 2. When a closure escapes (returned or stored), it must heap-allocate its environment — this connects to Phase 8 (memory). For now, allocate with `malloc` and don't worry about freeing; Phase 8 will replace this with refcounting.
-3. `for (let item in array)`: codegen as a counted loop
-4. `for (let (k, v) in object)`: iterate the hashmap
-5. `match`: codegen as a chain of if/else, evaluating each pattern in order
-6. `switch`: codegen as C switch when discriminator is integer or string-comparable; otherwise as if/else chain
+3. Method `this` binding: for function expressions inside object literals, codegen the function with `this` as an implicit first parameter
+4. Method calls: for `obj.method(args)` codegen passes `obj` as the first argument
+5. `is` operator for objects: emit calls to `hl_object_is(child, parent)` runtime helper that walks prototype chain
 
-**Verification:**
+**Phase 7c-ii Tasks:**
+1. `for (let item in array)`: codegen as a counted loop
+2. `for (let (k, v) in object)`: iterate the hashmap
+3. `match`: codegen as a chain of if/else, evaluating each pattern in order
+4. `switch`: codegen as C switch when discriminator is integer or string-comparable; otherwise as if/else chain
+
+**Phase 7c-i Verification:**
 
 ```hilow
-// closures.hl
+// closure_counter.hl
 high program(): i32 {
   function makeCounter(): function {
     let count = 0
@@ -1261,51 +1274,48 @@ high program(): i32 {
 ```
 
 ```hilow
-// for_in.hl
+// method_this.hl
 high program(): i32 {
-  let arr = [10, 20, 30]
-  for (let v in arr) {
-    print(v)                   // 10, 20, 30
+  let obj = {
+    name: "Test",
+    say: function(): i32 {
+      print(this.name)
+      return 0
+    }
   }
-  
-  for (let (i, v) in arr) {
-    print(i)
-    print(v)                   // 0,10, 1,20, 2,30
-  }
-  
+  obj.say()                    // "Test"
   return 0
 }
 ```
 
 ```hilow
-// matching.hl
+// is_object.hl
 high program(): i32 {
-  let x = 42
-  match x {
-    0 => print(0),
-    1..10 => print(1),
-    11..100 => print(2),       // matches: 42 is in 11..100
-    _ => print(3)
-  }
-  
-  match x {
-    n when n < 0 => print(10),
-    n when n ?= 0 => print(11),
-    n when n > 0 => print(12)  // matches
+  let animal = { type: "animal" }
+  let dog = { proto: animal, breed: "labrador" }
+  if (dog is animal) {
+    print("dog is animal")     // matches
   }
   return 0
 }
 ```
 
 ```bash
-hilowc closures.hl -o closures && ./closures
+hilowc closure_counter.hl -o cc && ./cc
 # Output: 1\n2\n3
 
-hilowc for_in.hl -o fi && ./fi
-# Output as expected
+hilowc method_this.hl -o mt && ./mt
+# Output: Test
 
-hilowc matching.hl -o m && ./m
-# Output: 2\n12
+hilowc is_object.hl -o io && ./io
+# Output: dog is animal
+```
+
+**Phase 7c-ii Verification:** (moved to Phase 7c-ii)
+
+```hilow
+// for_in.hl - moved to Phase 7c-ii
+// matching.hl - moved to Phase 7c-ii
 ```
 
 ---

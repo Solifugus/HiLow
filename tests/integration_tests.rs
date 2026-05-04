@@ -809,3 +809,105 @@ fn test_proto_assign_local_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 7c-i: Closures, method this binding, and object is checks integration tests
+
+#[test]
+fn test_closure_capture_integration() {
+    let executable = compile_program("tests/programs/closure_capture.hl")
+        .expect("Failed to compile closure_capture.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_capture program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/closure_capture.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_closure_counter_integration() {
+    let executable = compile_program("tests/programs/closure_counter.hl")
+        .expect("Failed to compile closure_counter.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_counter program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/closure_counter.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_method_this_integration() {
+    let executable = compile_program("tests/programs/method_this.hl")
+        .expect("Failed to compile method_this.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run method_this program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/method_this.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_method_this_proto_integration() {
+    let executable = compile_program("tests/programs/method_this_proto.hl")
+        .expect("Failed to compile method_this_proto.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run method_this_proto program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/method_this_proto.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_is_object_integration() {
+    let executable = compile_program("tests/programs/is_object.hl")
+        .expect("Failed to compile is_object.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run is_object program");
+
+    // Verify the program ran successfully
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/is_object.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout, expected);
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

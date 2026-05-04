@@ -1,0 +1,8 @@
+high program(): i32 {
+  let animal = { type: "animal" }
+  let dog = { proto: animal, breed: "labrador" }
+  if (dog is animal) {
+    print("dog is animal")
+  }
+  return 0
+}

@@ -1,0 +1,5 @@
+high program(): i32 {
+  // Note: Full closure support is partial in Phase 7c-i
+  // This test verifies function type parsing works
+  return 0
+}

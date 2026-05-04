@@ -87,4 +87,9 @@ bool hl_object_get_bool(HiLowObject* obj, const char* key);
 char* hl_object_get_str(HiLowObject* obj, const char* key);
 HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key);
 
+// Phase 7c-i: New functions for closures and object is checks
+bool hl_object_is(HiLowObject* child, HiLowObject* parent);
+void hl_object_set_function(HiLowObject* obj, const char* key, void* value);
+void* hl_object_get_function(HiLowObject* obj, const char* key);
+
 #endif // HILOW_RUNTIME_H
