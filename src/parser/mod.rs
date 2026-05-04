@@ -625,49 +625,82 @@ impl Parser {
                     break;
                 }
 
-                let op_kind = op_token.kind.clone(); // Clone for potential error message
+                let _op_kind = op_token.kind.clone(); // Clone for potential error message
                 let position = self.advance()?.position; // consume operator
 
-                // Special handling for 'is' and 'is not' to create IsCheck nodes
+                // Special handling for 'is' and 'is not' to create IsCheck or ObjectIsCheck nodes
                 if matches!(op, BinaryOpKind::Is | BinaryOpKind::IsNot) {
-                    // Parse the type name
-                    let type_token = self.expect_identifier("Expected type name after 'is'")?;
-                    let type_name = &type_token.lexeme;
+                    // Peek at next token to decide between primitive type check vs object prototype check
+                    if !self.is_at_end() {
+                        let token = self.peek()?;
+                        if matches!(token.kind, TokenKind::Identifier) {
+                            let type_name = token.lexeme.clone(); // Clone to avoid borrow conflict
+                            // Check if it's a primitive type name
+                            let is_primitive_type = matches!(type_name.as_str(),
+                                "i8" | "i16" | "i32" | "i64" | "i128" |
+                                "u8" | "u16" | "u32" | "u64" | "u128" |
+                                "f32" | "f64" | "bool" | "string" |
+                                "usize" | "isize" | "nothing"
+                            );
 
-                    // Convert type name to Type
-                    let ty = match type_name.as_str() {
-                        "i8" => Type::Primitive(PrimitiveType::I8),
-                        "i16" => Type::Primitive(PrimitiveType::I16),
-                        "i32" => Type::Primitive(PrimitiveType::I32),
-                        "i64" => Type::Primitive(PrimitiveType::I64),
-                        "i128" => Type::Primitive(PrimitiveType::I128),
-                        "u8" => Type::Primitive(PrimitiveType::U8),
-                        "u16" => Type::Primitive(PrimitiveType::U16),
-                        "u32" => Type::Primitive(PrimitiveType::U32),
-                        "u64" => Type::Primitive(PrimitiveType::U64),
-                        "u128" => Type::Primitive(PrimitiveType::U128),
-                        "f32" => Type::Primitive(PrimitiveType::F32),
-                        "f64" => Type::Primitive(PrimitiveType::F64),
-                        "bool" => Type::Primitive(PrimitiveType::Bool),
-                        "string" => Type::Primitive(PrimitiveType::String),
-                        "usize" => Type::Primitive(PrimitiveType::Usize),
-                        "isize" => Type::Primitive(PrimitiveType::Isize),
-                        "nothing" => Type::Primitive(PrimitiveType::Nothing),
-                        _ => {
-                            return Err(ParseError::UnexpectedToken {
-                                expected: "valid type name".to_string(),
-                                found: op_kind,
-                                position: type_token.position,
+                            if is_primitive_type {
+                                // Parse as primitive type check
+                                let _type_token = self.advance()?;
+                                let ty = match type_name.as_str() {
+                                    "i8" => Type::Primitive(PrimitiveType::I8),
+                                    "i16" => Type::Primitive(PrimitiveType::I16),
+                                    "i32" => Type::Primitive(PrimitiveType::I32),
+                                    "i64" => Type::Primitive(PrimitiveType::I64),
+                                    "i128" => Type::Primitive(PrimitiveType::I128),
+                                    "u8" => Type::Primitive(PrimitiveType::U8),
+                                    "u16" => Type::Primitive(PrimitiveType::U16),
+                                    "u32" => Type::Primitive(PrimitiveType::U32),
+                                    "u64" => Type::Primitive(PrimitiveType::U64),
+                                    "u128" => Type::Primitive(PrimitiveType::U128),
+                                    "f32" => Type::Primitive(PrimitiveType::F32),
+                                    "f64" => Type::Primitive(PrimitiveType::F64),
+                                    "bool" => Type::Primitive(PrimitiveType::Bool),
+                                    "string" => Type::Primitive(PrimitiveType::String),
+                                    "usize" => Type::Primitive(PrimitiveType::Usize),
+                                    "isize" => Type::Primitive(PrimitiveType::Isize),
+                                    "nothing" => Type::Primitive(PrimitiveType::Nothing),
+                                    _ => unreachable!(),
+                                };
+
+                                left = Expression::IsCheck(IsCheck {
+                                    expression: Box::new(left),
+                                    ty,
+                                    negated: matches!(op, BinaryOpKind::IsNot),
+                                    position,
+                                });
+                            } else {
+                                // Parse as object prototype check
+                                let right = self.parse_expression_with_precedence(prec + 1)?;
+
+                                left = Expression::ObjectIsCheck(ObjectIsCheck {
+                                    lhs: Box::new(left),
+                                    rhs: Box::new(right),
+                                    negated: matches!(op, BinaryOpKind::IsNot),
+                                    position,
+                                });
+                            }
+                        } else {
+                            // Parse as object prototype check (RHS is not an identifier)
+                            let right = self.parse_expression_with_precedence(prec + 1)?;
+
+                            left = Expression::ObjectIsCheck(ObjectIsCheck {
+                                lhs: Box::new(left),
+                                rhs: Box::new(right),
+                                negated: matches!(op, BinaryOpKind::IsNot),
+                                position,
                             });
                         }
-                    };
-
-                    left = Expression::IsCheck(IsCheck {
-                        expression: Box::new(left),
-                        ty,
-                        negated: matches!(op, BinaryOpKind::IsNot),
-                        position,
-                    });
+                    } else {
+                        return Err(ParseError::UnexpectedEof {
+                            expected: "type name or expression after 'is'".to_string(),
+                            position: position.clone(),
+                        });
+                    }
                 } else {
                     let right = self.parse_expression_with_precedence(prec + 1)?;
 

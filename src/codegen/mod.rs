@@ -443,6 +443,9 @@ impl CodeGenerator {
             Expression::IsCheck(is_check) => {
                 self.generate_is_check(is_check, type_checker)?;
             }
+            Expression::ObjectIsCheck(obj_is_check) => {
+                self.generate_object_is_check(obj_is_check, type_checker)?;
+            }
             Expression::QualifiedOp(qualified_op) => {
                 self.generate_qualified_op_expression(qualified_op, type_checker)?;
             }
@@ -620,6 +623,19 @@ impl CodeGenerator {
         Ok(())
     }
 
+    fn generate_object_is_check(&mut self, obj_is_check: &ObjectIsCheck, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate: hl_object_is(lhs, rhs) for obj is obj
+        if obj_is_check.negated {
+            self.output.push_str("!");
+        }
+        self.output.push_str("hl_object_is(");
+        self.generate_expression(&obj_is_check.lhs, type_checker)?;
+        self.output.push_str(", ");
+        self.generate_expression(&obj_is_check.rhs, type_checker)?;
+        self.output.push_str(")");
+        Ok(())
+    }
+
     fn next_var_name(&mut self) -> String {
         let name = format!("_v{}", self.var_counter);
         self.var_counter += 1;
@@ -674,6 +690,7 @@ impl CodeGenerator {
                 }
             }
             Expression::IsCheck(_) => Type::Bool,
+            Expression::ObjectIsCheck(_) => Type::Bool,
             Expression::QualifiedOp(qualified_op) => {
                 match qualified_op.op {
                     QualifiedOpKind::Assign => self.infer_expression_type(&qualified_op.lhs),
@@ -773,6 +790,7 @@ impl CodeGenerator {
                 }
             }
             Expression::IsCheck(_) => Type::Bool,
+            Expression::ObjectIsCheck(_) => Type::Bool,
             Expression::QualifiedOp(qualified_op) => {
                 match qualified_op.op {
                     QualifiedOpKind::Assign => self.infer_expression_type_for_codegen(&qualified_op.lhs),

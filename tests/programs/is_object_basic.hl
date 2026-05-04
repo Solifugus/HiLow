@@ -1,0 +1,13 @@
+high program(): i32 {
+  let animal = { kind: "creature" }
+  let dog = { proto: animal, name: "Rex" }
+
+  if (dog is animal) {
+    print(1)
+  }
+  if (animal is dog) {
+    print(99)
+  }
+
+  return 0
+}

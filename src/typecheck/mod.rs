@@ -354,6 +354,13 @@ impl TypeChecker {
                 // Note: The type in is_check.ty is already validated during parsing
                 Type::Bool
             },
+            Expression::ObjectIsCheck(obj_is_check) => {
+                // obj is obj always returns bool
+                // Both sides should be objects, but we'll allow any type for flexibility
+                self.check_expression(&obj_is_check.lhs);
+                self.check_expression(&obj_is_check.rhs);
+                Type::Bool
+            },
             Expression::QualifiedOp(qualified_op) => self.check_qualified_op_expression(qualified_op),
             Expression::ObjectLiteral(obj_lit) => self.check_object_literal(obj_lit),
         }
@@ -1037,6 +1044,7 @@ impl HasPosition for Expression {
             Expression::MemberAccess(access) => access.position.clone(),
             Expression::IndexAccess(access) => access.position.clone(),
             Expression::IsCheck(check) => check.position.clone(),
+            Expression::ObjectIsCheck(obj_is_check) => obj_is_check.position.clone(),
             Expression::QualifiedOp(qualified_op) => qualified_op.position.clone(),
             Expression::ObjectLiteral(obj_lit) => obj_lit.position.clone(),
         }

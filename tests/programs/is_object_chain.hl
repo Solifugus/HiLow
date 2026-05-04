@@ -1,0 +1,12 @@
+high program(): i32 {
+  let a = { level: 0 }
+  let b = { proto: a, level: 1 }
+  let c = { proto: b, level: 2 }
+
+  if (c is a) { print(1) }
+  if (c is b) { print(2) }
+  if (c is c) { print(3) }
+  if (a is c) { print(99) }
+
+  return 0
+}

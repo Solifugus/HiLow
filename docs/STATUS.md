@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7b — Prototype Delegation  
-**Status:** Complete - ready for Phase 7c
+**Phase:** Phase 7b-extension — `is` Operator for Objects  
+**Status:** Complete - ready for Phase 7c-α
 **Branch:** main
-**Last commit:** Phase 7a fix: complete property access codegen and add integration tests
+**Last commit:** Phase 7b-extension: `is` operator for object prototype membership
 
 ---
 
@@ -20,6 +20,19 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-03 — Phase 7b-extension: `is` Operator for Objects
+- **Scope**: Implemented `is` operator for object prototype membership checks as focused extension to Phase 7b
+- **Context**: This salvages the working `is`-for-objects feature from the reverted Phase 7c-i commit while leaving broader closures work for future phases
+- **Runtime**: Added `hl_object_is(child, parent)` function that walks prototype chain to check if parent object appears anywhere in child's prototype chain; includes cycle protection with MAX_PROTO_DEPTH of 100
+- **AST**: Added `ObjectIsCheck` node distinct from `IsCheck` for primitive types; separates compile-time-evaluated vs runtime-evaluated `is` checks cleanly
+- **Parser**: Enhanced `is` operator parsing to detect primitive type names vs expressions; creates appropriate AST node based on right-hand side token analysis
+- **Type system**: Added `ObjectIsCheck` handling in type checker; validates both operands and returns `Type::Bool` for runtime evaluation
+- **Codegen**: Added `generate_object_is_check()` method that emits `hl_object_is(lhs, rhs)` runtime calls; integrated into expression type inference methods
+- **Integration tests**: Added 4 end-to-end tests covering basic prototype membership, self-checks, multi-level chains, and unrelated objects
+- **Reused code**: Successfully reused working code from reverted Phase 7c-i commit rather than rewriting from scratch; maintained two-variant AST approach (IsCheck vs ObjectIsCheck)
+- **Verification**: All 45 integration tests pass with 0 failures; canonical examples work correctly end-to-end
+- Commit: "Phase 7b-extension: `is` operator for object prototype membership"
 
 ### 2026-05-03 — Phase 7b: Prototype delegation
 - **Scope**: Implemented prototype-based property delegation where objects can have a `proto` property that acts as their prototype

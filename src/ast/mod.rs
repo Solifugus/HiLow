@@ -140,6 +140,14 @@ pub struct IsCheck {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ObjectIsCheck {
+    pub lhs: Box<Expression>,  // child object
+    pub rhs: Box<Expression>,  // parent object
+    pub negated: bool,         // true for "is not"
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct QualifierSpec {
     pub name: String,
     pub arg: Option<Expression>,
@@ -211,6 +219,7 @@ pub enum Expression {
     MemberAccess(MemberAccess),
     IndexAccess(IndexAccess),
     IsCheck(IsCheck),
+    ObjectIsCheck(ObjectIsCheck),
     QualifiedOp(QualifiedOp),
     ObjectLiteral(ObjectLiteral),
 }

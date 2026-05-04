@@ -1,0 +1,11 @@
+high program(): i32 {
+  let cat = { kind: "feline" }
+  let dog = { kind: "canine" }
+
+  if (cat is dog) {
+    print(99)
+  }
+  print(1)
+
+  return 0
+}

@@ -1,0 +1,7 @@
+high program(): i32 {
+  let obj = { x: 1 }
+  if (obj is obj) {
+    print(1)
+  }
+  return 0
+}

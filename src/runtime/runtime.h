@@ -87,4 +87,7 @@ bool hl_object_get_bool(HiLowObject* obj, const char* key);
 char* hl_object_get_str(HiLowObject* obj, const char* key);
 HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key);
 
+// Phase 7b-extension: Object is check
+bool hl_object_is(HiLowObject* child, HiLowObject* parent);
+
 #endif // HILOW_RUNTIME_H

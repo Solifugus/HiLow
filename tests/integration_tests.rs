@@ -809,3 +809,79 @@ fn test_proto_assign_local_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_is_object_basic_integration() {
+    let executable = compile_program("tests/programs/is_object_basic.hl")
+        .expect("Failed to compile is_object_basic.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/is_object_basic.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run is_object_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_is_object_self_integration() {
+    let executable = compile_program("tests/programs/is_object_self.hl")
+        .expect("Failed to compile is_object_self.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/is_object_self.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run is_object_self");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_is_object_chain_integration() {
+    let executable = compile_program("tests/programs/is_object_chain.hl")
+        .expect("Failed to compile is_object_chain.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/is_object_chain.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run is_object_chain");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_is_object_unrelated_integration() {
+    let executable = compile_program("tests/programs/is_object_unrelated.hl")
+        .expect("Failed to compile is_object_unrelated.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/is_object_unrelated.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run is_object_unrelated");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

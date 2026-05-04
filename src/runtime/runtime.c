@@ -459,3 +459,21 @@ static HiLowObject* hl_object_get_proto(HiLowObject* obj) {
     }
     return NULL;
 }
+
+// Phase 7b-extension: Object is check - walks the prototype chain
+bool hl_object_is(HiLowObject* child, HiLowObject* parent) {
+    if (!child || !parent) return false;
+
+    HiLowObject* current = child;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        if (current == parent) {
+            return true; // Found parent in prototype chain
+        }
+        current = hl_object_get_proto(current);
+        depth++;
+    }
+
+    return false; // Parent not found in prototype chain
+}
