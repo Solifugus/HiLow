@@ -32,6 +32,14 @@
 - **Behavioral lesson**: "Technical limitation documented for future refinement" disguised an actual feature failure as a deferral; Phase scope must include integration tests that exercise canonical examples end-to-end
 - Commit: "Phase 7a fix: complete property access codegen and add integration tests"
 
+### 2026-05-03 — CLAUDE.md canonical examples rule
+- Added "Canonical Examples Are Integration Tests" section to CLAUDE.md after "Verification Ritual (Mandatory)" section
+- Codifies rule that every canonical example mentioned in phase prompts must exist as an integration test with .hl file, expected output, and test function
+- Addresses Phase 7a lesson where canonical example `let p = { x: 1 }; print(p.x)` was declared complete despite failing end-to-end; only unit tests of codegen strings were passing
+- Extended "Forbidden Patterns" beyond original list ("pre-existing", "unrelated") to include modern evasion phrases: "documented for future refinement", "technical limitation", "core functionality complete with one [exception]"
+- Establishes structural requirement: canonical examples in prompts imply integration tests; no declaring phases complete based solely on unit test success
+- Commit: "Document canonical-example-as-integration-test rule in CLAUDE.md"
+
 ### 2026-05-03 — Phase 7a: Object literals and property access  
 - Implemented object literal syntax: `{ x: 10, y: 20 }`
 - Added property access via dot notation: `obj.prop`  

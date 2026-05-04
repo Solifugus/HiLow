@@ -89,6 +89,47 @@ At the start of every session that modifies code:
 
 This catches breakage that may have happened in a previous session that wasn't reported correctly. It also gives the user a known starting point for assessing whether the current session's changes introduced any regressions.
 
+## Canonical Examples Are Integration Tests
+
+Every phase prompt that asks to "show the actual generated C for X" or similar — where X is a specific HiLow program example — implies that X must exist as an integration test. The example program must be:
+
+1. Saved as a `.hl` file in `tests/programs/`
+2. Have an expected output file in `tests/expected/`
+3. Be exercised by an integration test in `tests/integration_tests.rs` that:
+   - Invokes `hilowc` on the program
+   - Runs the resulting binary
+   - Compares stdout to the expected output file
+
+Unit tests of the parser, type checker, or codegen are not substitutes. A phase is not complete if its canonical examples can compile in unit tests but fail end-to-end.
+
+### Why
+
+Unit tests verify components in isolation. Integration tests verify the components work together. Many bugs live at the seams between components — type information not flowing into codegen, runtime helpers not linked, escape sequences mangling output, etc. These bugs are invisible to unit tests but cause complete failure of canonical examples.
+
+The rule "show the generated C for X" exists in prompts to make Claude Code paste real compiler output. If the example program doesn't exist as an integration test, "showing the generated C" requires inventing the workflow on the spot, and it's easy to paste plausible-looking but inaccurate C. Integration tests prevent this by making the example permanent and verifiable.
+
+### How to Apply
+
+When reading a phase prompt:
+
+1. Identify every canonical example mentioned (programs the prompt asks to show output for, or programs in the verification section).
+2. For each one, write a `.hl` file, a `.expected.txt` file, and an integration test function.
+3. Run the integration test before declaring the phase complete.
+4. The verification ritual must include all integration tests passing.
+
+If a canonical example demonstrates an error path (e.g., "should fail with X message"), the integration test asserts the compilation fails with the expected error.
+
+### Forbidden Patterns
+
+In addition to the previously-forbidden framings ("pre-existing", "unrelated", "minor", "different issue"), these are also not acceptable:
+
+- "Documented for future refinement"
+- "Technical limitation"
+- "Will be implemented in future phases" — this is acceptable for phase-deferred features, but only when those features are explicitly listed as out of scope in the prompt's "Phase N is explicitly NOT" section. Using it for in-scope features means the phase is incomplete.
+- "Core functionality is complete, with one [limitation/issue/exception]" — usually disguises an incomplete feature
+
+The pattern these phrases share: they reframe an incomplete-feature problem as a documentation problem. If a feature listed in the phase scope doesn't work end-to-end, the phase is not complete. No exceptions, no documentation hand-waves.
+
 ## Discipline rules
 
 These rules apply to every session. They exist because the alternative produces broken intermediate states, scope creep, and silent shortcuts.
