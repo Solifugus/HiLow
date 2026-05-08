@@ -21,6 +21,14 @@
 
 ## Recent sessions
 
+### 2026-05-07 — CLAUDE.md documentation: empty test prohibition
+- **Context**: During Phase 7c-α completion fix, discovered that `test_function_expression_variable_capture_rejected` had no assertions - just called `type_check_program` and ignored the result, passing by not panicking
+- **Documentation**: Added "Tests Must Contain Assertions" section to CLAUDE.md after "Canonical Examples Are Integration Tests", codifying rule that every test must contain at least one assert!, assert_eq!, assert_ne!, or equivalent assertion  
+- **Content**: Includes forbidden patterns (empty test bodies, TODO comments), required patterns (meaningful assertions), audit heuristic (bash script to find tests without assert statements), policy rationale (empty tests inflate counts without verifying behavior)
+- **Behavioral lesson**: Empty tests are worse than no tests - they pass cargo test while providing false confidence that features work when they're actually incomplete
+- **No code changes**: Documentation-only update, verification ritual unchanged from Phase 7c-α completion fix baseline
+- Commit: "Document empty-test prohibition in CLAUDE.md"
+
 ### 2026-05-07 — Phase 7c-α completion fix: capture rejection
 - **Context**: Phase 7c-α was declared complete with `test_function_expression_variable_capture_rejected` as a deliverable, but the test had no assertions - it was just calling `type_check_program` and ignoring the result, passing by not panicking  
 - **Implementation**: Added proper variable capture detection in type checker with `check_for_captures_in_statement/expression` methods that walk function body AST and detect references to outer-scope variables; rejects with exact error message "function expressions cannot capture variables (Phase 7c-γ will add capture detection, Phase 7c-δ will implement closures)"

@@ -130,6 +130,89 @@ In addition to the previously-forbidden framings ("pre-existing", "unrelated", "
 
 The pattern these phrases share: they reframe an incomplete-feature problem as a documentation problem. If a feature listed in the phase scope doesn't work end-to-end, the phase is not complete. No exceptions, no documentation hand-waves.
 
+## Tests Must Contain Assertions
+
+Every test added to the test suite must contain at least one `assert!`, `assert_eq!`, `assert_ne!`, or equivalent assertion. A test that calls functions without asserting on their results is not a test — it's setup code labeled as a test.
+
+### What's Forbidden
+
+```rust
+#[test]
+fn test_feature_X() {
+    let result = do_something();
+    // TODO: implement feature X assertion
+}
+```
+
+```rust
+#[test]
+fn test_feature_X() {
+    let result = do_something();
+    // Test passes if no panic occurs
+}
+```
+
+```rust
+#[test]
+fn test_feature_X() {
+    do_something();
+    // Verifies feature X parses (without checking what it parses to)
+}
+```
+
+These tests exist on paper but don't verify behavior. They satisfy the letter of "tests added" without satisfying the spirit.
+
+### What's Required
+
+Every test must answer the question: "what would have to be wrong for this test to fail?" If the answer is "nothing in the code under test," the test is theater.
+
+```rust
+#[test]
+fn test_feature_X() {
+    let result = do_something();
+    assert!(result.is_ok(), "Expected success, got: {:?}", result);
+    let value = result.unwrap();
+    assert_eq!(value, expected_value);
+}
+```
+
+### When You're Tempted to Write an Empty Test
+
+If you're about to write a test body without assertions, that's a signal. Stop and ask:
+
+- Is the feature this test is named after actually implemented?
+- If not, is the test a placeholder for future work?
+
+If the feature isn't implemented, **the right action is to STOP and report**, not to commit a placeholder test. Phase prompts are explicit about what's in and out of scope. If a test for an in-scope feature can't be written meaningfully, the feature isn't done. Report back rather than committing the test.
+
+### Why This Exists
+
+Empty tests are worse than no tests. They:
+- Inflate test counts, suggesting more coverage than exists
+- Pass cargo test, suggesting the feature works
+- Bury TODO markers in code that's hard to audit
+- Are not caught by the verification ritual (they pass)
+
+A test count is only meaningful if every test asserts. The only way to maintain this is to make empty tests forbidden by policy and to grep for them periodically.
+
+### Audit Heuristic
+
+To check the test corpus for empty tests:
+
+```bash
+# Heuristic: tests that have no assert statements
+for f in tests/*.rs; do
+  awk '/#\[test\]/{flag=1; name=""; body=""; line_no=0}
+       flag && /^fn /{name=$0; line_no=NR}
+       flag{body=body $0 "\n"; if($0 ~ /^}/ && line_no > 0){
+         if(body !~ /assert/){print f ":" name}
+         flag=0
+       }}' "$f"
+done
+```
+
+This isn't perfect (it might miss assertions through helper functions), but catches the common case.
+
 ## Discipline rules
 
 These rules apply to every session. They exist because the alternative produces broken intermediate states, scope creep, and silent shortcuts.
