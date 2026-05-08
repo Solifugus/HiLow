@@ -134,6 +134,46 @@ impl Type {
             },
         }
     }
+
+    /// Convert from type checker Type to AST Type
+    pub fn to_ast_type(&self) -> ast::Type {
+        match self {
+            Type::I8 => ast::Type::Primitive(ast::PrimitiveType::I8),
+            Type::I16 => ast::Type::Primitive(ast::PrimitiveType::I16),
+            Type::I32 => ast::Type::Primitive(ast::PrimitiveType::I32),
+            Type::I64 => ast::Type::Primitive(ast::PrimitiveType::I64),
+            Type::I128 => ast::Type::Primitive(ast::PrimitiveType::I128),
+            Type::U8 => ast::Type::Primitive(ast::PrimitiveType::U8),
+            Type::U16 => ast::Type::Primitive(ast::PrimitiveType::U16),
+            Type::U32 => ast::Type::Primitive(ast::PrimitiveType::U32),
+            Type::U64 => ast::Type::Primitive(ast::PrimitiveType::U64),
+            Type::U128 => ast::Type::Primitive(ast::PrimitiveType::U128),
+            Type::F32 => ast::Type::Primitive(ast::PrimitiveType::F32),
+            Type::F64 => ast::Type::Primitive(ast::PrimitiveType::F64),
+            Type::Bool => ast::Type::Primitive(ast::PrimitiveType::Bool),
+            Type::String => ast::Type::Primitive(ast::PrimitiveType::String),
+            Type::Usize => ast::Type::Primitive(ast::PrimitiveType::Usize),
+            Type::Isize => ast::Type::Primitive(ast::PrimitiveType::Isize),
+            Type::Nothing => ast::Type::Primitive(ast::PrimitiveType::Nothing),
+            Type::FixedArray(elem_type, size) => {
+                ast::Type::FixedArray(Box::new(elem_type.to_ast_type()), *size)
+            },
+            Type::DynamicArray(elem_type) => {
+                ast::Type::DynamicArray(Box::new(elem_type.to_ast_type()))
+            },
+            Type::Object(properties) => {
+                let ast_properties = properties.iter()
+                    .map(|(name, ty)| (name.clone(), ty.to_ast_type()))
+                    .collect();
+                ast::Type::Object(ast_properties)
+            },
+            Type::Function(param_types, return_type) => {
+                let ast_param_types = param_types.iter().map(|t| t.to_ast_type()).collect();
+                ast::Type::Function(ast_param_types, Box::new(return_type.to_ast_type()))
+            },
+            Type::Unknown => ast::Type::Primitive(ast::PrimitiveType::Nothing), // fallback
+        }
+    }
 }
 
 impl std::fmt::Display for Type {

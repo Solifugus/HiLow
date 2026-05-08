@@ -473,3 +473,118 @@ fn test_function_expression_no_capture_allowed() {
     let result = type_check_program(input);
     assert!(result.is_ok(), "Function expression with no capture should type-check; got: {:?}", result);
 }
+
+// Phase 7c-γ: Capture Detection tests
+
+#[test]
+fn test_capture_single_variable_reported() {
+    let input = "high program(): i32 {
+        let outer = 42
+        let f = function(): i32 { return outer }
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Variable capture should be rejected");
+    if let Err(errors) = result {
+        let msg = errors[0].to_string();
+        assert!(msg.contains("Captured variables: outer"), "Expected capture list with 'outer'; got: {}", msg);
+        assert!(msg.contains("i32"), "Expected type info in capture list; got: {}", msg);
+    }
+}
+
+#[test]
+fn test_capture_multiple_variables_reported() {
+    let input = "high program(): i32 {
+        let x = 5
+        let name = \"hi\"
+        let f = function(): i32 {
+            print(name)
+            return x
+        }
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_err());
+    if let Err(errors) = result {
+        let msg = errors[0].to_string();
+        assert!(msg.contains("Captured variables:"));
+        assert!(msg.contains("x"), "Expected 'x' in capture list; got: {}", msg);
+        assert!(msg.contains("name"), "Expected 'name' in capture list; got: {}", msg);
+    }
+}
+
+#[test]
+fn test_capture_same_variable_referenced_twice() {
+    let input = "high program(): i32 {
+        let counter = 0
+        let f = function(): i32 {
+            let temp = counter
+            return counter + 1
+        }
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_err());
+    if let Err(errors) = result {
+        let msg = errors[0].to_string();
+        // counter should appear once, not twice
+        let occurrences = msg.matches("counter").count();
+        assert_eq!(occurrences, 1, "Expected 'counter' to appear once in capture list; got {} occurrences in: {}", occurrences, msg);
+    }
+}
+
+#[test]
+fn test_no_capture_no_error() {
+    let input = "high program(): i32 {
+        let f = function(x: i32): i32 { return x + 1 }
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Function expression with no capture should type-check; got: {:?}", result);
+}
+
+#[test]
+fn test_capture_metadata_stored_on_ast() {
+    // This test inspects the AST to confirm capture metadata is populated.
+    // Use parser+type-checker access pattern from existing tests.
+
+    let input = "high program(): i32 {
+        let outer = 42
+        let f = function(): i32 { return outer }
+        return 0
+    }";
+
+    // Parse
+    let parser_result = Parser::new(input).unwrap().parse();
+    assert!(parser_result.is_ok());
+    let top_level = parser_result.unwrap();
+
+    // Type-check (will fail, but we want the AST to have metadata after partial type-check)
+    // The type checker populates the captures field before producing the error
+    let mut type_checker = TypeChecker::new();
+    let _result = type_checker.check(&top_level); // ignore result, we expect it to fail
+
+    // Walk the AST to find the FunctionExpr and check its captures field
+    use hilowc::ast::*;
+    if let TopLevel::Program(program) = &top_level {
+        if let Some(body) = &program.body {
+            for item in &body.items {
+                if let BlockItem::Statement(Statement::Let(let_stmt)) = item {
+                    if let Some(Expression::FunctionExpr(func_expr)) = &let_stmt.initializer {
+                        let captures = func_expr.captures.borrow();
+                        assert_eq!(captures.len(), 1, "Expected 1 capture, got {}", captures.len());
+                        assert_eq!(captures[0].0, "outer", "Expected capture name 'outer', got '{}'", captures[0].0);
+                        // Type should be i32
+                        if let Type::Primitive(PrimitiveType::I32) = &captures[0].1 {
+                            // correct
+                        } else {
+                            panic!("Expected i32 type for captured variable, got: {:?}", captures[0].1);
+                        }
+                        return; // test passed
+                    }
+                }
+            }
+        }
+    }
+    panic!("Could not find function expression in AST");
+}

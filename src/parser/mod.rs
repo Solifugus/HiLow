@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::lexer::{Lexer, Token, TokenKind, Position, LexError};
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParseError {
@@ -1404,6 +1405,7 @@ impl Parser {
             return_type,
             body,
             position: start_pos,
+            captures: RefCell::new(Vec::new()),  // Initialized by parser, populated by type checker
         }))
     }
 }

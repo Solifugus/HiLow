@@ -1,4 +1,4 @@
-use crate::ast::*;
+use crate::ast::{self, *};
 use crate::types::{Type, TypeError};
 use crate::lexer::Position;
 use crate::qualifiers::{QualifierRegistry, QualifierContext, CodegenStatus};
@@ -1055,9 +1055,31 @@ impl TypeChecker {
             self.declare_variable(&param.name, param_type, param.position.clone());
         }
 
-        // Check for variable captures in the function body (Phase 7c-α restriction)
+        // Phase 7c-γ: Collect capture metadata before checking for errors
+        let mut captures = Vec::new();
         for statement in &func_expr.body.statements {
-            self.check_for_captures_in_statement(statement, outer_scope_depth);
+            self.collect_captures_in_statement(statement, outer_scope_depth, &mut captures);
+        }
+
+        // Convert from types::Type to ast::Type for storage in AST
+        let ast_captures: Vec<(String, ast::Type, Position)> = captures.iter()
+            .map(|(name, ty, pos)| (name.clone(), ty.to_ast_type(), pos.clone()))
+            .collect();
+
+        // Store captures in the AST node (using RefCell for interior mutability)
+        func_expr.captures.borrow_mut().clone_from(&ast_captures);
+
+        // Phase 7c-γ: If captures exist, produce improved error message
+        if !captures.is_empty() {
+            let capture_list = captures.iter()
+                .map(|(name, ty, pos)| format!("{} ({} at line {} column {})", name, ty, pos.line, pos.column))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            self.add_error(
+                format!("function expressions cannot capture variables yet (Phase 7c-δ will implement closures). Captured variables: {}", capture_list),
+                func_expr.position.clone()
+            );
         }
 
         // Type-check the function body
@@ -1195,6 +1217,129 @@ impl TypeChecker {
             }
         }
         false
+    }
+
+    // Phase 7c-γ: Capture collection methods (collect metadata instead of immediate error)
+    fn collect_captures_in_statement(&mut self, statement: &Statement, outer_scope_depth: usize, captures: &mut Vec<(String, Type, Position)>) {
+        match statement {
+            Statement::Let(let_stmt) => {
+                if let Some(initializer) = &let_stmt.initializer {
+                    self.collect_captures_in_expression(initializer, outer_scope_depth, captures);
+                }
+            }
+            Statement::Return(return_stmt) => {
+                if let Some(expr) = &return_stmt.value {
+                    self.collect_captures_in_expression(expr, outer_scope_depth, captures);
+                }
+            }
+            Statement::If(if_stmt) => {
+                self.collect_captures_in_expression(&if_stmt.condition, outer_scope_depth, captures);
+                for stmt in &if_stmt.then_block.statements {
+                    self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                }
+                if let Some(else_block) = &if_stmt.else_block {
+                    for stmt in &else_block.statements {
+                        self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                    }
+                }
+            }
+            Statement::While(while_stmt) => {
+                self.collect_captures_in_expression(&while_stmt.condition, outer_scope_depth, captures);
+                for stmt in &while_stmt.body.statements {
+                    self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                }
+            }
+            Statement::Loop(loop_stmt) => {
+                for stmt in &loop_stmt.body.statements {
+                    self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                }
+            }
+            Statement::Assign(assign_stmt) => {
+                self.collect_captures_in_expression(&assign_stmt.target, outer_scope_depth, captures);
+                self.collect_captures_in_expression(&assign_stmt.value, outer_scope_depth, captures);
+            }
+            Statement::ExprStatement(expr) => {
+                self.collect_captures_in_expression(expr, outer_scope_depth, captures);
+            }
+            Statement::QualifiedOp(qualified_op) => {
+                self.collect_captures_in_expression(&qualified_op.lhs, outer_scope_depth, captures);
+                self.collect_captures_in_expression(&qualified_op.rhs, outer_scope_depth, captures);
+            }
+            Statement::Break(_) | Statement::Continue(_) => {
+                // No expressions to check
+            }
+        }
+    }
+
+    fn collect_captures_in_expression(&mut self, expression: &Expression, outer_scope_depth: usize, captures: &mut Vec<(String, Type, Position)>) {
+        match expression {
+            Expression::Ident(name, pos) => {
+                // Check if this identifier refers to a variable from an outer scope
+                if let Some((var_type, _)) = self.find_variable_in_outer_scope(name, outer_scope_depth) {
+                    // Check if we already recorded this capture (by name)
+                    if !captures.iter().any(|(capture_name, _, _)| capture_name == name) {
+                        captures.push((name.clone(), var_type, pos.clone()));
+                    }
+                }
+            }
+            Expression::BinaryOp(binary_op) => {
+                self.collect_captures_in_expression(&binary_op.lhs, outer_scope_depth, captures);
+                self.collect_captures_in_expression(&binary_op.rhs, outer_scope_depth, captures);
+            }
+            Expression::UnaryOp(unary_op) => {
+                self.collect_captures_in_expression(&unary_op.operand, outer_scope_depth, captures);
+            }
+            Expression::Call(call) => {
+                self.collect_captures_in_expression(&call.callee, outer_scope_depth, captures);
+                for arg in &call.args {
+                    self.collect_captures_in_expression(arg, outer_scope_depth, captures);
+                }
+            }
+            Expression::MemberAccess(member_access) => {
+                self.collect_captures_in_expression(&member_access.object, outer_scope_depth, captures);
+            }
+            Expression::IndexAccess(index_access) => {
+                self.collect_captures_in_expression(&index_access.object, outer_scope_depth, captures);
+                self.collect_captures_in_expression(&index_access.index, outer_scope_depth, captures);
+            }
+            Expression::IsCheck(is_check) => {
+                self.collect_captures_in_expression(&is_check.expression, outer_scope_depth, captures);
+            }
+            Expression::ObjectIsCheck(obj_is_check) => {
+                self.collect_captures_in_expression(&obj_is_check.lhs, outer_scope_depth, captures);
+                self.collect_captures_in_expression(&obj_is_check.rhs, outer_scope_depth, captures);
+            }
+            Expression::QualifiedOp(qualified_op) => {
+                self.collect_captures_in_expression(&qualified_op.lhs, outer_scope_depth, captures);
+                self.collect_captures_in_expression(&qualified_op.rhs, outer_scope_depth, captures);
+            }
+            Expression::ObjectLiteral(obj_lit) => {
+                for (_, prop_expr) in &obj_lit.properties {
+                    self.collect_captures_in_expression(prop_expr, outer_scope_depth, captures);
+                }
+            }
+            Expression::FunctionExpr(func_expr) => {
+                // Nested function expressions get their own capture check
+                self.check_function_expression(func_expr);
+            }
+            // Literal expressions don't contain variable references
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
+            Expression::FString(_) | Expression::BoolLit(_, _) => {
+                // No variables to capture
+            }
+        }
+    }
+
+    fn find_variable_in_outer_scope(&self, name: &str, outer_scope_depth: usize) -> Option<(Type, Position)> {
+        // Look for the variable in outer scopes (before the function scope)
+        for (scope_index, scope) in self.scopes.iter().enumerate() {
+            if scope_index < outer_scope_depth {
+                if let Some(symbol) = scope.lookup(name) {
+                    return Some((symbol.ty.clone(), symbol.position.clone()));
+                }
+            }
+        }
+        None
     }
 }
 

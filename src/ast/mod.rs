@@ -1,4 +1,5 @@
 use crate::lexer::Position;
+use std::cell::RefCell;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
@@ -212,6 +213,7 @@ pub struct FunctionExpr {
     pub return_type: Type,
     pub body: Block,
     pub position: Position,
+    pub captures: RefCell<Vec<(String, Type, Position)>>,  // name, ast::Type, first-ref position
 }
 
 #[derive(Debug, Clone, PartialEq)]

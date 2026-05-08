@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7c-β — Function Expressions Codegen (No Capture)  
-**Status:** Complete - ready for Phase 7c-γ
+**Phase:** Phase 7c-γ — Capture Detection (Metadata Only)  
+**Status:** Complete - ready for Phase 7c-δ
 **Branch:** main
-**Last commit:** Phase 7c-β: Function expression codegen (no capture)
+**Last commit:** Phase 7c-γ: Capture detection metadata on function expressions
 
 ---
 
@@ -20,6 +20,16 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-07 — Phase 7c-γ: Capture detection metadata on function expressions
+- **Context**: Phase 7c-β had function expressions working end-to-end for non-capturing cases; Phase 7c-γ adds capture analysis metadata to AST while maintaining rejection of captures
+- **AST enhancement**: Added `captures: RefCell<Vec<(String, ast::Type, Position)>>` field to `FunctionExpr` with interior mutability to allow population during immutable type checking; populated by type checker before error production
+- **Capture detection algorithm**: Implemented `collect_captures_in_statement/expression` methods that walk function body AST and identify references to variables declared in outer scopes (scope_depth < outer_scope_depth); deduplicates multiple references to same variable, recording only first reference position
+- **Type conversion**: Added `to_ast_type()` method to `types::Type` for converting from type-checker types to AST types when storing capture metadata; handles all type variants including primitives, arrays, objects, and functions
+- **Error message improvement**: Capture rejection now lists specific captured variables with types and positions: "function expressions cannot capture variables yet (Phase 7c-δ will implement closures). Captured variables: outer (i32 at line 3 column 42), x (i32 at line 4 column 36)"
+- **Testing**: Added 5 typecheck tests covering single/multiple captures, duplicate reference handling, non-capture success, and AST metadata verification; all tests pass confirming capture metadata is properly populated and accessible
+- **Verification**: All existing tests continue to pass (verification ritual: 0 failures); capture detection works correctly for nested statements, expressions, and control structures
+- Commit: "Phase 7c-γ: Capture detection metadata on function expressions"
 
 ### 2026-05-07 — Phase 7c-β: Function expression codegen (no capture)
 - **Context**: Phase 7c-α had function expressions working in parser/AST/type-checker but codegen was deferred with specific error message; Phase 7c-β implements actual codegen for non-capturing function expressions
