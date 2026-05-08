@@ -1,0 +1,5 @@
+high program(): i32 {
+  let f = function(x: i32): i32 { return x * 2 }
+  print(f(21))
+  return 0
+}

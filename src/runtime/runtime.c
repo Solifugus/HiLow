@@ -494,6 +494,13 @@ HiLowFunction* hl_function_new(void* fn_ptr) {
     return f;
 }
 
+HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env) {
+    HiLowFunction* f = malloc(sizeof(HiLowFunction));
+    f->fn_ptr = fn_ptr;
+    f->env = env;
+    return f;
+}
+
 // Helper function to get the proto property as an object (Phase 7b)
 static HiLowObject* hl_object_get_proto(HiLowObject* obj) {
     Property* proto_prop = find_property(obj, "proto");

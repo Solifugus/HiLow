@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::types::Type;
 use crate::typecheck::TypeChecker;
+use crate::lexer::Position;
 use std::collections::HashMap;
 
 /// Errors that can occur during code generation
@@ -34,10 +35,17 @@ pub struct CodeGenerator {
     function_counter: usize,
     /// Generated function definitions (Phase 7c-β)
     generated_functions: String,
-    /// Function symbols - maps function name to its signature
-    functions: HashMap<String, String>,
+    /// Function symbols - maps function name to its return type
+    functions: HashMap<String, Type>,
     /// Variable types - maps variable name to its type
     variable_types: HashMap<String, Type>,
+    /// Generated environment struct definitions (Phase 7c-δ)
+    environment_structs: String,
+    /// Variables that have been hoisted to environment (Phase 7c-δ)
+    /// Maps variable name to (env_var_name, env_struct_type)
+    hoisted_variables: HashMap<String, (String, String)>,
+    /// Current environment variable name (if any)
+    current_env_var: Option<String>,
 }
 
 impl CodeGenerator {
@@ -49,6 +57,9 @@ impl CodeGenerator {
             generated_functions: String::new(),
             functions: HashMap::new(),
             variable_types: HashMap::new(),
+            environment_structs: String::new(),
+            hoisted_variables: HashMap::new(),
+            current_env_var: None,
         }
     }
 
@@ -56,8 +67,9 @@ impl CodeGenerator {
     pub fn generate(&mut self, top_level: &TopLevel, type_checker: &TypeChecker) -> Result<String, CodegenError> {
         // Build the final output in the correct order:
         // 1. Includes
-        // 2. Generated functions (from function expressions)
-        // 3. Main program code
+        // 2. Environment struct definitions (from closures)
+        // 3. Generated functions (from function expressions)
+        // 4. Main program code
 
         let mut final_output = String::new();
 
@@ -75,6 +87,9 @@ impl CodeGenerator {
                 self.generate_module(module, type_checker)?;
             }
         }
+
+        // Add environment struct definitions (Phase 7c-δ)
+        final_output.push_str(&self.environment_structs);
 
         // Add generated functions (from function expressions)
         final_output.push_str(&self.generated_functions);
@@ -146,6 +161,9 @@ impl CodeGenerator {
     }
 
     fn generate_block(&mut self, block: &Block, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Set up environment for captured locals (Phase 7c-δ)
+        self.setup_environment_for_block(block)?;
+
         for statement in &block.statements {
             self.generate_statement(statement, type_checker)?;
         }
@@ -153,11 +171,13 @@ impl CodeGenerator {
     }
 
     fn generate_program_body_functions(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // First, track function types for later reference
+        // First, track function signatures for later reference
         for item in &body.items {
             if let BlockItem::Function(function) = item {
                 let return_type = Type::from_ast_type(&function.return_type);
-                self.variable_types.insert(function.name.clone(), return_type);
+                // Store function return types in functions map instead of variable_types
+                // to distinguish named functions from function value variables
+                self.functions.insert(function.name.clone(), return_type);
             }
         }
 
@@ -171,6 +191,24 @@ impl CodeGenerator {
     }
 
     fn generate_program_body_statements(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Create a synthetic block from the program body statements for capture analysis
+        let statements: Vec<Statement> = body.items.iter()
+            .filter_map(|item| {
+                if let BlockItem::Statement(stmt) = item {
+                    Some(stmt.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let synthetic_block = Block {
+            statements,
+            position: Position { line: 0, column: 0 }
+        };
+
+        // Set up environment for captured locals (Phase 7c-δ)
+        self.setup_environment_for_block(&synthetic_block)?;
+
         // Generate only the statements, not the nested functions
         for item in &body.items {
             if let BlockItem::Statement(statement) = item {
@@ -250,16 +288,34 @@ impl CodeGenerator {
             });
         };
 
-        let c_type = self.hilow_type_to_c(&var_type);
-        let c_var_name = self.mangle_variable_name(&let_decl.name);
-        self.output.push_str(&format!("  {} {}", c_type, c_var_name));
+        // Check if this variable is hoisted to an environment
+        if let Some((env_var, _env_struct)) = self.hoisted_variables.get(&let_decl.name) {
+            // Variable is hoisted - generate environment field assignment
+            self.output.push_str(&format!("  {}->", env_var));
+            self.output.push_str(&let_decl.name);
 
-        if let Some(ref initializer) = let_decl.initializer {
-            self.output.push_str(" = ");
-            self.generate_expression(initializer, type_checker)?;
+            if let Some(ref initializer) = let_decl.initializer {
+                self.output.push_str(" = ");
+                self.generate_expression(initializer, type_checker)?;
+            } else {
+                // Default initialization (though this shouldn't happen per Phase 2b rules)
+                self.output.push_str(" = 0");
+            }
+
+            self.output.push_str(";\n");
+        } else {
+            // Normal variable declaration
+            let c_type = self.hilow_type_to_c(&var_type);
+            let c_var_name = self.mangle_variable_name(&let_decl.name);
+            self.output.push_str(&format!("  {} {}", c_type, c_var_name));
+
+            if let Some(ref initializer) = let_decl.initializer {
+                self.output.push_str(" = ");
+                self.generate_expression(initializer, type_checker)?;
+            }
+
+            self.output.push_str(";\n");
         }
-
-        self.output.push_str(";\n");
 
         // Track the variable type for later reference
         self.variable_types.insert(let_decl.name.clone(), var_type);
@@ -444,8 +500,16 @@ impl CodeGenerator {
                 self.output.push_str(if *value { "true" } else { "false" });
             }
             Expression::Ident(name, _) => {
-                let c_var_name = self.mangle_variable_name(name);
-                self.output.push_str(&c_var_name);
+                // Check if this variable is hoisted to an environment
+                if let Some((env_var, _env_struct)) = self.hoisted_variables.get(name) {
+                    // Variable is hoisted - use environment access
+                    self.output.push_str(&format!("{}->", env_var));
+                    self.output.push_str(name);
+                } else {
+                    // Normal variable reference
+                    let c_var_name = self.mangle_variable_name(name);
+                    self.output.push_str(&c_var_name);
+                }
             }
             Expression::BinaryOp(binary_op) => {
                 self.generate_binary_op(binary_op, type_checker)?;
@@ -870,13 +934,16 @@ impl CodeGenerator {
                     if func_name == "print" {
                         return Type::I32; // print() returns i32
                     }
-                    // Look up the function's return type in our variable tracking
-                    if let Some(var_type) = self.variable_types.get(func_name) {
+                    // Check if it's a named function first
+                    if let Some(return_type) = self.functions.get(func_name) {
+                        // For named functions, return their declared return type
+                        return_type.clone()
+                    } else if let Some(var_type) = self.variable_types.get(func_name) {
                         if let Type::Function(_, return_type) = var_type {
                             // For function values, return the return type
                             *return_type.clone()
                         } else {
-                            // For regular function names, return the stored type (which should be the return type)
+                            // For other variable types, return the variable type
                             var_type.clone()
                         }
                     } else {
@@ -1394,6 +1461,18 @@ impl CodeGenerator {
         let func_name = format!("hilow_anon_{}", self.function_counter);
         self.function_counter += 1;
 
+        // Check if this function has captures and generate environment struct if needed
+        let captures = func_expr.captures.borrow();
+        let has_captures = !captures.is_empty();
+        let env_struct_name = if has_captures {
+            let struct_name = format!("hilow_anon_{}_env", self.function_counter - 1);
+            self.generate_environment_struct(func_expr, &struct_name);
+            Some(struct_name)
+        } else {
+            None
+        };
+        drop(captures); // Release the borrow
+
         // Determine return type
         let return_type = Type::from_ast_type(&func_expr.return_type);
         let c_return_type = self.hilow_type_to_c(&return_type);
@@ -1401,19 +1480,15 @@ impl CodeGenerator {
         // Generate function signature
         self.generated_functions.push_str(&format!("{} {}(", c_return_type, func_name));
 
-        // Generate parameters
-        for (i, param) in func_expr.params.iter().enumerate() {
-            if i > 0 {
-                self.generated_functions.push_str(", ");
-            }
+        // ALL function expressions take a void* env parameter as the first argument (Phase 7c-δ)
+        self.generated_functions.push_str("void* env");
+
+        // Generate user-defined parameters
+        for param in func_expr.params.iter() {
+            self.generated_functions.push_str(", ");
             let param_type = Type::from_ast_type(&param.ty);
             let c_param_type = self.hilow_type_to_c(&param_type);
             self.generated_functions.push_str(&format!("{} {}", c_param_type, param.name));
-        }
-
-        // Handle empty parameter list
-        if func_expr.params.is_empty() {
-            self.generated_functions.push_str("void");
         }
 
         self.generated_functions.push_str(") {\n");
@@ -1422,8 +1497,36 @@ impl CodeGenerator {
         let main_output = self.output.clone();
         self.output.clear();
 
-        // Create new scope for function parameters in variable_types
+        // Save current environment state and set up closure environment context
         let old_variable_types = self.variable_types.clone();
+        let old_hoisted_variables = self.hoisted_variables.clone();
+        let old_current_env_var = self.current_env_var.clone();
+
+        // Set up environment for captured variables within the closure
+        if has_captures {
+            if let Some(env_struct_name) = &env_struct_name {
+                // Cast the env parameter to the correct struct type
+                let env_var_name = "env_cast";
+                self.output.push_str(&format!("  {}* {} = ({}*)env;\n",
+                    env_struct_name, env_var_name, env_struct_name));
+
+                // Set up hoisted variables mapping for the closure
+                self.hoisted_variables.clear();
+                self.current_env_var = Some(env_var_name.to_string());
+
+                // Map captured variables to use the cast environment
+                let captures = func_expr.captures.borrow();
+                for (var_name, _ast_type, _pos) in captures.iter() {
+                    self.hoisted_variables.insert(var_name.clone(), (env_var_name.to_string(), env_struct_name.clone()));
+                }
+            }
+        } else {
+            // Clear environment context for non-capturing function
+            self.hoisted_variables.clear();
+            self.current_env_var = None;
+        }
+
+        // Create new scope for function parameters in variable_types
         for param in &func_expr.params {
             let param_type = Type::from_ast_type(&param.ty);
             self.variable_types.insert(param.name.clone(), param_type);
@@ -1434,16 +1537,29 @@ impl CodeGenerator {
             self.generate_statement(stmt, type_checker)?;
         }
 
-        // Restore variable types
+        // Restore environment state
         self.variable_types = old_variable_types;
+        self.hoisted_variables = old_hoisted_variables;
+        self.current_env_var = old_current_env_var;
 
         // Move function body to generated_functions and restore main output
         self.generated_functions.push_str(&self.output);
         self.generated_functions.push_str("}\n\n");
         self.output = main_output;
 
-        // Generate function value creation: hl_function_new((void*)func_name)
-        self.output.push_str(&format!("hl_function_new((void*){})", func_name));
+        // Generate function value creation
+        if has_captures {
+            // Use hl_function_new_with_env when there are captures
+            if let Some(env_var) = &self.current_env_var {
+                self.output.push_str(&format!("hl_function_new_with_env((void*){}, {})", func_name, env_var));
+            } else {
+                // Fallback to regular function (shouldn't happen if captures exist)
+                self.output.push_str(&format!("hl_function_new((void*){})", func_name));
+            }
+        } else {
+            // Non-capturing function expression - use hl_function_new with NULL env
+            self.output.push_str(&format!("hl_function_new((void*){})", func_name));
+        }
 
         Ok(())
     }
@@ -1455,33 +1571,33 @@ impl CodeGenerator {
         return_type: &Type,
         type_checker: &TypeChecker
     ) -> Result<(), CodegenError> {
-        // Generate function pointer call: ((return_type(*)(param_types))(fn_value->fn_ptr))(args)
+        // Generate function pointer call: ((return_type(*)(void*, param_types))(fn_value->fn_ptr))(fn_value->env, args)
+        // ALL function expressions take void* env as first parameter (Phase 7c-δ)
 
         let c_return_type = self.hilow_type_to_c(return_type);
         self.output.push_str(&format!("(({}(*)(", c_return_type));
 
-        // Generate parameter types
-        if param_types.is_empty() {
-            self.output.push_str("void");
-        } else {
-            for (i, param_type) in param_types.iter().enumerate() {
-                if i > 0 {
-                    self.output.push_str(", ");
-                }
-                let c_param_type = self.hilow_type_to_c(param_type);
-                self.output.push_str(&c_param_type);
-            }
+        // Always include void* env as first parameter
+        self.output.push_str("void*");
+
+        // Generate user-defined parameter types
+        for param_type in param_types.iter() {
+            self.output.push_str(", ");
+            let c_param_type = self.hilow_type_to_c(param_type);
+            self.output.push_str(&c_param_type);
         }
 
         self.output.push_str("))(((HiLowFunction*)");
         self.generate_expression(&call.callee, type_checker)?;
-        self.output.push_str(")->fn_ptr))(");
+        self.output.push_str(")->fn_ptr))(((HiLowFunction*)");
 
-        // Generate arguments
-        for (i, arg) in call.args.iter().enumerate() {
-            if i > 0 {
-                self.output.push_str(", ");
-            }
+        // Generate the callee expression again to get the environment
+        self.generate_expression(&call.callee, type_checker)?;
+        self.output.push_str(")->env");
+
+        // Generate user arguments
+        for arg in call.args.iter() {
+            self.output.push_str(", ");
             self.generate_expression(arg, type_checker)?;
         }
 
@@ -1498,35 +1614,203 @@ impl CodeGenerator {
         // For obj.fnProp() calls, retrieve the function and call it
         // This is a simplified approach - we assume the property is a function value
 
-        // Generate: ((return_type(*)())(hl_object_get_function(obj, "prop")->fn_ptr))(args)
-        // For now, use a generic function signature since we don't have type info
+        // Generate: ((return_type(*)(void*, args))(hl_object_get_function(obj, "prop")->fn_ptr))(obj.prop->env, args)
+        // ALL function expressions take void* env as first parameter (Phase 7c-δ)
         self.output.push_str("((int32_t(*)(");
 
-        // Assume all parameters are int32_t for now (this is a limitation of Phase 7c-β)
-        if call.args.is_empty() {
-            self.output.push_str("void");
-        } else {
-            for i in 0..call.args.len() {
-                if i > 0 {
-                    self.output.push_str(", ");
-                }
-                self.output.push_str("int32_t");
-            }
+        // Always include void* env as first parameter
+        self.output.push_str("void*");
+
+        // Assume all user parameters are int32_t for now (this is a limitation that can be improved)
+        for _i in 0..call.args.len() {
+            self.output.push_str(", int32_t");
         }
 
         self.output.push_str("))(hl_object_get_function(");
         self.generate_expression(&member_access.object, type_checker)?;
         self.output.push_str(&format!(", \"{}\")->fn_ptr))(", member_access.member));
 
-        // Generate arguments
-        for (i, arg) in call.args.iter().enumerate() {
-            if i > 0 {
-                self.output.push_str(", ");
-            }
+        // Pass the environment as first argument
+        self.output.push_str("hl_object_get_function(");
+        self.generate_expression(&member_access.object, type_checker)?;
+        self.output.push_str(&format!(", \"{}\")->env", member_access.member));
+
+        // Generate user arguments
+        for arg in call.args.iter() {
+            self.output.push_str(", ");
             self.generate_expression(arg, type_checker)?;
         }
 
         self.output.push_str(")");
         Ok(())
+    }
+
+    /// Set up environment allocation for a block that has captured locals
+    /// Returns whether an environment was needed
+    fn setup_environment_for_block(&mut self, block: &Block) -> Result<bool, CodegenError> {
+        let captured_locals = self.analyze_captured_locals_in_block(block);
+
+        if captured_locals.is_empty() {
+            return Ok(false);
+        }
+
+        // Generate unique environment variable name
+        let env_var = format!("env_{}", self.var_counter);
+        self.var_counter += 1;
+
+        // Generate environment struct type name
+        let env_struct_name = format!("hilow_env_{}", self.var_counter);
+
+        // Generate the struct definition
+        self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
+        for (var_name, var_type) in &captured_locals {
+            let c_type = self.hilow_type_to_c(var_type);
+            self.environment_structs.push_str(&format!("    {} {};\n", c_type, var_name));
+        }
+        self.environment_structs.push_str(&format!("}} {};\n\n", env_struct_name));
+
+        // Allocate the environment
+        self.output.push_str(&format!("  {}* {} = malloc(sizeof({}));\n",
+                                     env_struct_name, env_var, env_struct_name));
+
+        // Track hoisted variables and current environment
+        for (var_name, _var_type) in captured_locals {
+            self.hoisted_variables.insert(var_name.clone(), (env_var.clone(), env_struct_name.clone()));
+        }
+        self.current_env_var = Some(env_var);
+
+        Ok(true)
+    }
+
+    /// Generate environment struct type for a function expression with captures
+    /// Returns the struct name to use for this environment
+    fn generate_environment_struct(&mut self, func_expr: &FunctionExpr, struct_name: &str) -> String {
+        let captures = func_expr.captures.borrow();
+
+        if captures.is_empty() {
+            return String::new(); // No environment needed
+        }
+
+        // Generate struct definition
+        self.environment_structs.push_str(&format!("typedef struct {} {{\n", struct_name));
+
+        for (var_name, ast_type, _pos) in captures.iter() {
+            let hilow_type = Type::from_ast_type(ast_type);
+            let c_type = self.hilow_type_to_c(&hilow_type);
+            self.environment_structs.push_str(&format!("    {} {};\n", c_type, var_name));
+        }
+
+        self.environment_structs.push_str(&format!("}} {};\n\n", struct_name));
+
+        struct_name.to_string()
+    }
+
+    /// Analyze which local variables are captured by function expressions within a function/program body
+    /// Returns a map from variable name to its type for variables that need to be hoisted to environment
+    fn analyze_captured_locals_in_block(&self, block: &Block) -> HashMap<String, Type> {
+        let mut captured_locals = HashMap::new();
+
+        // Find all function expressions in this block and collect their captures
+        self.collect_captures_from_statements(&block.statements, &mut captured_locals);
+
+        captured_locals
+    }
+
+    /// Recursively collect captures from all function expressions in statements
+    fn collect_captures_from_statements(&self, statements: &[Statement], captured_locals: &mut HashMap<String, Type>) {
+        for stmt in statements {
+            match stmt {
+                Statement::Let(let_stmt) => {
+                    if let Some(init) = &let_stmt.initializer {
+                        self.collect_captures_from_expression(init, captured_locals);
+                    }
+                }
+                Statement::Return(return_stmt) => {
+                    if let Some(expr) = &return_stmt.value {
+                        self.collect_captures_from_expression(expr, captured_locals);
+                    }
+                }
+                Statement::If(if_stmt) => {
+                    self.collect_captures_from_expression(&if_stmt.condition, captured_locals);
+                    self.collect_captures_from_statements(&if_stmt.then_block.statements, captured_locals);
+                    if let Some(else_block) = &if_stmt.else_block {
+                        self.collect_captures_from_statements(&else_block.statements, captured_locals);
+                    }
+                }
+                Statement::While(while_stmt) => {
+                    self.collect_captures_from_expression(&while_stmt.condition, captured_locals);
+                    self.collect_captures_from_statements(&while_stmt.body.statements, captured_locals);
+                }
+                Statement::Loop(loop_stmt) => {
+                    self.collect_captures_from_statements(&loop_stmt.body.statements, captured_locals);
+                }
+                Statement::Assign(assign_stmt) => {
+                    self.collect_captures_from_expression(&assign_stmt.value, captured_locals);
+                }
+                Statement::ExprStatement(expr) => {
+                    self.collect_captures_from_expression(expr, captured_locals);
+                }
+                Statement::QualifiedOp(qualified_op) => {
+                    self.collect_captures_from_expression(&qualified_op.lhs, captured_locals);
+                    self.collect_captures_from_expression(&qualified_op.rhs, captured_locals);
+                }
+                _ => {} // Break, Continue don't contain expressions
+            }
+        }
+    }
+
+    /// Recursively collect captures from function expressions in an expression
+    fn collect_captures_from_expression(&self, expr: &Expression, captured_locals: &mut HashMap<String, Type>) {
+        match expr {
+            Expression::FunctionExpr(func_expr) => {
+                // This is a function expression - check its captures
+                let captures = func_expr.captures.borrow();
+                for (var_name, ast_type, _pos) in captures.iter() {
+                    let hilow_type = Type::from_ast_type(ast_type);
+                    captured_locals.insert(var_name.clone(), hilow_type);
+                }
+
+                // Also recursively check for nested function expressions in the body
+                self.collect_captures_from_statements(&func_expr.body.statements, captured_locals);
+            }
+            Expression::BinaryOp(binary_op) => {
+                self.collect_captures_from_expression(&binary_op.lhs, captured_locals);
+                self.collect_captures_from_expression(&binary_op.rhs, captured_locals);
+            }
+            Expression::UnaryOp(unary_op) => {
+                self.collect_captures_from_expression(&unary_op.operand, captured_locals);
+            }
+            Expression::Call(call) => {
+                self.collect_captures_from_expression(&call.callee, captured_locals);
+                for arg in &call.args {
+                    self.collect_captures_from_expression(arg, captured_locals);
+                }
+            }
+            Expression::MemberAccess(member_access) => {
+                self.collect_captures_from_expression(&member_access.object, captured_locals);
+            }
+            Expression::IndexAccess(index_access) => {
+                self.collect_captures_from_expression(&index_access.object, captured_locals);
+                self.collect_captures_from_expression(&index_access.index, captured_locals);
+            }
+            Expression::ObjectLiteral(object_literal) => {
+                for prop in &object_literal.properties {
+                    self.collect_captures_from_expression(&prop.1, captured_locals);
+                }
+            }
+            Expression::FString(fstring) => {
+                for part in &fstring.parts {
+                    if let FStringPart::Expression(expr, _format_spec) = part {
+                        self.collect_captures_from_expression(expr, captured_locals);
+                    }
+                }
+            }
+            Expression::QualifiedOp(qualified_op) => {
+                self.collect_captures_from_expression(&qualified_op.lhs, captured_locals);
+                self.collect_captures_from_expression(&qualified_op.rhs, captured_locals);
+            }
+            // Literals and identifiers don't contain function expressions
+            _ => {}
+        }
     }
 }

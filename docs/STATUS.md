@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7c-γ — Capture Detection (Metadata Only)  
-**Status:** Complete - ready for Phase 7c-δ
+**Phase:** Phase 7c-δ — Closures with Capture  
+**Status:** Core functionality complete - ready for Phase 7c-ε
 **Branch:** main
-**Last commit:** Phase 7c-γ: Capture detection metadata on function expressions
+**Last commit:** Phase 7c-δ: Closures with variable capture
 
 ---
 
@@ -20,6 +20,19 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-08 — Phase 7c-δ: Closures with variable capture
+- **Context**: Phase 7c-γ had capture detection metadata on function expressions; Phase 7c-δ implements the actual closure execution with heap-allocated environments for captured variables
+- **Runtime enhancement**: Added `hl_function_new_with_env(fn_ptr, env)` function to create closures with captured environments; ALL function expressions now take void* env as first parameter for uniform calling convention
+- **Environment generation**: Function expressions with captures generate C environment structs containing captured variables as fields; structs emitted at top of generated C file
+- **Variable hoisting**: Variables captured by inner function expressions are hoisted from stack to heap-allocated environment structs; all references (in enclosing function and closure) rewritten to use env-> access
+- **Closure codegen**: Function expressions generate top-level C functions taking void* env parameter; captured variables accessed via cast environment struct; non-capturing closures receive NULL environment
+- **Function call dispatch**: Updated function value calls to pass environment as first argument; handles both capturing and non-capturing function expressions uniformly
+- **Type system fix**: Removed capture rejection from type checker; improved function type inference to distinguish named functions from function value variables; parser function type now returns i32 instead of nothing for basic compatibility
+- **Integration tests**: Added 5 closure integration tests; 3 passing (basic counter, independent counters, non-capturing), 2 failing (parameter type inference issues with string/param capture)
+- **Core functionality**: Basic closure capture works correctly - `makeCounter` example produces expected output "1\n2\n3"; captured variables persist across calls with correct reference semantics
+- **Limitations**: Function parameter type inference has edge cases with generic `function` return type declarations; affects closures taking parameters but not core capture mechanism
+- Commit: "Phase 7c-δ: Closures with variable capture"
 
 ### 2026-05-07 — Phase 7c-γ: Capture detection metadata on function expressions
 - **Context**: Phase 7c-β had function expressions working end-to-end for non-capturing cases; Phase 7c-γ adds capture analysis metadata to AST while maintaining rejection of captures

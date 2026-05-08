@@ -99,6 +99,7 @@ HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key);
 
 // Function value operations (Phase 7c-β)
 HiLowFunction* hl_function_new(void* fn_ptr);
+HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env);
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

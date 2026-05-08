@@ -979,3 +979,100 @@ fn test_func_expr_capture_still_rejected_integration() {
     assert!(error_message.contains("cannot capture variables"),
             "Error should mention capture rejection, got: {}", error_message);
 }
+
+// Phase 7c-δ integration tests for closures with capture
+
+#[test]
+fn test_closure_counter_integration() {
+    let executable = compile_program("tests/programs/closure_counter.hl")
+        .expect("Failed to compile closure_counter.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/closure_counter.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_counter");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_closure_independent_integration() {
+    let executable = compile_program("tests/programs/closure_independent.hl")
+        .expect("Failed to compile closure_independent.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/closure_independent.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_independent");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_closure_capture_param_integration() {
+    let executable = compile_program("tests/programs/closure_capture_param.hl")
+        .expect("Failed to compile closure_capture_param.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/closure_capture_param.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_capture_param");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_closure_string_capture_integration() {
+    let executable = compile_program("tests/programs/closure_string_capture.hl")
+        .expect("Failed to compile closure_string_capture.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/closure_string_capture.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_string_capture");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_closure_no_capture_still_works_integration() {
+    let executable = compile_program("tests/programs/closure_no_capture_still_works.hl")
+        .expect("Failed to compile closure_no_capture_still_works.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/closure_no_capture_still_works.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run closure_no_capture_still_works");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

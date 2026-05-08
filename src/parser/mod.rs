@@ -231,10 +231,10 @@ impl Parser {
                 suggestion: "pointers not yet supported (Phase 12)".to_string(),
             })
         } else if self.check(&TokenKind::Function) {
-            // Simple function type for Phase 7c-α
+            // Simple function type for Phase 7c-α/δ
             self.advance()?; // consume 'function'
-            // For Phase 7c-α, return a simple function type with no parameters and unit return
-            Ok(Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))))
+            // For Phase 7c-δ, return a generic function type that can match any function
+            Ok(Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::I32))))
         } else {
             self.parse_primitive_type()
         }

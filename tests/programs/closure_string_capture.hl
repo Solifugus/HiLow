@@ -1,0 +1,14 @@
+high program(): i32 {
+  function makeGreeter(greeting: string): function {
+    return function(name: string): i32 {
+      print(greeting)
+      print(name)
+      return 0
+    }
+  }
+
+  let hello = makeGreeter("Hello")
+  hello("Alice")
+  hello("Bob")
+  return 0
+}

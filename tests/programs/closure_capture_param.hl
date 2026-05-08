@@ -1,0 +1,13 @@
+high program(): i32 {
+  function makeAdder(n: i32): function {
+    return function(x: i32): i32 {
+      return x + n
+    }
+  }
+
+  let add5 = makeAdder(5)
+  let add10 = makeAdder(10)
+  print(add5(7))
+  print(add10(7))
+  return 0
+}

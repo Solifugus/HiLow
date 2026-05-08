@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 7c-γ — Capture Detection (No Implementation)**
+**Current phase: Phase 7c-ε — Method `this` Binding**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

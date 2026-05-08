@@ -1069,18 +1069,7 @@ impl TypeChecker {
         // Store captures in the AST node (using RefCell for interior mutability)
         func_expr.captures.borrow_mut().clone_from(&ast_captures);
 
-        // Phase 7c-γ: If captures exist, produce improved error message
-        if !captures.is_empty() {
-            let capture_list = captures.iter()
-                .map(|(name, ty, pos)| format!("{} ({} at line {} column {})", name, ty, pos.line, pos.column))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            self.add_error(
-                format!("function expressions cannot capture variables yet (Phase 7c-δ will implement closures). Captured variables: {}", capture_list),
-                func_expr.position.clone()
-            );
-        }
+        // Phase 7c-δ: Captures are now supported!
 
         // Type-check the function body
         for statement in &func_expr.body.statements {

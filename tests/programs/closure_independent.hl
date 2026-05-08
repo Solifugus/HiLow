@@ -1,0 +1,17 @@
+high program(): i32 {
+  function makeCounter(): function {
+    let count = 0
+    return function(): i32 {
+      count += 1
+      return count
+    }
+  }
+
+  let a = makeCounter()
+  let b = makeCounter()
+  print(a())
+  print(a())
+  print(b())
+  print(a())
+  return 0
+}
