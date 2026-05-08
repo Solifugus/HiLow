@@ -448,7 +448,28 @@ fn test_function_expression_variable_capture_rejected() {
         return 0
     }";
     let result = type_check_program(input);
-    // For Phase 7c-α, we should reject variable capture
-    // Note: This test might pass until we implement the capture rejection logic
-    // TODO: Add proper variable capture detection and rejection
+    assert!(result.is_err(), "Variable capture should be rejected");
+    if let Err(errors) = result {
+        let error_message = errors[0].to_string();
+        assert!(
+            error_message.contains("cannot capture variables"),
+            "Error should mention capture rejection; got: {}",
+            error_message
+        );
+        assert!(
+            error_message.contains("Phase 7c-γ") || error_message.contains("Phase 7c-δ"),
+            "Error should mention which phase will add capture; got: {}",
+            error_message
+        );
+    }
+}
+
+#[test]
+fn test_function_expression_no_capture_allowed() {
+    let input = "high program(): i32 {
+        let f = function(x: i32): i32 { return x + 1 }
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Function expression with no capture should type-check; got: {:?}", result);
 }

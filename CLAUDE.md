@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 7c-α — Function Expressions (Parser/AST Only)**
+**Current phase: Phase 7c-β — Function Expressions Codegen (No Capture)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -21,6 +21,14 @@
 
 ## Recent sessions
 
+### 2026-05-07 — Phase 7c-α completion fix: capture rejection
+- **Context**: Phase 7c-α was declared complete with `test_function_expression_variable_capture_rejected` as a deliverable, but the test had no assertions - it was just calling `type_check_program` and ignoring the result, passing by not panicking  
+- **Implementation**: Added proper variable capture detection in type checker with `check_for_captures_in_statement/expression` methods that walk function body AST and detect references to outer-scope variables; rejects with exact error message "function expressions cannot capture variables (Phase 7c-γ will add capture detection, Phase 7c-δ will implement closures)"
+- **Testing**: Updated capture test to assert on specific error text containing "cannot capture variables" and phase references; added positive test `test_function_expression_no_capture_allowed` for self-contained function expressions  
+- **Verification**: Canonical examples work correctly - capture program fails at type check with capture-specific error, no-capture program fails at codegen with Phase 7c-β deferral message
+- **Behavioral observation**: Empty test bodies are not acceptable - tests must contain at least one assert! or assert_eq! call. A test that just calls functions without asserting gives false confidence that features are working when they're actually incomplete.
+- Commit: "Phase 7c-α completion fix: implement actual capture rejection in type checker"
+
 ### 2026-05-03 — Phase 7c-α: Function Expressions (Parser/AST Only)
 - **Scope**: Implemented function expressions parsing and AST representation as mechanical infrastructure for closure work
 - **AST**: Added `FunctionExpr` struct with params, return_type, body, position; added `Expression::FunctionExpr` variant; added `Type::Function(Vec<Type>, Box<Type>)` to both AST and type system
@@ -355,6 +363,7 @@
 - **Runtime.h race conditions can be hidden by parallel test execution inconsistency.** Multiple phases (6b-i, 6b-ii, 7a) had 6-7 integration test failures from temp file collisions that went undiagnosed because the failures seemed random and serial vs parallel execution differences weren't investigated. When integration tests fail inconsistently, check for shared temporary file paths that could cause race conditions in parallel execution.
 - **Optional-semicolon parser gap masked failing tests since Phase 5b.** Six typecheck tests used semicolon-separated statements but the parser didn't accept semicolons per the spec (JavaScript-style optional semicolons). Tests like `"let x = 0; x (nonexistent)= 5"` failed to parse, never reaching the type-checking logic they were intended to test. The verification ritual wasn't being run literally in session debriefs, so parsing failures in test programs went undetected. Manual verification caught this after nine sessions. When new tests are added, ensure they exercise the intended code path by running them immediately.
 - **Phase 7a debrief described codegen as "one technical limitation" that was actually a fundamental feature failure.** Even the simplest object program (`let p = { x: 1 }; print(p.x)`) didn't compile. Lesson: "documented for future refinement" is the same pattern as "pre-existing, unrelated" — it's a deferral phrase that hides incomplete work. Phase scope must include integration tests that exercise the canonical example end-to-end.
+- **Phase 7c-α included test_function_expression_variable_capture_rejected as a deliverable, but the test had no assertions** — it was a function calling `type_check_program` and ignoring the result. The test passed by not panicking. Recommend adding to CLAUDE.md: tests must contain at least one assert! or assert_eq! call. Empty test bodies are not acceptable.
 
 ### Test coverage gaps
 - **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.

@@ -1025,6 +1025,9 @@ impl TypeChecker {
     }
 
     fn check_function_expression(&mut self, func_expr: &FunctionExpr) -> Type {
+        // Record the scope depth before entering the function - variables from outer scopes are captures
+        let outer_scope_depth = self.scopes.len();
+
         // Create a new scope for the function body
         self.enter_scope();
 
@@ -1036,8 +1039,12 @@ impl TypeChecker {
             self.declare_variable(&param.name, param_type, param.position.clone());
         }
 
+        // Check for variable captures in the function body (Phase 7c-α restriction)
+        for statement in &func_expr.body.statements {
+            self.check_for_captures_in_statement(statement, outer_scope_depth);
+        }
+
         // Type-check the function body
-        // For Phase 7c-α, reject any reference to variables from enclosing scope
         for statement in &func_expr.body.statements {
             self.check_statement(statement);
         }
@@ -1050,6 +1057,128 @@ impl TypeChecker {
 
         // Return the function type
         Type::Function(param_types, Box::new(return_type))
+    }
+
+    fn check_for_captures_in_statement(&mut self, statement: &Statement, outer_scope_depth: usize) {
+        match statement {
+            Statement::Let(let_stmt) => {
+                if let Some(initializer) = &let_stmt.initializer {
+                    self.check_for_captures_in_expression(initializer, outer_scope_depth);
+                }
+            }
+            Statement::Return(return_stmt) => {
+                if let Some(expr) = &return_stmt.value {
+                    self.check_for_captures_in_expression(expr, outer_scope_depth);
+                }
+            }
+            Statement::If(if_stmt) => {
+                self.check_for_captures_in_expression(&if_stmt.condition, outer_scope_depth);
+                for stmt in &if_stmt.then_block.statements {
+                    self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                }
+                if let Some(else_block) = &if_stmt.else_block {
+                    for stmt in &else_block.statements {
+                        self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                    }
+                }
+            }
+            Statement::While(while_stmt) => {
+                self.check_for_captures_in_expression(&while_stmt.condition, outer_scope_depth);
+                for stmt in &while_stmt.body.statements {
+                    self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                }
+            }
+            Statement::Loop(loop_stmt) => {
+                for stmt in &loop_stmt.body.statements {
+                    self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                }
+            }
+            Statement::Assign(assign_stmt) => {
+                self.check_for_captures_in_expression(&assign_stmt.target, outer_scope_depth);
+                self.check_for_captures_in_expression(&assign_stmt.value, outer_scope_depth);
+            }
+            Statement::ExprStatement(expr) => {
+                self.check_for_captures_in_expression(expr, outer_scope_depth);
+            }
+            Statement::QualifiedOp(qualified_op) => {
+                self.check_for_captures_in_expression(&qualified_op.lhs, outer_scope_depth);
+                self.check_for_captures_in_expression(&qualified_op.rhs, outer_scope_depth);
+            }
+            Statement::Break(_) | Statement::Continue(_) => {
+                // No expressions to check
+            }
+        }
+    }
+
+    fn check_for_captures_in_expression(&mut self, expression: &Expression, outer_scope_depth: usize) {
+        match expression {
+            Expression::Ident(name, pos) => {
+                // Check if this identifier refers to a variable from an outer scope
+                if self.is_variable_capture(name, outer_scope_depth) {
+                    self.add_error(
+                        "function expressions cannot capture variables (Phase 7c-γ will add capture detection, Phase 7c-δ will implement closures)".to_string(),
+                        pos.clone()
+                    );
+                }
+            }
+            Expression::BinaryOp(binary_op) => {
+                self.check_for_captures_in_expression(&binary_op.lhs, outer_scope_depth);
+                self.check_for_captures_in_expression(&binary_op.rhs, outer_scope_depth);
+            }
+            Expression::UnaryOp(unary_op) => {
+                self.check_for_captures_in_expression(&unary_op.operand, outer_scope_depth);
+            }
+            Expression::Call(call) => {
+                self.check_for_captures_in_expression(&call.callee, outer_scope_depth);
+                for arg in &call.args {
+                    self.check_for_captures_in_expression(arg, outer_scope_depth);
+                }
+            }
+            Expression::MemberAccess(member_access) => {
+                self.check_for_captures_in_expression(&member_access.object, outer_scope_depth);
+            }
+            Expression::IndexAccess(index_access) => {
+                self.check_for_captures_in_expression(&index_access.object, outer_scope_depth);
+                self.check_for_captures_in_expression(&index_access.index, outer_scope_depth);
+            }
+            Expression::IsCheck(is_check) => {
+                self.check_for_captures_in_expression(&is_check.expression, outer_scope_depth);
+            }
+            Expression::ObjectIsCheck(obj_is_check) => {
+                self.check_for_captures_in_expression(&obj_is_check.lhs, outer_scope_depth);
+                self.check_for_captures_in_expression(&obj_is_check.rhs, outer_scope_depth);
+            }
+            Expression::QualifiedOp(qualified_op) => {
+                self.check_for_captures_in_expression(&qualified_op.lhs, outer_scope_depth);
+                self.check_for_captures_in_expression(&qualified_op.rhs, outer_scope_depth);
+            }
+            Expression::ObjectLiteral(obj_lit) => {
+                for (_, prop_expr) in &obj_lit.properties {
+                    self.check_for_captures_in_expression(prop_expr, outer_scope_depth);
+                }
+            }
+            Expression::FunctionExpr(func_expr) => {
+                // Nested function expressions get their own capture check
+                self.check_function_expression(func_expr);
+            }
+            // Literal expressions don't contain variable references
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
+            Expression::FString(_) | Expression::BoolLit(_, _) => {
+                // No variables to capture
+            }
+        }
+    }
+
+    fn is_variable_capture(&self, name: &str, outer_scope_depth: usize) -> bool {
+        // Check if the variable exists in an outer scope (before the function scope)
+        for (scope_index, scope) in self.scopes.iter().enumerate() {
+            if scope_index < outer_scope_depth {
+                if scope.lookup(name).is_some() {
+                    return true; // Variable found in outer scope - this is a capture
+                }
+            }
+        }
+        false
     }
 }
 
