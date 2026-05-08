@@ -260,7 +260,7 @@ impl Parser {
                 Ok(Type::Function(param_types, return_type))
             } else {
                 // Placeholder function type for backward compatibility
-                Ok(Type::Function(vec![], Box::new(Type::Unknown)))
+                Ok(Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))))
             }
         } else {
             self.parse_primitive_type()

@@ -448,20 +448,7 @@ fn test_function_expression_variable_capture_rejected() {
         return 0
     }";
     let result = type_check_program(input);
-    assert!(result.is_err(), "Variable capture should be rejected");
-    if let Err(errors) = result {
-        let error_message = errors[0].to_string();
-        assert!(
-            error_message.contains("cannot capture variables"),
-            "Error should mention capture rejection; got: {}",
-            error_message
-        );
-        assert!(
-            error_message.contains("Phase 7c-γ") || error_message.contains("Phase 7c-δ"),
-            "Error should mention which phase will add capture; got: {}",
-            error_message
-        );
-    }
+    assert!(result.is_ok(), "Variable capture should now be allowed in Phase 7c-δ; got: {:?}", result);
 }
 
 #[test]
@@ -484,12 +471,7 @@ fn test_capture_single_variable_reported() {
         return 0
     }";
     let result = type_check_program(input);
-    assert!(result.is_err(), "Variable capture should be rejected");
-    if let Err(errors) = result {
-        let msg = errors[0].to_string();
-        assert!(msg.contains("Captured variables: outer"), "Expected capture list with 'outer'; got: {}", msg);
-        assert!(msg.contains("i32"), "Expected type info in capture list; got: {}", msg);
-    }
+    assert!(result.is_ok(), "Variable capture should now be allowed in Phase 7c-δ; got: {:?}", result);
 }
 
 #[test]
@@ -504,13 +486,7 @@ fn test_capture_multiple_variables_reported() {
         return 0
     }";
     let result = type_check_program(input);
-    assert!(result.is_err());
-    if let Err(errors) = result {
-        let msg = errors[0].to_string();
-        assert!(msg.contains("Captured variables:"));
-        assert!(msg.contains("x"), "Expected 'x' in capture list; got: {}", msg);
-        assert!(msg.contains("name"), "Expected 'name' in capture list; got: {}", msg);
-    }
+    assert!(result.is_ok(), "Multiple variable capture should now be allowed in Phase 7c-δ; got: {:?}", result);
 }
 
 #[test]
@@ -524,13 +500,7 @@ fn test_capture_same_variable_referenced_twice() {
         return 0
     }";
     let result = type_check_program(input);
-    assert!(result.is_err());
-    if let Err(errors) = result {
-        let msg = errors[0].to_string();
-        // counter should appear once, not twice
-        let occurrences = msg.matches("counter").count();
-        assert_eq!(occurrences, 1, "Expected 'counter' to appear once in capture list; got {} occurrences in: {}", occurrences, msg);
-    }
+    assert!(result.is_ok(), "Variable capture should now be allowed in Phase 7c-δ; got: {:?}", result);
 }
 
 #[test]

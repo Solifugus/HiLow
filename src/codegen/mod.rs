@@ -140,20 +140,24 @@ impl CodeGenerator {
         let c_func_name = self.mangle_function_name(&function.name);
         self.output.push_str(&format!("{} {}(", c_return_type, c_func_name));
 
-        // Generate parameters
+        // Generate parameters and track their types
         for (i, param) in function.params.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
             }
             let c_type = self.hilow_type_to_c(&Type::from_ast_type(&param.ty));
             self.output.push_str(&format!("{} {}", c_type, param.name));
+
+            // Track parameter types for capture analysis
+            let param_type = Type::from_ast_type(&param.ty);
+            self.variable_types.insert(param.name.clone(), param_type);
         }
 
         self.output.push_str(") {\n");
 
         // Generate function body
         if let Some(body) = &function.body {
-            self.generate_block(body, type_checker)?;
+            self.generate_block_with_parameter_context(body, &function.params, type_checker)?;
         }
 
         self.output.push_str("}\n\n");
@@ -163,6 +167,16 @@ impl CodeGenerator {
     fn generate_block(&mut self, block: &Block, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Set up environment for captured locals (Phase 7c-δ)
         self.setup_environment_for_block(block)?;
+
+        for statement in &block.statements {
+            self.generate_statement(statement, type_checker)?;
+        }
+        Ok(())
+    }
+
+    fn generate_block_with_parameter_context(&mut self, block: &Block, params: &[Parameter], type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Set up environment for captured locals (Phase 7c-δ)
+        self.setup_environment_for_block_with_params(block, params)?;
 
         for statement in &block.statements {
             self.generate_statement(statement, type_checker)?;
@@ -1516,8 +1530,12 @@ impl CodeGenerator {
 
                 // Map captured variables to use the cast environment
                 let captures = func_expr.captures.borrow();
-                for (var_name, _ast_type, _pos) in captures.iter() {
+                for (var_name, ast_type, _pos) in captures.iter() {
                     self.hoisted_variables.insert(var_name.clone(), (env_var_name.to_string(), env_struct_name.clone()));
+
+                    // Add captured variable types to variable_types for type-directed dispatch (Fix for Bug 2)
+                    let hilow_type = Type::from_ast_type(ast_type);
+                    self.variable_types.insert(var_name.clone(), hilow_type);
                 }
             }
         } else {
@@ -1672,6 +1690,51 @@ impl CodeGenerator {
         // Allocate the environment
         self.output.push_str(&format!("  {}* {} = malloc(sizeof({}));\n",
                                      env_struct_name, env_var, env_struct_name));
+
+        // Track hoisted variables and current environment
+        for (var_name, _var_type) in captured_locals {
+            self.hoisted_variables.insert(var_name.clone(), (env_var.clone(), env_struct_name.clone()));
+        }
+        self.current_env_var = Some(env_var);
+
+        Ok(true)
+    }
+
+    /// Set up environment allocation for a block that has captured locals, with parameter copying
+    /// Returns whether an environment was needed
+    fn setup_environment_for_block_with_params(&mut self, block: &Block, params: &[Parameter]) -> Result<bool, CodegenError> {
+        let captured_locals = self.analyze_captured_locals_in_block(block);
+
+        if captured_locals.is_empty() {
+            return Ok(false);
+        }
+
+        // Generate unique environment variable name
+        let env_var = format!("env_{}", self.var_counter);
+        self.var_counter += 1;
+
+        // Generate environment struct type name
+        let env_struct_name = format!("hilow_env_{}", self.var_counter);
+
+        // Generate the struct definition
+        self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
+        for (var_name, var_type) in &captured_locals {
+            let c_type = self.hilow_type_to_c(var_type);
+            self.environment_structs.push_str(&format!("    {} {};\n", c_type, var_name));
+        }
+        self.environment_structs.push_str(&format!("}} {};\n\n", env_struct_name));
+
+        // Allocate the environment
+        self.output.push_str(&format!("  {}* {} = malloc(sizeof({}));\n",
+                                     env_struct_name, env_var, env_struct_name));
+
+        // Copy captured parameters to environment (Fix for Bug 1)
+        for (var_name, _var_type) in &captured_locals {
+            // Check if this captured variable is a function parameter
+            if params.iter().any(|p| p.name == *var_name) {
+                self.output.push_str(&format!("  {}->{} = {};\n", env_var, var_name, var_name));
+            }
+        }
 
         // Track hoisted variables and current environment
         for (var_name, _var_type) in captured_locals {

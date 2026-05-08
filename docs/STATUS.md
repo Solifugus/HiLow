@@ -7,9 +7,9 @@
 ## Current state
 
 **Phase:** Phase 7c-δ — Closures with Capture  
-**Status:** Core functionality complete - ready for Phase 7c-ε
+**Status:** Complete - all closure tests pass end-to-end
 **Branch:** main
-**Last commit:** Phase 7c-δ: Closures with variable capture
+**Last commit:** Phase 7c-δ fix: copy captured parameters to env and propagate types
 
 ---
 
@@ -20,6 +20,18 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-08 — Phase 7c-δ completion fix: Closure codegen bugs
+- **Context**: Phase 7c-δ was declared complete after the first fix (parameterized function types) but two critical codegen bugs remained causing closure tests to fail
+- **Bug 1 - Parameter copying**: Captured function parameters were not being copied to the environment struct after allocation; `makeAdder(n)` would allocate env but miss `env_0->n = n;` assignment, causing uninitialized memory reads
+- **Bug 2 - Type propagation**: Captured variable types weren't reaching closure body codegen; `variable_types` HashMap was missing captured variables during closure generation, causing `print(greeting)` to fail with "Unsupported feature 'print() for type <unknown>'"
+- **Fix 1**: Enhanced `generate_function` to track parameter types; added `setup_environment_for_block_with_params` that emits parameter copying code after environment allocation for any captured parameters
+- **Fix 2**: Modified `generate_function_expression` to populate `variable_types` with captured variable types from AST metadata; ensures type-directed dispatch works for captured variables in closure bodies
+- **Parser compatibility fix**: Corrected parser regression where bare `function` type parsed as `Function([], Unknown)` instead of `Function([], Nothing)`; maintained backward compatibility while preserving new parameterized syntax
+- **Test updates**: Updated Phase 7c-γ capture rejection tests to expect success in Phase 7c-δ; tests were correctly rejecting captures in detection phase but now should accept them in implementation phase
+- **Verification**: All closure integration tests now pass end-to-end; verification ritual clean with all 55 integration tests + all unit tests passing; both parameter capture (12, 17) and string capture (Hello Alice, Hello Bob) work correctly
+- **Phase completion**: Phase 7c-δ is now genuinely complete with working closure parameter capture and type propagation; all 5 closure integration tests pass
+- Commit: "Phase 7c-δ fix: copy captured parameters to env and propagate types"
 
 ### 2026-05-08 — Phase 7c-δ: Closures with variable capture
 - **Context**: Phase 7c-γ had capture detection metadata on function expressions; Phase 7c-δ implements the actual closure execution with heap-allocated environments for captured variables
