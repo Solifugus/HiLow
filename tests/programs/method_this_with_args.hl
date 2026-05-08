@@ -1,0 +1,11 @@
+high program(): i32 {
+  let calc = {
+    base: 10,
+    addToBase: function(x: i32): i32 {
+      return this.base + x
+    }
+  }
+  print(calc.addToBase(5))   // 15
+  print(calc.addToBase(7))   // 17
+  return 0
+}

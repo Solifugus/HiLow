@@ -1,0 +1,21 @@
+high program(): i32 {
+  let animal = {
+    sound: "generic",
+    speak: function(): i32 {
+      print(this.sound)
+      return 0
+    }
+  }
+  let dog = {
+    proto: animal,
+    sound: "woof"
+  }
+  let cat = {
+    proto: animal,
+    sound: "meow"
+  }
+  dog.speak()    // "woof" — this is dog, this.sound is "woof" on dog
+  cat.speak()    // "meow" — this is cat, this.sound is "meow" on cat
+  animal.speak() // "generic" — this is animal, this.sound is "generic" on animal
+  return 0
+}

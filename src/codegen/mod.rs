@@ -46,6 +46,8 @@ pub struct CodeGenerator {
     hoisted_variables: HashMap<String, (String, String)>,
     /// Current environment variable name (if any)
     current_env_var: Option<String>,
+    /// Method receiver type when generating method bodies
+    method_receiver_type: Option<Type>,
 }
 
 impl CodeGenerator {
@@ -60,6 +62,7 @@ impl CodeGenerator {
             environment_structs: String::new(),
             hoisted_variables: HashMap::new(),
             current_env_var: None,
+            method_receiver_type: None,
         }
     }
 
@@ -525,6 +528,11 @@ impl CodeGenerator {
                     self.output.push_str(&c_var_name);
                 }
             }
+            Expression::This(_) => {
+                // For now, emit this_obj directly
+                // TODO: This should only be valid in method contexts
+                self.output.push_str("this_obj");
+            }
             Expression::BinaryOp(binary_op) => {
                 self.generate_binary_op(binary_op, type_checker)?;
             }
@@ -805,6 +813,10 @@ impl CodeGenerator {
                 // Look up the variable type from our tracking
                 self.variable_types.get(name).cloned().unwrap_or(Type::I32)
             }
+            Expression::This(_) => {
+                // Return the receiver object type in method context
+                self.method_receiver_type.clone().unwrap_or(Type::Unknown)
+            }
             Expression::BinaryOp(op) => {
                 // Infer based on the operator
                 match op.op {
@@ -889,6 +901,10 @@ impl CodeGenerator {
             Expression::Ident(name, _) => {
                 // Look up the variable type from our tracking
                 self.variable_types.get(name).cloned().unwrap_or(Type::Unknown)
+            }
+            Expression::This(_) => {
+                // Return the receiver object type in method context
+                self.method_receiver_type.clone().unwrap_or(Type::Unknown)
             }
             Expression::ObjectLiteral(obj_lit) => {
                 let mut properties = Vec::new();
@@ -1330,12 +1346,29 @@ impl CodeGenerator {
     }
 
     fn generate_object_literal(&mut self, obj_lit: &ObjectLiteral, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // First, determine the complete object type for method context
+        let mut object_properties = Vec::new();
+        for (prop_name, prop_expr) in &obj_lit.properties {
+            let prop_type = self.infer_expression_type_for_codegen(prop_expr);
+            object_properties.push((prop_name.clone(), prop_type));
+        }
+        let object_type = Type::Object(object_properties);
+
         // Generate object creation: hl_object_new()
         self.output.push_str("({\n");
         self.output.push_str("    HiLowObject* obj = hl_object_new();\n");
 
         // Generate property assignments
         for (prop_name, prop_expr) in &obj_lit.properties {
+            // Set method receiver context for function expressions
+            let old_receiver_type = if matches!(prop_expr, Expression::FunctionExpr(_)) {
+                let old = self.method_receiver_type.clone();
+                self.method_receiver_type = Some(object_type.clone());
+                old
+            } else {
+                None
+            };
+
             self.output.push_str(&format!("    hl_object_set_"));
 
             // Determine the type of the property to call the right setter
@@ -1418,6 +1451,11 @@ impl CodeGenerator {
                     });
                 }
             }
+
+            // Restore old receiver type if it was changed
+            if matches!(prop_expr, Expression::FunctionExpr(_)) {
+                self.method_receiver_type = old_receiver_type;
+            }
         }
 
         self.output.push_str("    obj;\n");
@@ -1496,6 +1534,11 @@ impl CodeGenerator {
 
         // ALL function expressions take a void* env parameter as the first argument (Phase 7c-δ)
         self.generated_functions.push_str("void* env");
+
+        // For method expressions (when method_receiver_type is set), add this_obj parameter
+        if self.method_receiver_type.is_some() {
+            self.generated_functions.push_str(", HiLowObject* this_obj");
+        }
 
         // Generate user-defined parameters
         for param in func_expr.params.iter() {
@@ -1639,6 +1682,9 @@ impl CodeGenerator {
         // Always include void* env as first parameter
         self.output.push_str("void*");
 
+        // For method calls, include HiLowObject* this_obj as second parameter
+        self.output.push_str(", HiLowObject*");
+
         // Assume all user parameters are int32_t for now (this is a limitation that can be improved)
         for _i in 0..call.args.len() {
             self.output.push_str(", int32_t");
@@ -1652,6 +1698,10 @@ impl CodeGenerator {
         self.output.push_str("hl_object_get_function(");
         self.generate_expression(&member_access.object, type_checker)?;
         self.output.push_str(&format!(", \"{}\")->env", member_access.member));
+
+        // Pass the receiver object as this_obj (second argument)
+        self.output.push_str(", ");
+        self.generate_expression(&member_access.object, type_checker)?;
 
         // Generate user arguments
         for arg in call.args.iter() {

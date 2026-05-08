@@ -1072,3 +1072,94 @@ fn test_closure_no_capture_still_works_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 7c-ε: Method this binding integration tests
+
+#[test]
+fn test_method_this_basic_integration() {
+    let expected_output = fs::read_to_string("tests/expected/method_this_basic.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/method_this_basic.hl")
+        .expect("Failed to compile method_this_basic");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run method_this_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_method_this_with_args_integration() {
+    let expected_output = fs::read_to_string("tests/expected/method_this_with_args.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/method_this_with_args.hl")
+        .expect("Failed to compile method_this_with_args");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run method_this_with_args");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_method_this_proto_integration() {
+    let expected_output = fs::read_to_string("tests/expected/method_this_proto.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/method_this_proto.hl")
+        .expect("Failed to compile method_this_proto");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run method_this_proto");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_method_this_modifies_integration() {
+    let expected_output = fs::read_to_string("tests/expected/method_this_modifies.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/method_this_modifies.hl")
+        .expect("Failed to compile method_this_modifies");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run method_this_modifies");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_method_this_outside_method_error_integration() {
+    let result = compile_program("tests/programs/method_this_outside_method_error.hl");
+
+    match result {
+        Err(error_msg) => {
+            assert!(error_msg.contains("this is only valid inside methods"),
+                   "Error message should mention that this is only valid inside methods. Got: {}", error_msg);
+        }
+        Ok(_) => panic!("Expected compilation to fail for this outside method context"),
+    }
+}

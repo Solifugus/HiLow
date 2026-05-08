@@ -39,6 +39,7 @@ pub struct TypeChecker {
     errors: Vec<TypeError>,
     loop_depth: usize, // Track nested loop depth for break/continue validation
     qualifier_registry: QualifierRegistry,
+    method_context: Option<Type>, // Track the receiver object type when inside a method
 }
 
 impl TypeChecker {
@@ -48,6 +49,7 @@ impl TypeChecker {
             errors: Vec::new(),
             loop_depth: 0,
             qualifier_registry: QualifierRegistry::new(),
+            method_context: None,
         }
     }
 
@@ -339,6 +341,18 @@ impl TypeChecker {
             Expression::Ident(name, pos) => {
                 // Look up variable in symbol table
                 self.lookup_variable(name, pos.clone())
+            },
+            Expression::This(pos) => {
+                // this is only valid inside methods
+                if let Some(receiver_type) = &self.method_context {
+                    receiver_type.clone()
+                } else {
+                    self.add_error(
+                        "this is only valid inside methods".to_string(),
+                        pos.clone()
+                    );
+                    Type::Unknown
+                }
             },
             Expression::BinaryOp(binary_op) => self.check_binary_op(binary_op),
             Expression::UnaryOp(unary_op) => self.check_unary_op(unary_op),
@@ -930,9 +944,35 @@ impl TypeChecker {
     fn check_object_literal(&mut self, obj_lit: &ObjectLiteral) -> Type {
         let mut properties = Vec::new();
 
+        // First pass: collect non-function properties
         for (prop_name, prop_expr) in &obj_lit.properties {
-            let prop_type = self.check_expression(prop_expr);
-            properties.push((prop_name.clone(), prop_type));
+            match prop_expr {
+                Expression::FunctionExpr(_) => {
+                    // Skip function expressions for now - will handle in second pass
+                }
+                _ => {
+                    let prop_type = self.check_expression(prop_expr);
+                    properties.push((prop_name.clone(), prop_type));
+                }
+            }
+        }
+
+        // Create the preliminary object type for method context
+        let object_type = Type::Object(properties.clone());
+
+        // Second pass: check function expressions with method context
+        for (prop_name, prop_expr) in &obj_lit.properties {
+            if let Expression::FunctionExpr(func_expr) = prop_expr {
+                // Set method context for this function expression
+                let old_context = self.method_context.clone();
+                self.method_context = Some(object_type.clone());
+
+                let prop_type = self.check_function_expression(func_expr);
+                properties.push((prop_name.clone(), prop_type));
+
+                // Restore previous context
+                self.method_context = old_context;
+            }
         }
 
         Type::Object(properties)
@@ -1190,7 +1230,7 @@ impl TypeChecker {
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
-            Expression::FString(_) | Expression::BoolLit(_, _) => {
+            Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
                 // No variables to capture
             }
         }
@@ -1313,7 +1353,7 @@ impl TypeChecker {
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
-            Expression::FString(_) | Expression::BoolLit(_, _) => {
+            Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
                 // No variables to capture
             }
         }
@@ -1346,6 +1386,7 @@ impl HasPosition for Expression {
             Expression::FString(fstring) => fstring.position.clone(),
             Expression::BoolLit(_, pos) => pos.clone(),
             Expression::Ident(_, pos) => pos.clone(),
+            Expression::This(pos) => pos.clone(),
             Expression::BinaryOp(op) => op.position.clone(),
             Expression::UnaryOp(op) => op.position.clone(),
             Expression::Call(call) => call.position.clone(),

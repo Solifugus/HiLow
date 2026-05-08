@@ -225,6 +225,7 @@ pub enum Expression {
     FString(FString),
     BoolLit(bool, Position),
     Ident(String, Position),
+    This(Position),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
     Call(Call),

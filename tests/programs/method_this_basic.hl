@@ -1,0 +1,11 @@
+high program(): i32 {
+  let dog = {
+    name: "Rex",
+    bark: function(): i32 {
+      print(this.name)
+      return 0
+    }
+  }
+  dog.bark()
+  return 0
+}

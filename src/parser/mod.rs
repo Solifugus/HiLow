@@ -863,6 +863,9 @@ impl Parser {
             TokenKind::Identifier => {
                 Ok(Expression::Ident(token.lexeme, token.position))
             }
+            TokenKind::This => {
+                Ok(Expression::This(token.position))
+            }
             TokenKind::LeftParen => {
                 // Parenthesized expression
                 let expr = self.parse_expression()?;

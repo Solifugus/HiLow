@@ -1,0 +1,14 @@
+high program(): i32 {
+  let counter = {
+    count: 0,
+    increment: function(): i32 {
+      this.count = this.count + 1
+      return this.count
+    }
+  }
+  print(counter.increment())   // 1
+  print(counter.increment())   // 2
+  print(counter.increment())   // 3
+  print(counter.count)          // 3 (final state)
+  return 0
+}
