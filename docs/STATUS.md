@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7c-α — Function Expressions (Parser/AST Only)  
-**Status:** Complete - ready for Phase 7c-β
+**Phase:** Phase 7c-β — Function Expressions Codegen (No Capture)  
+**Status:** Complete - ready for Phase 7c-γ
 **Branch:** main
-**Last commit:** Phase 7b-extension: `is` operator for object prototype membership
+**Last commit:** Phase 7c-β: Function expression codegen (no capture)
 
 ---
 
@@ -20,6 +20,16 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-07 — Phase 7c-β: Function expression codegen (no capture)
+- **Context**: Phase 7c-α had function expressions working in parser/AST/type-checker but codegen was deferred with specific error message; Phase 7c-β implements actual codegen for non-capturing function expressions
+- **Runtime infrastructure**: Added `HiLowFunction` struct with function pointer and environment fields (env=NULL for non-closures); added `hl_function_new`, `hl_object_set_function`, `hl_object_get_function` functions; extended object property system to support function values
+- **Codegen implementation**: Function expressions generate unique top-level C functions (`hilow_anon_0`, etc.) and return `HiLowFunction*` values; function value calls use function-pointer dispatch with proper type casting; object properties can store and retrieve function values
+- **Variable name mangling**: Added C keyword conflict resolution for variable names (`double` → `hl_double`) to avoid compilation errors; applies to all C keywords and common type names
+- **Type checker enhancement**: Fixed function value call return type inference - calls to function values now correctly return the function's return type, not the function type itself
+- **Integration tests**: All five canonical examples compile and run correctly: basic function expression (42), function with one parameter (42), function with two parameters (42), function expressions in object literals (5,20), and variable capture rejection (compile error as expected)
+- **Capture rejection**: Variable capture detection from Phase 7c-α continues to work correctly - capturing function expressions fail with clear error message referencing Phase 7c-γ and 7c-δ
+- Commit: "Phase 7c-β: Function expression codegen (no capture)"
 
 ### 2026-05-07 — CLAUDE.md documentation: empty test prohibition
 - **Context**: During Phase 7c-α completion fix, discovered that `test_function_expression_variable_capture_rejected` had no assertions - just called `type_check_program` and ignored the result, passing by not panicking

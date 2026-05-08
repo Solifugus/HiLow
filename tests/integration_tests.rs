@@ -887,16 +887,95 @@ fn test_is_object_unrelated_integration() {
 }
 
 // Phase 7c-α: Function expression integration test for codegen deferral
+// NOTE: This test was for Phase 7c-α. Now that Phase 7c-β is implemented, function expressions should work.
+
+// Phase 7c-β: Function expression integration tests
 
 #[test]
-fn test_function_expression_codegen_deferral() {
-    // This test verifies that function expressions cause a specific error in codegen
-    let result = compile_program("tests/programs/func_expr_defer.hl");
+fn test_func_expr_basic_integration() {
+    let executable = compile_program("tests/programs/phase7c-beta/func_expr_basic.hl")
+        .expect("Failed to compile func_expr_basic.hl");
 
-    // We expect compilation to FAIL with a specific error message
-    assert!(result.is_err(), "Function expression should cause compilation to fail");
+    let expected_output = fs::read_to_string("tests/expected/phase7c-beta/func_expr_basic.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run func_expr_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_func_expr_param_integration() {
+    let executable = compile_program("tests/programs/phase7c-beta/func_expr_param.hl")
+        .expect("Failed to compile func_expr_param.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase7c-beta/func_expr_param.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run func_expr_param");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_func_expr_two_params_integration() {
+    let executable = compile_program("tests/programs/phase7c-beta/func_expr_two_params.hl")
+        .expect("Failed to compile func_expr_two_params.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase7c-beta/func_expr_two_params.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run func_expr_two_params");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_func_expr_in_object_integration() {
+    let executable = compile_program("tests/programs/phase7c-beta/func_expr_in_object.hl")
+        .expect("Failed to compile func_expr_in_object.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase7c-beta/func_expr_in_object.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run func_expr_in_object");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_func_expr_capture_still_rejected_integration() {
+    // This test verifies that variable capture is still rejected in Phase 7c-β
+    let result = compile_program("tests/programs/phase7c-beta/func_expr_capture_still_rejected.hl");
+
+    // We expect compilation to FAIL with a specific error message about capture
+    assert!(result.is_err(), "Function expression with capture should cause compilation to fail");
 
     let error_message = result.unwrap_err();
-    assert!(error_message.contains("function expressions") && error_message.contains("Phase 7c-β"),
-            "Error should mention function expressions and Phase 7c-β deferral, got: {}", error_message);
+    assert!(error_message.contains("cannot capture variables"),
+            "Error should mention capture rejection, got: {}", error_message);
 }

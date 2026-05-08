@@ -30,6 +30,10 @@ pub struct CodeGenerator {
     output: String,
     /// Variable counter for generating unique names
     var_counter: usize,
+    /// Function counter for generating unique function names (Phase 7c-β)
+    function_counter: usize,
+    /// Generated function definitions (Phase 7c-β)
+    generated_functions: String,
     /// Function symbols - maps function name to its signature
     functions: HashMap<String, String>,
     /// Variable types - maps variable name to its type
@@ -41,6 +45,8 @@ impl CodeGenerator {
         Self {
             output: String::new(),
             var_counter: 0,
+            function_counter: 0,
+            generated_functions: String::new(),
             functions: HashMap::new(),
             variable_types: HashMap::new(),
         }
@@ -48,8 +54,18 @@ impl CodeGenerator {
 
     /// Generate C code for the entire program
     pub fn generate(&mut self, top_level: &TopLevel, type_checker: &TypeChecker) -> Result<String, CodegenError> {
-        // Add standard C includes
-        self.emit_includes();
+        // Build the final output in the correct order:
+        // 1. Includes
+        // 2. Generated functions (from function expressions)
+        // 3. Main program code
+
+        let mut final_output = String::new();
+
+        // Add standard C includes first
+        final_output.push_str("#include <stdint.h>\n");
+        final_output.push_str("#include <stdbool.h>\n");
+        final_output.push_str("#include \"runtime.h\"\n");
+        final_output.push_str("\n");
 
         match top_level {
             TopLevel::Program(program) => {
@@ -60,7 +76,13 @@ impl CodeGenerator {
             }
         }
 
-        Ok(self.output.clone())
+        // Add generated functions (from function expressions)
+        final_output.push_str(&self.generated_functions);
+
+        // Add main program code
+        final_output.push_str(&self.output);
+
+        Ok(final_output)
     }
 
     fn emit_includes(&mut self) {
@@ -229,7 +251,8 @@ impl CodeGenerator {
         };
 
         let c_type = self.hilow_type_to_c(&var_type);
-        self.output.push_str(&format!("  {} {}", c_type, let_decl.name));
+        let c_var_name = self.mangle_variable_name(&let_decl.name);
+        self.output.push_str(&format!("  {} {}", c_type, c_var_name));
 
         if let Some(ref initializer) = let_decl.initializer {
             self.output.push_str(" = ");
@@ -319,6 +342,7 @@ impl CodeGenerator {
                 Type::Bool => self.output.push_str("hl_object_set_bool("),
                 Type::String => self.output.push_str("hl_object_set_str("),
                 Type::Object(_) => self.output.push_str("hl_object_set_object("),
+                Type::Function(_, _) => self.output.push_str("hl_object_set_function("),
                 _ => {
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("assignment of type {} to object property", value_type),
@@ -420,7 +444,8 @@ impl CodeGenerator {
                 self.output.push_str(if *value { "true" } else { "false" });
             }
             Expression::Ident(name, _) => {
-                self.output.push_str(name);
+                let c_var_name = self.mangle_variable_name(name);
+                self.output.push_str(&c_var_name);
             }
             Expression::BinaryOp(binary_op) => {
                 self.generate_binary_op(binary_op, type_checker)?;
@@ -452,11 +477,8 @@ impl CodeGenerator {
             Expression::ObjectLiteral(obj_lit) => {
                 self.generate_object_literal(obj_lit, type_checker)?;
             }
-            Expression::FunctionExpr(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "function expressions".to_string(),
-                    phase: "Phase 7c-β".to_string(),
-                });
+            Expression::FunctionExpr(func_expr) => {
+                self.generate_function_expression(func_expr, type_checker)?;
             }
         }
         Ok(())
@@ -518,6 +540,26 @@ impl CodeGenerator {
         if let Expression::Ident(func_name, _) = call.callee.as_ref() {
             if func_name == "print" {
                 return self.generate_print_call(call, type_checker);
+            }
+        }
+
+        // Check if callee is a function value (stored in a variable)
+        if let Expression::Ident(var_name, _) = call.callee.as_ref() {
+            if let Some(var_type) = self.variable_types.get(var_name).cloned() {
+                if let Type::Function(param_types, return_type) = var_type {
+                    // This is a function value call - emit function pointer dispatch
+                    return self.generate_function_value_call(call, &param_types, &return_type, type_checker);
+                }
+            }
+        }
+
+        // Check if callee is a member access returning a function (obj.fnProp)
+        if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
+            let object_type = self.infer_expression_type_for_codegen(&member_access.object);
+            if let Type::Object(_) = object_type {
+                // Try to determine if this property access returns a function
+                // For now, assume it could be a function and handle it accordingly
+                return self.generate_member_function_call(call, member_access, type_checker);
             }
         }
 
@@ -608,7 +650,7 @@ impl CodeGenerator {
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
-            Type::Function(_, _) => "void*".to_string(), // Function pointer placeholder for Phase 7c-β
+            Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
             Type::Unknown => "void".to_string(),
         }
     }
@@ -652,6 +694,24 @@ impl CodeGenerator {
     fn mangle_function_name(&self, name: &str) -> String {
         // Phase 6a-fixup: Simple mangling for nested functions to avoid C keyword conflicts
         format!("hilow_{}", name)
+    }
+
+    fn mangle_variable_name(&self, name: &str) -> String {
+        // Phase 7c-β: Simple mangling for variable names to avoid C keyword conflicts
+        match name {
+            // Common C keywords and types that might conflict
+            "auto" | "break" | "case" | "char" | "const" | "continue" | "default" | "do" |
+            "double" | "else" | "enum" | "extern" | "float" | "for" | "goto" | "if" |
+            "int" | "long" | "register" | "return" | "short" | "signed" | "sizeof" | "static" |
+            "struct" | "switch" | "typedef" | "union" | "unsigned" | "void" | "volatile" | "while" |
+            // Additional C99/C11 keywords
+            "inline" | "restrict" | "_Bool" | "_Complex" | "_Imaginary" |
+            // Common types we use
+            "int32_t" | "int64_t" | "uint32_t" | "uint64_t" | "bool" | "size_t" => {
+                format!("hl_{}", name)
+            }
+            _ => name.to_string()
+        }
     }
 
     /// Simple type inference for expressions in Phase 4a
@@ -811,7 +871,17 @@ impl CodeGenerator {
                         return Type::I32; // print() returns i32
                     }
                     // Look up the function's return type in our variable tracking
-                    self.variable_types.get(func_name).cloned().unwrap_or(Type::I32)
+                    if let Some(var_type) = self.variable_types.get(func_name) {
+                        if let Type::Function(_, return_type) = var_type {
+                            // For function values, return the return type
+                            *return_type.clone()
+                        } else {
+                            // For regular function names, return the stored type (which should be the return type)
+                            var_type.clone()
+                        }
+                    } else {
+                        Type::I32
+                    }
                 } else {
                     Type::I32 // Default for complex call expressions
                 }
@@ -1253,6 +1323,13 @@ impl CodeGenerator {
                     self.generate_expression(prop_expr, type_checker)?;
                     self.output.push_str(");\n");
                 }
+                Type::Function(_, _) => {
+                    self.output.push_str("function(obj, \"");
+                    self.output.push_str(prop_name);
+                    self.output.push_str("\", ");
+                    self.generate_expression(prop_expr, type_checker)?;
+                    self.output.push_str(");\n");
+                }
                 _ => {
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("object property of type {}", expr_type),
@@ -1292,6 +1369,7 @@ impl CodeGenerator {
             Type::Bool => self.output.push_str("hl_object_get_bool("),
             Type::String => self.output.push_str("hl_object_get_str("),
             Type::Object(_) => self.output.push_str("hl_object_get_object("),
+            Type::Function(_, _) => self.output.push_str("hl_object_get_function("),
             _ => {
                 return Err(CodegenError::UnsupportedFeature {
                     feature: format!("member access for type {}", member_type),
@@ -1308,6 +1386,147 @@ impl CodeGenerator {
         self.output.push_str(&member_access.member);
         self.output.push_str("\")");
 
+        Ok(())
+    }
+
+    fn generate_function_expression(&mut self, func_expr: &FunctionExpr, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate unique function name
+        let func_name = format!("hilow_anon_{}", self.function_counter);
+        self.function_counter += 1;
+
+        // Determine return type
+        let return_type = Type::from_ast_type(&func_expr.return_type);
+        let c_return_type = self.hilow_type_to_c(&return_type);
+
+        // Generate function signature
+        self.generated_functions.push_str(&format!("{} {}(", c_return_type, func_name));
+
+        // Generate parameters
+        for (i, param) in func_expr.params.iter().enumerate() {
+            if i > 0 {
+                self.generated_functions.push_str(", ");
+            }
+            let param_type = Type::from_ast_type(&param.ty);
+            let c_param_type = self.hilow_type_to_c(&param_type);
+            self.generated_functions.push_str(&format!("{} {}", c_param_type, param.name));
+        }
+
+        // Handle empty parameter list
+        if func_expr.params.is_empty() {
+            self.generated_functions.push_str("void");
+        }
+
+        self.generated_functions.push_str(") {\n");
+
+        // Store current output and switch to function body generation
+        let main_output = self.output.clone();
+        self.output.clear();
+
+        // Create new scope for function parameters in variable_types
+        let old_variable_types = self.variable_types.clone();
+        for param in &func_expr.params {
+            let param_type = Type::from_ast_type(&param.ty);
+            self.variable_types.insert(param.name.clone(), param_type);
+        }
+
+        // Generate function body
+        for stmt in &func_expr.body.statements {
+            self.generate_statement(stmt, type_checker)?;
+        }
+
+        // Restore variable types
+        self.variable_types = old_variable_types;
+
+        // Move function body to generated_functions and restore main output
+        self.generated_functions.push_str(&self.output);
+        self.generated_functions.push_str("}\n\n");
+        self.output = main_output;
+
+        // Generate function value creation: hl_function_new((void*)func_name)
+        self.output.push_str(&format!("hl_function_new((void*){})", func_name));
+
+        Ok(())
+    }
+
+    fn generate_function_value_call(
+        &mut self,
+        call: &Call,
+        param_types: &[Type],
+        return_type: &Type,
+        type_checker: &TypeChecker
+    ) -> Result<(), CodegenError> {
+        // Generate function pointer call: ((return_type(*)(param_types))(fn_value->fn_ptr))(args)
+
+        let c_return_type = self.hilow_type_to_c(return_type);
+        self.output.push_str(&format!("(({}(*)(", c_return_type));
+
+        // Generate parameter types
+        if param_types.is_empty() {
+            self.output.push_str("void");
+        } else {
+            for (i, param_type) in param_types.iter().enumerate() {
+                if i > 0 {
+                    self.output.push_str(", ");
+                }
+                let c_param_type = self.hilow_type_to_c(param_type);
+                self.output.push_str(&c_param_type);
+            }
+        }
+
+        self.output.push_str("))(((HiLowFunction*)");
+        self.generate_expression(&call.callee, type_checker)?;
+        self.output.push_str(")->fn_ptr))(");
+
+        // Generate arguments
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.generate_expression(arg, type_checker)?;
+        }
+
+        self.output.push_str(")");
+        Ok(())
+    }
+
+    fn generate_member_function_call(
+        &mut self,
+        call: &Call,
+        member_access: &MemberAccess,
+        type_checker: &TypeChecker
+    ) -> Result<(), CodegenError> {
+        // For obj.fnProp() calls, retrieve the function and call it
+        // This is a simplified approach - we assume the property is a function value
+
+        // Generate: ((return_type(*)())(hl_object_get_function(obj, "prop")->fn_ptr))(args)
+        // For now, use a generic function signature since we don't have type info
+        self.output.push_str("((int32_t(*)(");
+
+        // Assume all parameters are int32_t for now (this is a limitation of Phase 7c-β)
+        if call.args.is_empty() {
+            self.output.push_str("void");
+        } else {
+            for i in 0..call.args.len() {
+                if i > 0 {
+                    self.output.push_str(", ");
+                }
+                self.output.push_str("int32_t");
+            }
+        }
+
+        self.output.push_str("))(hl_object_get_function(");
+        self.generate_expression(&member_access.object, type_checker)?;
+        self.output.push_str(&format!(", \"{}\")->fn_ptr))(", member_access.member));
+
+        // Generate arguments
+        for (i, arg) in call.args.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.generate_expression(arg, type_checker)?;
+        }
+
+        self.output.push_str(")");
         Ok(())
     }
 }

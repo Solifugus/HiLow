@@ -451,6 +451,49 @@ HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key) {
     exit(1);
 }
 
+void hl_object_set_function(HiLowObject* obj, const char* key, HiLowFunction* value) {
+    HiLowValue val = { .type = HL_VALUE_FUNCTION, .value.fn_val = value };
+    set_property(obj, key, val);
+}
+
+HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key) {
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_FUNCTION) {
+                return prop->value.value.fn_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
+    }
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
+}
+
+// Function value operations (Phase 7c-β)
+HiLowFunction* hl_function_new(void* fn_ptr) {
+    HiLowFunction* f = malloc(sizeof(HiLowFunction));
+    f->fn_ptr = fn_ptr;
+    f->env = NULL;
+    return f;
+}
+
 // Helper function to get the proto property as an object (Phase 7b)
 static HiLowObject* hl_object_get_proto(HiLowObject* obj) {
     Property* proto_prop = find_property(obj, "proto");

@@ -23,6 +23,12 @@ void print_str(const char *value);
 char* hl_format_binary(unsigned long long value);
 char* hl_format_center(const char* value, int width);
 
+// Function value support (Phase 7c-β)
+typedef struct HiLowFunction {
+    void* fn_ptr;          // pointer to the C function
+    void* env;             // captured environment; NULL for non-closures
+} HiLowFunction;
+
 // Object support (Phase 7a)
 // Tagged union for all HiLow values that can be stored as object properties
 typedef enum {
@@ -34,7 +40,8 @@ typedef enum {
     HL_VALUE_F64,
     HL_VALUE_BOOL,
     HL_VALUE_STR,
-    HL_VALUE_OBJECT
+    HL_VALUE_OBJECT,
+    HL_VALUE_FUNCTION
 } HiLowValueType;
 
 typedef struct HiLowValue {
@@ -49,6 +56,7 @@ typedef struct HiLowValue {
         bool bool_val;
         char* str_val;
         struct HiLowObject* obj_val;
+        HiLowFunction* fn_val;
     } value;
 } HiLowValue;
 
@@ -76,6 +84,7 @@ void hl_object_set_f64(HiLowObject* obj, const char* key, double value);
 void hl_object_set_bool(HiLowObject* obj, const char* key, bool value);
 void hl_object_set_str(HiLowObject* obj, const char* key, const char* value);
 void hl_object_set_object(HiLowObject* obj, const char* key, HiLowObject* value);
+void hl_object_set_function(HiLowObject* obj, const char* key, HiLowFunction* value);
 
 int32_t hl_object_get_i32(HiLowObject* obj, const char* key);
 int64_t hl_object_get_i64(HiLowObject* obj, const char* key);
@@ -86,6 +95,10 @@ double hl_object_get_f64(HiLowObject* obj, const char* key);
 bool hl_object_get_bool(HiLowObject* obj, const char* key);
 char* hl_object_get_str(HiLowObject* obj, const char* key);
 HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key);
+HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key);
+
+// Function value operations (Phase 7c-β)
+HiLowFunction* hl_function_new(void* fn_ptr);
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

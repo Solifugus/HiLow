@@ -541,6 +541,22 @@ impl TypeChecker {
             self.check_expression(arg);
         }
 
+        // Phase 7c-β: Handle function value calls
+        if let Type::Function(param_types, return_type) = &callee_type {
+            // Validate argument count
+            if call.args.len() != param_types.len() {
+                self.add_error(
+                    format!("Function call expects {} arguments, got {}", param_types.len(), call.args.len()),
+                    call.position.clone()
+                );
+                return Type::Unknown;
+            }
+
+            // TODO: Validate argument types match parameter types
+            // For now, just return the return type
+            return *return_type.clone();
+        }
+
         // Phase 6a-fixup: For nested functions, return the function's return type
         // For now, we use a simple approach: if callee is a function identifier,
         // return the type we stored (which is the return type)

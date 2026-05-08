@@ -1,0 +1,5 @@
+high program(): i32 {
+  let outer = 10
+  let f = function(): i32 { return outer }
+  return 0
+}

@@ -1,0 +1,9 @@
+high program(): i32 {
+  let calc = {
+    add: function(a: i32, b: i32): i32 { return a + b },
+    multiply: function(a: i32, b: i32): i32 { return a * b }
+  }
+  print(calc.add(2, 3))
+  print(calc.multiply(4, 5))
+  return 0
+}
