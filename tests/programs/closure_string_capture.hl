@@ -1,5 +1,5 @@
 high program(): i32 {
-  function makeGreeter(greeting: string): function {
+  function makeGreeter(greeting: string): function(string): i32 {
     return function(name: string): i32 {
       print(greeting)
       print(name)

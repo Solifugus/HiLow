@@ -968,16 +968,12 @@ fn test_func_expr_in_object_integration() {
 }
 
 #[test]
-fn test_func_expr_capture_still_rejected_integration() {
-    // This test verifies that variable capture is still rejected in Phase 7c-β
+fn test_func_expr_capture_now_works_integration() {
+    // This test verifies that variable capture now works in Phase 7c-δ
     let result = compile_program("tests/programs/phase7c-beta/func_expr_capture_still_rejected.hl");
 
-    // We expect compilation to FAIL with a specific error message about capture
-    assert!(result.is_err(), "Function expression with capture should cause compilation to fail");
-
-    let error_message = result.unwrap_err();
-    assert!(error_message.contains("cannot capture variables"),
-            "Error should mention capture rejection, got: {}", error_message);
+    // We now expect compilation to SUCCEED since captures are implemented
+    assert!(result.is_ok(), "Function expression with capture should now compile successfully; got: {:?}", result);
 }
 
 // Phase 7c-δ integration tests for closures with capture

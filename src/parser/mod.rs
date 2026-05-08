@@ -231,10 +231,37 @@ impl Parser {
                 suggestion: "pointers not yet supported (Phase 12)".to_string(),
             })
         } else if self.check(&TokenKind::Function) {
-            // Simple function type for Phase 7c-α/δ
             self.advance()?; // consume 'function'
-            // For Phase 7c-δ, return a generic function type that can match any function
-            Ok(Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::I32))))
+
+            // Check for parameterized function type: function(param_types): return_type
+            if self.check(&TokenKind::LeftParen) {
+                self.advance()?; // consume '('
+
+                let mut param_types = Vec::new();
+
+                // Parse parameter types (if any)
+                if !self.check(&TokenKind::RightParen) {
+                    loop {
+                        param_types.push(self.parse_type()?);
+
+                        if self.check(&TokenKind::Comma) {
+                            self.advance()?; // consume ','
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                self.expect_token(TokenKind::RightParen, "Expected ')' after function parameter types")?;
+                self.expect_token(TokenKind::Colon, "Expected ':' after function parameter types")?;
+
+                let return_type = Box::new(self.parse_type()?);
+
+                Ok(Type::Function(param_types, return_type))
+            } else {
+                // Placeholder function type for backward compatibility
+                Ok(Type::Function(vec![], Box::new(Type::Unknown)))
+            }
         } else {
             self.parse_primitive_type()
         }

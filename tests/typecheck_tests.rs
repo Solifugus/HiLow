@@ -588,3 +588,24 @@ fn test_capture_metadata_stored_on_ast() {
     }
     panic!("Could not find function expression in AST");
 }
+
+#[test]
+fn test_function_placeholder_type_still_works() {
+    let input = "high program(): i32 {
+        let f: function
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Placeholder function type should still type-check; got: {:?}", result);
+}
+
+#[test]
+fn test_function_type_precise_catches_arity_error() {
+    let input = "high program(): i32 {
+        let f: function(i32): i32 = function(x: i32): i32 { return x }
+        f()  // Wrong: expects 1 arg
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Calling function with wrong arity should error");
+}

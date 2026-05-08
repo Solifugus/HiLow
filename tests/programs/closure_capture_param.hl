@@ -1,5 +1,5 @@
 high program(): i32 {
-  function makeAdder(n: i32): function {
+  function makeAdder(n: i32): function(i32): i32 {
     return function(x: i32): i32 {
       return x + n
     }

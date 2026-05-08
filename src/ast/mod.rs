@@ -35,6 +35,7 @@ pub enum Type {
     DynamicArray(Box<Type>),
     Object(Vec<(String, Type)>), // structural object type: properties and their types
     Function(Vec<Type>, Box<Type>), // parameter types, return type
+    Unknown, // placeholder for unknown types
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,5 +1,5 @@
 high program(): i32 {
-  function makeCounter(): function {
+  function makeCounter(): function(): i32 {
     let count = 0
     return function(): i32 {
       count += 1

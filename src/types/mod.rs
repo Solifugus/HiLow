@@ -132,6 +132,7 @@ impl Type {
                     Box::new(Type::from_ast_type(return_type))
                 )
             },
+            ast::Type::Unknown => Type::Unknown,
         }
     }
 
@@ -171,7 +172,7 @@ impl Type {
                 let ast_param_types = param_types.iter().map(|t| t.to_ast_type()).collect();
                 ast::Type::Function(ast_param_types, Box::new(return_type.to_ast_type()))
             },
-            Type::Unknown => ast::Type::Primitive(ast::PrimitiveType::Nothing), // fallback
+            Type::Unknown => ast::Type::Unknown,
         }
     }
 }
