@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 8b — Refcounting for Escaped Values  
-**Status:** Ready for implementation - Phase 8a fixes completed with compile-time multi-owner rejection and complete leak coverage
+**Phase:** Phase 8c — Manual Mode and Weak References  
+**Status:** Ready for implementation - Phase 8b completed with refcounting for all multi-owner heap value scenarios
 **Branch:** main
-**Last commit:** Phase 8a fix: add compile-time multi-owner rejection and complete leak coverage
+**Last commit:** Phase 8b: Refcounting for escaped values; closures and methods now work
 
 ---
 
@@ -20,6 +20,18 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-09 — Phase 8b: Refcounting for escaped values complete
+- **Context**: Phase 8a established scope-based ownership for single-owner heap values with compile-time rejection of multi-owner cases; Phase 8b adds refcounting to handle previously-rejected multi-owner scenarios
+- **Runtime refcounting infrastructure**: Added refcount field to HiLowObject and HiLowFunction; modified hl_object_new and hl_function_new to initialize refcount=1; implemented hl_object_retain/release and hl_function_retain/release functions
+- **Object property refcounting**: Modified set_property helper to release old heap values and retain new ones for property replacements; new property assignments transfer ownership without additional retain calls (object becomes initial owner)
+- **Scope cleanup update**: Updated emit_scope_cleanup to use hl_object_release and hl_function_release instead of direct free calls; maintains LIFO cleanup order with proper reference counting
+- **Multi-owner acceptance**: Removed four compile-time rejection points for multi-owner scenarios; variable aliasing (let b = a) now emits retain calls; object literals with function properties now supported; escaping closures with captures now supported; object property assignment with heap values now supported
+- **Test suite updates**: Removed #[ignore] attributes from 11 previously deferred tests; converted 3 reject_*.hl tests to accept_*.hl tests with actual functionality (function in object, escaping closure, object alias); all tests verify programs run correctly with exit code 0 and no leaks
+- **Integration test results**: All 89 integration tests passing (up from 78 with 11 ignored); previously deferred closure/method tests now work correctly; makeCounter canonical example produces expected output 1,2,3 with no memory leaks
+- **Refcounting correctness**: Objects and functions are properly retained when stored as properties or captured by closures; scope exit releases owned heap values with correct refcount decrement; memory leak detector confirms balanced allocation/deallocation for all multi-owner scenarios
+- **Core functionality**: Complete refcounting support for escaped values - heap values stored in object properties get refcounted, heap values captured by escaping closures get refcounted, heap values aliased through let bindings get refcounted
+- Commit: "Phase 8b: Refcounting for escaped values; closures and methods now work"
 
 ### 2026-05-09 — Phase 8a fixes: compile-time multi-owner rejection and complete leak coverage  
 - **Context**: Phase 8a was declared complete but had two critical gaps: missing compile-time rejection of multi-owner cases, and leak detector coverage gaps allowing programs with escaping closures to exit cleanly despite heap leaks

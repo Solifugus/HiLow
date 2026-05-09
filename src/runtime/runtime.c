@@ -100,6 +100,7 @@ static HiLowObject* hl_object_get_proto(HiLowObject* obj);
 HiLowObject* hl_object_new(void) {
     HiLowObject* obj = malloc(sizeof(HiLowObject));
     hl_alloc_count++;
+    obj->refcount = 1;         // Initialize refcount to 1 (Phase 8b)
     obj->properties = NULL;
     obj->property_count = 0;
     obj->property_capacity = 0;
@@ -130,13 +131,29 @@ static void ensure_capacity(HiLowObject* obj) {
 static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
     Property* existing = find_property(obj, key);
     if (existing) {
+        // Release the old value if it's a heap type (Phase 8b)
+        if (existing->value.type == HL_VALUE_OBJECT && existing->value.value.obj_val) {
+            hl_object_release(existing->value.value.obj_val);
+        } else if (existing->value.type == HL_VALUE_FUNCTION && existing->value.value.fn_val) {
+            hl_function_release(existing->value.value.fn_val);
+        }
         existing->value = value;
+
+        // Retain the new value if it's a heap type (Phase 8b) - only for replacements
+        if (value.type == HL_VALUE_OBJECT && value.value.obj_val) {
+            hl_object_retain(value.value.obj_val);
+        } else if (value.type == HL_VALUE_FUNCTION && value.value.fn_val) {
+            hl_function_retain(value.value.fn_val);
+        }
     } else {
         ensure_capacity(obj);
         obj->properties[obj->property_count].key = strdup(key);  // Duplicate the key string
         hl_alloc_count++;  // Count strdup allocation
         obj->properties[obj->property_count].value = value;
         obj->property_count++;
+
+        // For new properties, don't retain - the object becomes the initial owner
+        // The value should come with refcount=1 from its creation
     }
 }
 
@@ -497,6 +514,7 @@ HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key) {
 HiLowFunction* hl_function_new(void* fn_ptr) {
     HiLowFunction* f = malloc(sizeof(HiLowFunction));
     hl_alloc_count++;
+    f->refcount = 1;           // Initialize refcount to 1 (Phase 8b)
     f->fn_ptr = fn_ptr;
     f->env = NULL;
     return f;
@@ -505,6 +523,7 @@ HiLowFunction* hl_function_new(void* fn_ptr) {
 HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env) {
     HiLowFunction* f = malloc(sizeof(HiLowFunction));
     hl_alloc_count++;
+    f->refcount = 1;           // Initialize refcount to 1 (Phase 8b)
     f->fn_ptr = fn_ptr;
     f->env = env;
     return f;
@@ -678,5 +697,44 @@ void hl_function_free(HiLowFunction* fn) {
         }
         free(fn);
         hl_free_count++;
+    }
+}
+
+// Refcounting operations (Phase 8b)
+void hl_object_retain(HiLowObject* obj) {
+    if (obj) {
+        obj->refcount++;
+    }
+}
+
+void hl_object_release(HiLowObject* obj) {
+    if (obj) {
+        obj->refcount--;
+        if (obj->refcount == 0) {
+            // Release all heap-typed property values before freeing the object
+            for (size_t i = 0; i < obj->property_count; i++) {
+                if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
+                    hl_object_release(obj->properties[i].value.value.obj_val);
+                } else if (obj->properties[i].value.type == HL_VALUE_FUNCTION && obj->properties[i].value.value.fn_val) {
+                    hl_function_release(obj->properties[i].value.value.fn_val);
+                }
+            }
+            hl_object_free(obj);
+        }
+    }
+}
+
+void hl_function_retain(HiLowFunction* fn) {
+    if (fn) {
+        fn->refcount++;
+    }
+}
+
+void hl_function_release(HiLowFunction* fn) {
+    if (fn) {
+        fn->refcount--;
+        if (fn->refcount == 0) {
+            hl_function_free(fn);
+        }
     }
 }

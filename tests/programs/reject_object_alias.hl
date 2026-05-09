@@ -1,5 +1,7 @@
 high program(): i32 {
-  let a = { x: 1 }
+  let a = { x: 42 }
   let b = a
+  print(a.x)
+  print(b.x)
   return 0
 }

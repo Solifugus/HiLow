@@ -1,6 +1,7 @@
 high program(): i32 {
-  let obj = {
-    greet: function(): i32 { return 42 }
+  let calc = {
+    add: function(a: i32, b: i32): i32 { return a + b }
   }
+  print(calc.add(3, 4))
   return 0
 }

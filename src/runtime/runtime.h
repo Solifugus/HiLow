@@ -25,6 +25,7 @@ char* hl_format_center(const char* value, int width);
 
 // Function value support (Phase 7c-β)
 typedef struct HiLowFunction {
+    int refcount;          // Reference count (Phase 8b)
     void* fn_ptr;          // pointer to the C function
     void* env;             // captured environment; NULL for non-closures
 } HiLowFunction;
@@ -68,6 +69,7 @@ typedef struct Property {
 
 // Object representation (heap-allocated with property table)
 typedef struct HiLowObject {
+    int refcount;              // Reference count (Phase 8b)
     Property* properties;
     size_t property_count;
     size_t property_capacity;
@@ -138,5 +140,11 @@ extern int hl_free_count;
 // Free helpers for heap-allocated types (Phase 8a)
 void hl_object_free(HiLowObject* obj);
 void hl_function_free(HiLowFunction* fn);
+
+// Refcounting operations (Phase 8b)
+void hl_object_retain(HiLowObject* obj);
+void hl_object_release(HiLowObject* obj);
+void hl_function_retain(HiLowFunction* fn);
+void hl_function_release(HiLowFunction* fn);
 
 #endif // HILOW_RUNTIME_H

@@ -464,11 +464,23 @@ impl CodeGenerator {
                     }
                 }
                 Expression::Ident(var_name, _) => {
-                    // Phase 8a: Check for heap value aliasing (multi-ownership)
-                    if self.heap_owners.contains_key(var_name) {
-                        return Err(CodegenError::MultiOwnerHeapValue {
-                            message: format!("Multi-owner heap value not yet supported (Phase 8b will add refcounting). Variable '{}' aliases another heap-owning variable.", &let_decl.name)
-                        });
+                    // Phase 8b: Handle heap value aliasing with refcounting
+                    if let Some((heap_type, _)) = self.heap_owners.get(var_name).cloned() {
+                        // Generate retain call after the assignment
+                        match heap_type {
+                            HeapType::Object => {
+                                let c_var_name = self.mangle_variable_name(&let_decl.name);
+                                self.output.push_str(&format!(";\n  hl_object_retain({});", c_var_name));
+                            }
+                            HeapType::Function => {
+                                let c_var_name = self.mangle_variable_name(&let_decl.name);
+                                self.output.push_str(&format!(";\n  hl_function_retain({});", c_var_name));
+                            }
+                            _ => {} // Other heap types don't have specific retain functions yet
+                        }
+
+                        // Track the new variable as a heap owner
+                        self.track_heap_owner(&let_decl.name, heap_type);
                     }
                 }
                 _ => {} // Non-heap-allocating expressions
@@ -750,15 +762,7 @@ impl CodeGenerator {
             // Determine the type of the value to call the right setter
             let value_type = self.infer_expression_type_for_codegen(&assign_stmt.value);
 
-            // Phase 8a: Check for multi-ownership of heap values
-            if let Expression::Ident(var_name, _) = &assign_stmt.value {
-                match value_type {
-                    Type::Object(_) | Type::Function(_, _) => {
-                        self.check_multi_ownership(var_name, "stored as object property")?;
-                    }
-                    _ => {}
-                }
-            }
+            // Phase 8b: Object property assignment with heap values now supported via refcounting
 
             match value_type {
                 Type::I32 => self.output.push_str("hl_object_set_i32("),
@@ -1870,14 +1874,7 @@ impl CodeGenerator {
     }
 
     fn generate_object_literal(&mut self, obj_lit: &ObjectLiteral, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Phase 8a: Check for multi-owner heap values stored as object properties
-        for (prop_name, prop_expr) in &obj_lit.properties {
-            if self.is_heap_allocating_expression(prop_expr) {
-                return Err(CodegenError::MultiOwnerHeapValue {
-                    message: format!("Multi-owner heap value not yet supported (Phase 8b will add refcounting). Property '{}' on the object holds a heap value.", prop_name)
-                });
-            }
-        }
+        // Phase 8b: Object properties with heap values now supported via refcounting
 
         // First, determine the complete object type for method context
         let mut object_properties = Vec::new();
@@ -2050,15 +2047,7 @@ impl CodeGenerator {
         let captures = func_expr.captures.borrow();
         let has_captures = !captures.is_empty();
 
-        // Phase 8a: Check for escaping closure with captures (multi-ownership)
-        if has_captures && self.function_expr_context != FunctionExprContext::Normal {
-            // Find any captured variable for the error message
-            let captured_var = captures.iter().next().map(|(var_name, _, _)| var_name.clone()).unwrap_or_default();
-            drop(captures); // Release the borrow before returning error
-            return Err(CodegenError::MultiOwnerHeapValue {
-                message: format!("Multi-owner heap value not yet supported (Phase 8b will add refcounting). Closure captures '{}' and escapes its declaring scope.", captured_var)
-            });
-        }
+        // Phase 8b: Escaping closures with captures now supported via refcounting
 
         let env_struct_name = if has_captures {
             let struct_name = format!("hilow_anon_{}_env", self.function_counter - 1);
@@ -2653,27 +2642,27 @@ impl CodeGenerator {
         self.scope_depth = self.scope_depth.saturating_sub(1);
     }
 
-    /// Emit free calls for all heap owners at the specified scope depth
+    /// Emit release calls for all heap owners at the specified scope depth
     fn emit_scope_cleanup(&mut self, target_scope: usize) {
-        // Collect variables that need to be freed (declared at target_scope, not transferred)
-        let mut vars_to_free: Vec<String> = Vec::new();
+        // Collect variables that need to be released (declared at target_scope, not transferred)
+        let mut vars_to_release: Vec<String> = Vec::new();
 
         for (var_name, (heap_type, scope_depth)) in &self.heap_owners {
             if *scope_depth == target_scope && !self.transferred_vars.contains(var_name) {
-                vars_to_free.push(var_name.clone());
+                vars_to_release.push(var_name.clone());
             }
         }
 
-        // Emit free calls in reverse order (LIFO scope cleanup)
-        for var_name in vars_to_free.iter().rev() {
+        // Emit release calls in reverse order (LIFO scope cleanup)
+        for var_name in vars_to_release.iter().rev() {
             if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
                 let c_var_name = self.mangle_variable_name(var_name);
                 match heap_type {
                     HeapType::Object => {
-                        self.output.push_str(&format!("    hl_object_free({});\n", c_var_name));
+                        self.output.push_str(&format!("    hl_object_release({});\n", c_var_name));
                     }
                     HeapType::Function => {
-                        self.output.push_str(&format!("    hl_function_free({});\n", c_var_name));
+                        self.output.push_str(&format!("    hl_function_release({});\n", c_var_name));
                     }
                     HeapType::Environment => {
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
@@ -2685,22 +2674,12 @@ impl CodeGenerator {
             }
         }
 
-        // Remove freed variables from tracking
-        for var_name in &vars_to_free {
+        // Remove released variables from tracking
+        for var_name in &vars_to_release {
             self.heap_owners.remove(var_name);
         }
     }
 
-    /// Check if assigning/storing a heap value would create multi-ownership (Phase 8b)
-    fn check_multi_ownership(&self, var_name: &str, operation: &str) -> Result<(), CodegenError> {
-        if self.heap_owners.contains_key(var_name) {
-            return Err(CodegenError::UnsupportedFeature {
-                feature: format!("Multi-owner heap values not yet supported (Phase 8b will add refcounting). Variable '{}' is {}", var_name, operation),
-                phase: "Phase 8b".to_string(),
-            });
-        }
-        Ok(())
-    }
 
     /// Phase 8a: Check if an expression creates a heap allocation
     fn is_heap_allocating_expression(&self, expr: &Expression) -> bool {

@@ -7,5 +7,8 @@ high program(): i32 {
     }
   }
   let c = makeCounter()
+  print(c())
+  print(c())
+  print(c())
   return 0
 }
