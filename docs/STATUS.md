@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7c-δ — Closures with Capture  
-**Status:** Complete - all closure tests pass end-to-end
+**Phase:** Phase 7c-ζ — For-In Iteration  
+**Status:** Complete - all for-in iteration tests pass end-to-end
 **Branch:** main
-**Last commit:** Phase 7c-δ fix: copy captured parameters to env and propagate types
+**Last commit:** Phase 7c-ε: Method this binding
 
 ---
 
@@ -20,6 +20,31 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-08 — Phase 7c-ζ: For-In Iteration over Objects complete
+- **Context**: Phase 7c-ε (method `this` binding) was complete, now implementing for-in iteration with syntax `for (let (key, value) in obj) { body }` that exposes each property as a key-value pair to the loop body
+- **AST extensions**: Added `ForInStmt` struct with `key_name`, `value_name`, `iterable`, `body`, and `position` fields; added `Statement::ForIn` variant; tuple destructuring syntax `(key, value)` supported specifically in for-in headers (general tuple destructuring deferred to Phase 9d)
+- **Parser support**: Extended `parse_statement` to handle `TokenKind::For`; implemented `parse_for_in_statement` with proper tuple destructuring validation requiring `let (key, value) in expr`; uses existing `expect_identifier` and `lexeme` extraction for variable names
+- **Type system enhancements**: Added `Type::ObjectIterValue` special type for runtime-dispatched iteration values; enhanced `check_for_in_statement` to validate iterable as object type, bind key as string type, bind value as ObjectIterValue type; updated Display and AST conversion methods
+- **Type checker integration**: Added ObjectIterValue support to f-string interpolation validation and print call validation; allows `print(value)` and `f"{key}: {value}"` in for-in loops through runtime dispatch
+- **Runtime helpers**: Added property iteration functions `hl_object_property_count`, `hl_object_property_key_at`, `hl_object_property_type_at`, plus type-specific value accessors for all primitive types; added TYPE_* constants for runtime dispatch mapping
+- **Codegen implementation**: `generate_for_in_statement` emits C loop using runtime helpers with `__iter_obj`, `__iter_count`, `__iter_i` variables; runtime dispatch for print calls via `generate_print_call_for_iter_value` and f-string interpolation via `generate_fstring_interpolation_for_iter_value`
+- **Runtime dispatch**: For operations on iteration values, generates switch statements based on `__v_type` runtime tag calling appropriate print/sprintf helpers; ObjectIterValue only allows print() and f-string operations, rejects direct assignment/arithmetic
+- **Integration tests**: All five canonical examples working end-to-end: basic iteration (`name: Alice`, `age: 30`), mixed types (`42`, `test`, `true`), counting (result `4`), empty object (no iteration), prototype property exclusion (own properties only); iteration order preserves object literal insertion order
+- **Verification**: All 65 integration tests + all unit tests passing; for-in iteration works correctly with runtime type dispatch for mixed property types; polymorphic iteration value correctly restricted to supported operations
+- **Core functionality**: Complete for-in iteration over object own properties with tuple destructuring binding, runtime type dispatch for iteration values, proper type validation preventing misuse of polymorphic values outside iteration context
+- Commit: "Phase 7c-ζ: For-in iteration over objects"
+
+### 2026-05-08 — Phase 7c-ε: Method `this` binding complete
+- **Context**: Phase 7c-δ (closures) was complete, now implementing method `this` binding where functions called via dot notation (`obj.method()`) receive `this` as the calling object
+- **Method context tracking**: Enhanced type checker with `method_context: Option<Type>` field; when checking function expressions inside object literals, set method context to the object type being constructed; allows `this` expressions to type-check correctly with receiver object type
+- **Function signature differentiation**: Function expressions in object literals now emit method signature `(void* env, HiLowObject* this_obj, args...)` vs regular closure signature `(void* env, args...)`; method receiver type tracked in codegen via `method_receiver_type` field
+- **Method call dispatch**: Updated `generate_member_function_call` to pass both environment and receiver object as `this_obj` parameter; calls like `dog.bark()` generate `((return_type(*)(void*, HiLowObject*, ...))(fn_ptr))(env, dog, args...)`
+- **AST enhancements**: Added `Expression::This(Position)` variant with parser support for `this` keyword; type inference in both type checker and codegen tracks receiver object type for proper `this.property` access
+- **Integration tests**: All five canonical examples working end-to-end: basic method (`this.name`), method with arguments (`this.base + x`), prototype method inheritance (`dog.speak()` with `this` bound to `dog` not `animal`), property modification (`this.count = this.count + 1`), and error for `this` outside method context
+- **Verification**: All 60 integration tests + all unit tests passing; method `this` binding works correctly with prototype chain - when `dog.speak()` calls method defined on `animal`, `this` refers to `dog` so `this.sound` finds "woof" on receiver, not "generic" on prototype
+- **Core functionality**: Complete method `this` binding with proper receiver object passing through prototype chain; methods can access and modify receiver properties via `this`; compile-time error for `this` outside method contexts
+- Commit: "Phase 7c-ε: Method this binding"
 
 ### 2026-05-08 — Phase 7c-δ completion fix: Closure codegen bugs
 - **Context**: Phase 7c-δ was declared complete after the first fix (parameterized function types) but two critical codegen bugs remained causing closure tests to fail

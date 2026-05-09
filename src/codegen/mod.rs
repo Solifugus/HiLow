@@ -48,6 +48,8 @@ pub struct CodeGenerator {
     current_env_var: Option<String>,
     /// Method receiver type when generating method bodies
     method_receiver_type: Option<Type>,
+    /// Current iteration value variable name for for-in loops
+    current_iter_value_name: Option<String>,
 }
 
 impl CodeGenerator {
@@ -63,6 +65,7 @@ impl CodeGenerator {
             hoisted_variables: HashMap::new(),
             current_env_var: None,
             method_receiver_type: None,
+            current_iter_value_name: None,
         }
     }
 
@@ -257,6 +260,9 @@ impl CodeGenerator {
             Statement::Loop(loop_stmt) => {
                 self.generate_loop_statement(loop_stmt, type_checker)?;
             }
+            Statement::ForIn(for_in_stmt) => {
+                self.generate_for_in_statement(for_in_stmt, type_checker)?;
+            }
             Statement::Break(_) => {
                 self.output.push_str("  break;\n");
             }
@@ -386,6 +392,59 @@ impl CodeGenerator {
         self.generate_block(&loop_stmt.body, type_checker)?;
 
         self.output.push_str("  }\n");
+        Ok(())
+    }
+
+    fn generate_for_in_statement(&mut self, for_in_stmt: &ForInStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate runtime iteration over object properties
+        // for (let (key, value) in obj) { body }
+        // becomes:
+        // {
+        //     HiLowObject* __iter_obj = obj;
+        //     size_t __iter_count = hl_object_property_count(__iter_obj);
+        //     for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {
+        //         const char* key = hl_object_property_key_at(__iter_obj, __iter_i);
+        //         int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);
+        //         // Body with value dispatch based on __v_type
+        //     }
+        // }
+
+        self.output.push_str("  {\n");
+
+        // Generate the iterable object
+        self.output.push_str("    HiLowObject* __iter_obj = ");
+        self.generate_expression(&for_in_stmt.iterable, type_checker)?;
+        self.output.push_str(";\n");
+
+        // Get property count
+        self.output.push_str("    size_t __iter_count = hl_object_property_count(__iter_obj);\n");
+
+        // Generate the iteration loop
+        self.output.push_str("    for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {\n");
+
+        // Get key and type for current iteration
+        self.output.push_str(&format!("      const char* {} = hl_object_property_key_at(__iter_obj, __iter_i);\n", for_in_stmt.key_name));
+        self.output.push_str("      int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);\n");
+
+        // Store the value variable name and type for runtime dispatch in the loop body
+        let old_iter_value_name = self.current_iter_value_name.clone();
+        self.current_iter_value_name = Some(for_in_stmt.value_name.clone());
+
+        // Update variable types to include the for-in variables
+        self.variable_types.insert(for_in_stmt.key_name.clone(), Type::String);
+        self.variable_types.insert(for_in_stmt.value_name.clone(), Type::ObjectIterValue);
+
+        // Generate loop body
+        self.generate_block(&for_in_stmt.body, type_checker)?;
+
+        // Restore previous state
+        self.current_iter_value_name = old_iter_value_name;
+        self.variable_types.remove(&for_in_stmt.key_name);
+        self.variable_types.remove(&for_in_stmt.value_name);
+
+        self.output.push_str("    }\n");
+        self.output.push_str("  }\n");
+
         Ok(())
     }
 
@@ -697,6 +756,10 @@ impl CodeGenerator {
             Type::F64 => "print_f64",
             Type::Bool => "print_bool",
             Type::String => "print_str",
+            Type::ObjectIterValue => {
+                // Runtime dispatch based on type tag
+                return self.generate_print_call_for_iter_value(arg, type_checker);
+            }
             _ => {
                 return Err(CodegenError::UnsupportedFeature {
                     feature: format!("print() for type {}", arg_type),
@@ -711,6 +774,127 @@ impl CodeGenerator {
         self.output.push_str(")");
 
         Ok(())
+    }
+
+    /// Generate print call for iteration value with runtime type dispatch
+    fn generate_print_call_for_iter_value(&mut self, arg: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // For iteration values, generate runtime dispatch based on __v_type
+        if let Expression::Ident(var_name, _) = arg {
+            if Some(var_name.clone()) == self.current_iter_value_name {
+                // This is the iteration value - generate runtime dispatch
+                self.output.push_str("{\n");
+                self.output.push_str("    switch (__v_type) {\n");
+                self.output.push_str("      case TYPE_I32:\n");
+                self.output.push_str(&format!("        print_i32(hl_object_property_value_i32_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_I64:\n");
+                self.output.push_str(&format!("        print_i64(hl_object_property_value_i64_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_U32:\n");
+                self.output.push_str(&format!("        print_u32(hl_object_property_value_u32_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_U64:\n");
+                self.output.push_str(&format!("        print_u64(hl_object_property_value_u64_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_F32:\n");
+                self.output.push_str(&format!("        print_f32(hl_object_property_value_f32_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_F64:\n");
+                self.output.push_str(&format!("        print_f64(hl_object_property_value_f64_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_BOOL:\n");
+                self.output.push_str(&format!("        print_bool(hl_object_property_value_bool_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      case TYPE_STR:\n");
+                self.output.push_str(&format!("        print_str(hl_object_property_value_str_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("        break;\n");
+                self.output.push_str("      default:\n");
+                self.output.push_str("        printf(\"<unknown value>\\n\");\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("    }\n");
+                self.output.push_str("  }");
+                return Ok(());
+            }
+        }
+
+        // Fall back to error for non-iteration ObjectIterValue expressions
+        Err(CodegenError::UnsupportedFeature {
+            feature: "print() for polymorphic value outside for-in loop".to_string(),
+            phase: "Phase 7c-ζ".to_string(),
+        })
+    }
+
+    /// Generate f-string interpolation for iteration value with runtime type dispatch
+    fn generate_fstring_interpolation_for_iter_value(&mut self, arg: &Expression, _type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // For iteration values, generate runtime dispatch based on __v_type
+        if let Expression::Ident(var_name, _) = arg {
+            if Some(var_name.clone()) == self.current_iter_value_name {
+                // This is the iteration value - generate runtime dispatch
+                self.output.push_str("{ switch (__v_type) {\n");
+
+                self.output.push_str("      case TYPE_I32: {\n");
+                self.output.push_str("        char __tmp_buf[32];\n");
+                self.output.push_str("        sprintf(__tmp_buf, \"%d\", hl_object_property_value_i32_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
+
+                self.output.push_str("      case TYPE_I64: {\n");
+                self.output.push_str("        char __tmp_buf[32];\n");
+                self.output.push_str("        sprintf(__tmp_buf, \"%ld\", hl_object_property_value_i64_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
+
+                self.output.push_str("      case TYPE_U32: {\n");
+                self.output.push_str("        char __tmp_buf[32];\n");
+                self.output.push_str("        sprintf(__tmp_buf, \"%u\", hl_object_property_value_u32_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
+
+                self.output.push_str("      case TYPE_U64: {\n");
+                self.output.push_str("        char __tmp_buf[32];\n");
+                self.output.push_str("        sprintf(__tmp_buf, \"%lu\", hl_object_property_value_u64_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
+
+                self.output.push_str("      case TYPE_F32: {\n");
+                self.output.push_str("        char __tmp_buf[32];\n");
+                self.output.push_str("        sprintf(__tmp_buf, \"%g\", hl_object_property_value_f32_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
+
+                self.output.push_str("      case TYPE_F64: {\n");
+                self.output.push_str("        char __tmp_buf[32];\n");
+                self.output.push_str("        sprintf(__tmp_buf, \"%g\", hl_object_property_value_f64_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
+
+                self.output.push_str("      case TYPE_BOOL:\n");
+                self.output.push_str("        strcat(__fstring_buf, hl_object_property_value_bool_at(__iter_obj, __iter_i) ? \"true\" : \"false\");\n");
+                self.output.push_str("        break;\n");
+
+                self.output.push_str("      case TYPE_STR:\n");
+                self.output.push_str("        strcat(__fstring_buf, hl_object_property_value_str_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("        break;\n");
+
+                self.output.push_str("      default:\n");
+                self.output.push_str("        strcat(__fstring_buf, \"<unknown value>\");\n");
+                self.output.push_str("        break;\n");
+                self.output.push_str("    } } ");
+                return Ok(());
+            }
+        }
+
+        // Fall back to error for non-iteration ObjectIterValue expressions
+        Err(CodegenError::UnsupportedFeature {
+            feature: "f-string interpolation for polymorphic value outside for-in loop".to_string(),
+            phase: "Phase 7c-ζ".to_string(),
+        })
     }
 
     /// Convert a HiLow type to a C type string
@@ -737,6 +921,7 @@ impl CodeGenerator {
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
             Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
+            Type::ObjectIterValue => "void*".to_string(), // Runtime-dispatched iteration value
             Type::Unknown => "void".to_string(),
         }
     }
@@ -1201,6 +1386,10 @@ impl CodeGenerator {
                                 self.output.push_str("strcat(__fstring_buf, (");
                                 self.generate_expression(expr, type_checker)?;
                                 self.output.push_str(") ? \"true\" : \"false\"); ");
+                            }
+                            Type::ObjectIterValue => {
+                                // Runtime dispatch for iteration value
+                                self.generate_fstring_interpolation_for_iter_value(expr, type_checker)?;
                             }
                             _ => {
                                 return Err(CodegenError::UnsupportedFeature {

@@ -1,0 +1,8 @@
+high program(): i32 {
+  let parent = { inherited: "P" }
+  let child = { proto: parent, own: "C" }
+  for (let (k, v) in child) {
+    print(k)
+  }
+  return 0
+}

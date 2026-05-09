@@ -1,0 +1,7 @@
+high program(): i32 {
+  let person = { name: "Alice", age: 30 }
+  for (let (k, v) in person) {
+    print(f"{k}: {v}")
+  }
+  return 0
+}

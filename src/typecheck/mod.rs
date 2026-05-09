@@ -155,6 +155,7 @@ impl TypeChecker {
             Statement::If(if_stmt) => self.check_if_statement(if_stmt),
             Statement::While(while_stmt) => self.check_while_statement(while_stmt),
             Statement::Loop(loop_stmt) => self.check_loop_statement(loop_stmt),
+            Statement::ForIn(for_in_stmt) => self.check_for_in_statement(for_in_stmt),
             Statement::Break(pos) => {
                 if self.loop_depth == 0 {
                     self.add_error(
@@ -281,6 +282,52 @@ impl TypeChecker {
         self.check_block(&loop_stmt.body);
 
         // Exit loop scope
+        self.loop_depth -= 1;
+    }
+
+    fn check_for_in_statement(&mut self, for_in_stmt: &ForInStmt) {
+        // Check that the iterable expression is an object type
+        let iterable_type = self.check_expression(&for_in_stmt.iterable);
+        match iterable_type {
+            Type::Object(_) => {
+                // Valid - we can iterate over objects
+            }
+            _ => {
+                self.add_error(
+                    format!("for-in requires an object; got {}", iterable_type),
+                    for_in_stmt.position.clone()
+                );
+                return;
+            }
+        }
+
+        // Enter loop scope for break/continue validation
+        self.loop_depth += 1;
+
+        // Enter a new scope for the loop variables
+        self.enter_scope();
+
+        // Declare the loop variables in the new scope
+        // Key is always string type
+        self.declare_variable(
+            &for_in_stmt.key_name,
+            Type::String,
+            for_in_stmt.position.clone()
+        );
+
+        // Value is a polymorphic type that allows runtime dispatch
+        // For Phase 7c-ζ, we'll use a special type that only allows certain operations
+        self.declare_variable(
+            &for_in_stmt.value_name,
+            Type::ObjectIterValue, // Special type for iteration values
+            for_in_stmt.position.clone()
+        );
+
+        // Check the loop body
+        self.check_block(&for_in_stmt.body);
+
+        // Exit the loop scope
+        self.exit_scope();
         self.loop_depth -= 1;
     }
 
@@ -811,8 +858,10 @@ impl TypeChecker {
                         Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
                         Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
                         Type::Isize | Type::Usize |
-                        Type::F32 | Type::F64 => {
+                        Type::F32 | Type::F64 |
+                        Type::ObjectIterValue => {
                             // These types can be interpolated
+                            // ObjectIterValue gets runtime dispatch like print()
                         }
                         _ => {
                             self.add_error(
@@ -1160,6 +1209,12 @@ impl TypeChecker {
                     self.check_for_captures_in_statement(stmt, outer_scope_depth);
                 }
             }
+            Statement::ForIn(for_in_stmt) => {
+                self.check_for_captures_in_expression(&for_in_stmt.iterable, outer_scope_depth);
+                for stmt in &for_in_stmt.body.statements {
+                    self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                }
+            }
             Statement::Assign(assign_stmt) => {
                 self.check_for_captures_in_expression(&assign_stmt.target, outer_scope_depth);
                 self.check_for_captures_in_expression(&assign_stmt.value, outer_scope_depth);
@@ -1280,6 +1335,12 @@ impl TypeChecker {
             }
             Statement::Loop(loop_stmt) => {
                 for stmt in &loop_stmt.body.statements {
+                    self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                }
+            }
+            Statement::ForIn(for_in_stmt) => {
+                self.collect_captures_in_expression(&for_in_stmt.iterable, outer_scope_depth, captures);
+                for stmt in &for_in_stmt.body.statements {
                     self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }
             }

@@ -104,4 +104,31 @@ HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env);
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);
 
+// Phase 7c-ζ: For-in iteration helpers
+size_t hl_object_property_count(HiLowObject* obj);
+const char* hl_object_property_key_at(HiLowObject* obj, size_t index);
+int hl_object_property_type_at(HiLowObject* obj, size_t index);
+int32_t hl_object_property_value_i32_at(HiLowObject* obj, size_t index);
+int64_t hl_object_property_value_i64_at(HiLowObject* obj, size_t index);
+uint32_t hl_object_property_value_u32_at(HiLowObject* obj, size_t index);
+uint64_t hl_object_property_value_u64_at(HiLowObject* obj, size_t index);
+float hl_object_property_value_f32_at(HiLowObject* obj, size_t index);
+double hl_object_property_value_f64_at(HiLowObject* obj, size_t index);
+bool hl_object_property_value_bool_at(HiLowObject* obj, size_t index);
+char* hl_object_property_value_str_at(HiLowObject* obj, size_t index);
+HiLowObject* hl_object_property_value_object_at(HiLowObject* obj, size_t index);
+HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t index);
+
+// Type constants for runtime dispatch (Phase 7c-ζ)
+#define TYPE_I32 1
+#define TYPE_I64 2
+#define TYPE_U32 3
+#define TYPE_U64 4
+#define TYPE_F32 5
+#define TYPE_F64 6
+#define TYPE_BOOL 7
+#define TYPE_STR 8
+#define TYPE_OBJECT 9
+#define TYPE_FUNCTION 10
+
 #endif // HILOW_RUNTIME_H

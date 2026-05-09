@@ -294,6 +294,15 @@ pub struct AssignStmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ForInStmt {
+    pub key_name: String,     // The key variable name
+    pub value_name: String,   // The value variable name
+    pub iterable: Expression, // The object being iterated over
+    pub body: Block,         // Loop body
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReturnStmt {
     pub value: Option<Expression>,
     pub position: Position,
@@ -306,6 +315,7 @@ pub enum Statement {
     If(IfStmt),
     While(WhileStmt),
     Loop(LoopStmt),
+    ForIn(ForInStmt),
     Break(Position),
     Continue(Position),
     Assign(AssignStmt),

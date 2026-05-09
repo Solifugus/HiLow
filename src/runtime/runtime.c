@@ -527,3 +527,107 @@ bool hl_object_is(HiLowObject* child, HiLowObject* parent) {
 
     return false; // Parent not found in prototype chain
 }
+
+// Phase 7c-ζ: For-in iteration helpers
+
+size_t hl_object_property_count(HiLowObject* obj) {
+    return obj ? obj->property_count : 0;
+}
+
+const char* hl_object_property_key_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count) {
+        return NULL;
+    }
+    return obj->properties[index].key;
+}
+
+int hl_object_property_type_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count) {
+        return 0;
+    }
+
+    // Map HiLowValueType to our type constants
+    switch (obj->properties[index].value.type) {
+        case HL_VALUE_I32: return TYPE_I32;
+        case HL_VALUE_I64: return TYPE_I64;
+        case HL_VALUE_U32: return TYPE_U32;
+        case HL_VALUE_U64: return TYPE_U64;
+        case HL_VALUE_F32: return TYPE_F32;
+        case HL_VALUE_F64: return TYPE_F64;
+        case HL_VALUE_BOOL: return TYPE_BOOL;
+        case HL_VALUE_STR: return TYPE_STR;
+        case HL_VALUE_OBJECT: return TYPE_OBJECT;
+        case HL_VALUE_FUNCTION: return TYPE_FUNCTION;
+        default: return 0;
+    }
+}
+
+int32_t hl_object_property_value_i32_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_I32) {
+        return 0;
+    }
+    return obj->properties[index].value.value.i32_val;
+}
+
+int64_t hl_object_property_value_i64_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_I64) {
+        return 0;
+    }
+    return obj->properties[index].value.value.i64_val;
+}
+
+uint32_t hl_object_property_value_u32_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_U32) {
+        return 0;
+    }
+    return obj->properties[index].value.value.u32_val;
+}
+
+uint64_t hl_object_property_value_u64_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_U64) {
+        return 0;
+    }
+    return obj->properties[index].value.value.u64_val;
+}
+
+float hl_object_property_value_f32_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_F32) {
+        return 0.0f;
+    }
+    return obj->properties[index].value.value.f32_val;
+}
+
+double hl_object_property_value_f64_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_F64) {
+        return 0.0;
+    }
+    return obj->properties[index].value.value.f64_val;
+}
+
+bool hl_object_property_value_bool_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_BOOL) {
+        return false;
+    }
+    return obj->properties[index].value.value.bool_val;
+}
+
+char* hl_object_property_value_str_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_STR) {
+        return NULL;
+    }
+    return obj->properties[index].value.value.str_val;
+}
+
+HiLowObject* hl_object_property_value_object_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_OBJECT) {
+        return NULL;
+    }
+    return obj->properties[index].value.value.obj_val;
+}
+
+HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t index) {
+    if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_FUNCTION) {
+        return NULL;
+    }
+    return obj->properties[index].value.value.fn_val;
+}

@@ -1163,3 +1163,100 @@ fn test_method_this_outside_method_error_integration() {
         Ok(_) => panic!("Expected compilation to fail for this outside method context"),
     }
 }
+
+// Phase 7c-ζ: For-in iteration tests
+
+#[test]
+fn test_for_in_basic_integration() {
+    let expected_output = fs::read_to_string("tests/expected/for_in_basic.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/for_in_basic.hl")
+        .expect("Failed to compile for_in_basic");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_for_in_mixed_types_integration() {
+    let expected_output = fs::read_to_string("tests/expected/for_in_mixed_types.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/for_in_mixed_types.hl")
+        .expect("Failed to compile for_in_mixed_types");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_mixed_types");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_for_in_count_integration() {
+    let expected_output = fs::read_to_string("tests/expected/for_in_count.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/for_in_count.hl")
+        .expect("Failed to compile for_in_count");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_count");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_for_in_empty_integration() {
+    let expected_output = fs::read_to_string("tests/expected/for_in_empty.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/for_in_empty.hl")
+        .expect("Failed to compile for_in_empty");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_empty");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_for_in_proto_excluded_integration() {
+    let expected_output = fs::read_to_string("tests/expected/for_in_proto_excluded.txt")
+        .expect("Expected output file should exist");
+
+    let executable = compile_program("tests/programs/for_in_proto_excluded.hl")
+        .expect("Failed to compile for_in_proto_excluded");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_proto_excluded");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

@@ -1,0 +1,8 @@
+high program(): i32 {
+  let empty = {}
+  for (let (k, v) in empty) {
+    print("should not print")
+  }
+  print("done")
+  return 0
+}

@@ -409,6 +409,7 @@ impl Parser {
             TokenKind::If => self.parse_if_statement(),
             TokenKind::While => self.parse_while_statement(),
             TokenKind::Loop => self.parse_loop_statement(),
+            TokenKind::For => self.parse_for_in_statement(),
             TokenKind::Break => self.parse_break_statement(),
             TokenKind::Continue => self.parse_continue_statement(),
             _ => {
@@ -564,6 +565,42 @@ impl Parser {
     fn parse_continue_statement(&mut self) -> Result<Statement, ParseError> {
         let pos = self.advance()?.position; // consume 'continue'
         Ok(Statement::Continue(pos))
+    }
+
+    fn parse_for_in_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'for'
+
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'for'")?;
+        self.expect_token(TokenKind::Let, "Expected 'let' in for-in loop")?;
+
+        // Expect tuple destructuring: (key, value)
+        self.expect_token(TokenKind::LeftParen, "Expected '(' for tuple destructuring")?;
+
+        let key_name_token = self.expect_identifier("Expected key variable name")?;
+        let key_name = key_name_token.lexeme;
+
+        self.expect_token(TokenKind::Comma, "Expected ',' between key and value")?;
+
+        let value_name_token = self.expect_identifier("Expected value variable name")?;
+        let value_name = value_name_token.lexeme;
+
+        self.expect_token(TokenKind::RightParen, "Expected ')' after tuple destructuring")?;
+
+        self.expect_token(TokenKind::In, "Expected 'in' after tuple destructuring")?;
+
+        let iterable = self.parse_expression()?;
+
+        self.expect_token(TokenKind::RightParen, "Expected ')' after for-in expression")?;
+
+        let body = self.parse_block()?;
+
+        Ok(Statement::ForIn(ForInStmt {
+            key_name,
+            value_name,
+            iterable,
+            body,
+            position: start_pos,
+        }))
     }
 
     fn try_parse_assignment(&mut self) -> Result<AssignStmt, ParseError> {

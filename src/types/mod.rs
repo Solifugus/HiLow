@@ -29,6 +29,9 @@ pub enum Type {
     /// Function type
     Function(Vec<Type>, Box<Type>), // parameter types, return type
 
+    /// Special type for for-in iteration values (polymorphic, runtime-dispatched)
+    ObjectIterValue,
+
     /// Unknown type (for error recovery)
     Unknown,
 }
@@ -172,6 +175,7 @@ impl Type {
                 let ast_param_types = param_types.iter().map(|t| t.to_ast_type()).collect();
                 ast::Type::Function(ast_param_types, Box::new(return_type.to_ast_type()))
             },
+            Type::ObjectIterValue => ast::Type::Unknown, // Special type maps to Unknown in AST
             Type::Unknown => ast::Type::Unknown,
         }
     }
@@ -219,6 +223,7 @@ impl std::fmt::Display for Type {
                 }
                 write!(f, "): {}", return_type)
             },
+            Type::ObjectIterValue => write!(f, "iteration value"),
             Type::Unknown => write!(f, "<unknown>"),
         }
     }

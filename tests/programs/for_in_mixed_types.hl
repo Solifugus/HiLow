@@ -1,0 +1,7 @@
+high program(): i32 {
+  let data = { x: 42, name: "test", flag: true }
+  for (let (k, v) in data) {
+    print(f"{k}: {v}")
+  }
+  return 0
+}
