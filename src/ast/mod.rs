@@ -344,6 +344,21 @@ pub struct ReturnStmt {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SwitchStmt {
+    pub value: Expression,
+    pub cases: Vec<SwitchCase>,
+    pub default: Option<Vec<Statement>>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    pub pattern: Literal,
+    pub body: Vec<Statement>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Statement {
     Let(LetDecl),
     Return(ReturnStmt),
@@ -351,6 +366,7 @@ pub enum Statement {
     While(WhileStmt),
     Loop(LoopStmt),
     ForIn(ForInStmt),
+    Switch(SwitchStmt),
     Break(Position),
     Continue(Position),
     Assign(AssignStmt),

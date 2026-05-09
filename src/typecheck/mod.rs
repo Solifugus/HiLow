@@ -38,6 +38,7 @@ pub struct TypeChecker {
     scopes: Vec<Scope>,
     errors: Vec<TypeError>,
     loop_depth: usize, // Track nested loop depth for break/continue validation
+    switch_depth: usize, // Track nested switch depth for break validation
     qualifier_registry: QualifierRegistry,
     method_context: Option<Type>, // Track the receiver object type when inside a method
 }
@@ -48,6 +49,7 @@ impl TypeChecker {
             scopes: vec![Scope::new()], // Start with global scope
             errors: Vec::new(),
             loop_depth: 0,
+            switch_depth: 0,
             qualifier_registry: QualifierRegistry::new(),
             method_context: None,
         }
@@ -156,10 +158,11 @@ impl TypeChecker {
             Statement::While(while_stmt) => self.check_while_statement(while_stmt),
             Statement::Loop(loop_stmt) => self.check_loop_statement(loop_stmt),
             Statement::ForIn(for_in_stmt) => self.check_for_in_statement(for_in_stmt),
+            Statement::Switch(switch_stmt) => self.check_switch_statement(switch_stmt),
             Statement::Break(pos) => {
-                if self.loop_depth == 0 {
+                if self.loop_depth == 0 && self.switch_depth == 0 {
                     self.add_error(
-                        "break is only valid inside a loop".to_string(),
+                        "break is only valid inside a loop or switch".to_string(),
                         pos.clone()
                     );
                 }
@@ -344,6 +347,53 @@ impl TypeChecker {
         }
 
         // TODO: Check that target is assignable (not a constant, etc.)
+    }
+
+    fn check_switch_statement(&mut self, switch_stmt: &SwitchStmt) {
+        // Check the switch expression
+        let switch_expr_type = self.check_expression(&switch_stmt.value);
+
+        // Enter switch context for break validation
+        self.switch_depth += 1;
+
+        // Check each case
+        for case in &switch_stmt.cases {
+            // Check that case pattern type matches switch expression type
+            let pattern_type = self.literal_type(&case.pattern);
+            if pattern_type != switch_expr_type {
+                self.add_error(
+                    format!(
+                        "Case pattern type {} does not match switch expression type {}",
+                        pattern_type, switch_expr_type
+                    ),
+                    case.position.clone()
+                );
+            }
+
+            // Check case body statements
+            for statement in &case.body {
+                self.check_statement(statement);
+            }
+        }
+
+        // Check default case if present
+        if let Some(default_statements) = &switch_stmt.default {
+            for statement in default_statements {
+                self.check_statement(statement);
+            }
+        }
+
+        // Exit switch context
+        self.switch_depth -= 1;
+    }
+
+    fn literal_type(&self, literal: &Literal) -> Type {
+        match literal {
+            Literal::Integer(_) => Type::I32,
+            Literal::Float(_) => Type::F64,
+            Literal::String(_) => Type::String,
+            Literal::Bool(_) => Type::Bool,
+        }
     }
 
     fn check_expression_with_expected_type(&mut self, expression: &Expression, expected: &Type) -> Type {
@@ -1227,6 +1277,19 @@ impl TypeChecker {
                 self.check_for_captures_in_expression(&qualified_op.lhs, outer_scope_depth);
                 self.check_for_captures_in_expression(&qualified_op.rhs, outer_scope_depth);
             }
+            Statement::Switch(switch_stmt) => {
+                self.check_for_captures_in_expression(&switch_stmt.value, outer_scope_depth);
+                for case in &switch_stmt.cases {
+                    for stmt in &case.body {
+                        self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                    }
+                }
+                if let Some(default_statements) = &switch_stmt.default {
+                    for stmt in default_statements {
+                        self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                    }
+                }
+            }
             Statement::Break(_) | Statement::Continue(_) => {
                 // No expressions to check
             }
@@ -1370,6 +1433,19 @@ impl TypeChecker {
             Statement::QualifiedOp(qualified_op) => {
                 self.collect_captures_in_expression(&qualified_op.lhs, outer_scope_depth, captures);
                 self.collect_captures_in_expression(&qualified_op.rhs, outer_scope_depth, captures);
+            }
+            Statement::Switch(switch_stmt) => {
+                self.collect_captures_in_expression(&switch_stmt.value, outer_scope_depth, captures);
+                for case in &switch_stmt.cases {
+                    for stmt in &case.body {
+                        self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                    }
+                }
+                if let Some(default_statements) = &switch_stmt.default {
+                    for stmt in default_statements {
+                        self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                    }
+                }
             }
             Statement::Break(_) | Statement::Continue(_) => {
                 // No expressions to check

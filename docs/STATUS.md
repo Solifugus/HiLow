@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7c-η — Match Expressions  
-**Status:** Complete - all match expression tests pass end-to-end
+**Phase:** Phase 7c-θ — Switch Statements  
+**Status:** Complete - all switch statement tests pass end-to-end; Phase 7 complete
 **Branch:** main
-**Last commit:** Phase 7c-η: Match expressions
+**Last commit:** Phase 7c-θ: Switch statements; Phase 7 complete
 
 ---
 
@@ -20,6 +20,19 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-08 — Phase 7c-θ: Switch Statements complete; Phase 7 complete
+- **Context**: Phase 7c-η (match expressions) was complete, now implementing C-style switch statements with explicit fallthrough; syntax `switch (value) { case literal: statements break }` for both statement contexts with integer, string, and boolean support
+- **AST extensions**: Added `SwitchStmt` struct with `value`, `cases`, `default`, and `position` fields; added `SwitchCase` struct with `pattern` (Literal), `body` (Vec<Statement>), and `position`; added `Statement::Switch` variant; utilized existing `Literal` enum for case patterns
+- **Parser implementation**: Added `TokenKind::Switch` case to `parse_statement`; implemented `parse_switch_statement` with case/default parsing; added `parse_literal` helper method; proper error handling for duplicate default clauses and unexpected tokens
+- **Type system enhancements**: Added `check_switch_statement` with pattern-expression type compatibility validation; added `switch_depth` tracking for break statement validation; enhanced break validation to allow break in both loops and switches; added `literal_type` helper for pattern type inference  
+- **Codegen implementation**: `generate_switch_statement` emits C switch statement for integers/booleans with preserved fallthrough; string switches use if/else chain with strcmp (no fallthrough support); added `in_string_switch` context tracking to suppress break statements in string switch bodies; proper C scoping with temporary variables
+- **Runtime dispatch**: Integer/boolean patterns emit direct C switch with case values; string patterns use `strcmp(__sw_val, "literal") == 0` with if/else chain; boolean patterns convert to 1/0 for C switch compatibility; added `escape_c_string` helper for proper C string literal escaping
+- **Integration tests**: All six canonical examples working end-to-end: integer switching (1 → "one"), default case (99 → "other"), fallthrough ("one" then "one or two"), string switching ("start" → "starting"), boolean switching (true → "yes"), no default case (5 → "done"); fallthrough test confirms C switch semantics preserved
+- **Verification**: All 78 integration tests + all unit tests passing; switch statements work correctly in both integer (with fallthrough) and string (implicit break) contexts; proper break statement validation prevents misuse outside loops/switches  
+- **Core functionality**: Complete C-style switch statements with literal patterns, explicit fallthrough for integer/boolean cases, no fallthrough for string cases, proper break statement handling, and comprehensive type validation
+- **Phase 7 completion**: Switch statements complete the final sub-phase of Phase 7c; Phase 7 (objects, prototypes, closures, for-in, match, switch) is now complete; Phase 8 (memory model with refcounting) is next
+- Commit: "Phase 7c-θ: Switch statements; Phase 7 complete"
 
 ### 2026-05-08 — Phase 7c-η: Match Expressions complete
 - **Context**: Phase 7c-ζ (for-in iteration) was complete, now implementing match expressions with literal patterns and wildcard matching; syntax `match expr { pattern => body, _ => default }` for both statement and expression contexts

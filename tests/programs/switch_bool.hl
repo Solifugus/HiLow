@@ -1,0 +1,12 @@
+high program(): i32 {
+  let active = true
+  switch (active) {
+    case true:
+      print("yes")
+      break
+    case false:
+      print("no")
+      break
+  }
+  return 0
+}

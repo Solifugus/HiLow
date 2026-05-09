@@ -1,0 +1,13 @@
+high program(): i32 {
+  let x = 5
+  switch (x) {
+    case 0:
+      print("zero")
+      break
+    case 1:
+      print("one")
+      break
+  }
+  print("done")
+  return 0
+}

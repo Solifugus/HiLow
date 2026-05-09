@@ -1,0 +1,14 @@
+high program(): i32 {
+  let x = 99
+  switch (x) {
+    case 0:
+      print("zero")
+      break
+    case 1:
+      print("one")
+      break
+    default:
+      print("other")
+  }
+  return 0
+}

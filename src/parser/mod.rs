@@ -410,6 +410,7 @@ impl Parser {
             TokenKind::While => self.parse_while_statement(),
             TokenKind::Loop => self.parse_loop_statement(),
             TokenKind::For => self.parse_for_in_statement(),
+            TokenKind::Switch => self.parse_switch_statement(),
             TokenKind::Break => self.parse_break_statement(),
             TokenKind::Continue => self.parse_continue_statement(),
             _ => {
@@ -601,6 +602,93 @@ impl Parser {
             body,
             position: start_pos,
         }))
+    }
+
+    fn parse_switch_statement(&mut self) -> Result<Statement, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'switch'
+
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'switch'")?;
+        let value = self.parse_expression()?;
+        self.expect_token(TokenKind::RightParen, "Expected ')' after switch expression")?;
+
+        self.expect_token(TokenKind::LeftBrace, "Expected '{' to start switch body")?;
+
+        let mut cases = Vec::new();
+        let mut default = None;
+
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            match &self.peek()?.kind {
+                TokenKind::Case => {
+                    let case_pos = self.advance()?.position; // consume 'case'
+
+                    let pattern = self.parse_literal()?;
+
+                    self.expect_token(TokenKind::Colon, "Expected ':' after case pattern")?;
+
+                    let mut body = Vec::new();
+                    while !self.check(&TokenKind::Case) && !self.check(&TokenKind::Default) && !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+                        body.push(self.parse_statement()?);
+                    }
+
+                    cases.push(SwitchCase {
+                        pattern,
+                        body,
+                        position: case_pos,
+                    });
+                }
+                TokenKind::Default => {
+                    if default.is_some() {
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "only one default clause".to_string(),
+                            found: TokenKind::Default,
+                            position: self.peek()?.position.clone(),
+                        });
+                    }
+
+                    self.advance()?; // consume 'default'
+                    self.expect_token(TokenKind::Colon, "Expected ':' after 'default'")?;
+
+                    let mut body = Vec::new();
+                    while !self.check(&TokenKind::Case) && !self.check(&TokenKind::Default) && !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+                        body.push(self.parse_statement()?);
+                    }
+
+                    default = Some(body);
+                }
+                _ => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "'case' or 'default'".to_string(),
+                        found: self.peek()?.kind.clone(),
+                        position: self.peek()?.position.clone(),
+                    });
+                }
+            }
+        }
+
+        self.expect_token(TokenKind::RightBrace, "Expected '}' to close switch body")?;
+
+        Ok(Statement::Switch(SwitchStmt {
+            value,
+            cases,
+            default,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_literal(&mut self) -> Result<Literal, ParseError> {
+        let token = self.advance()?;
+        match token.kind {
+            TokenKind::Integer(n) => Ok(Literal::Integer(n)),
+            TokenKind::Float(f) => Ok(Literal::Float(f)),
+            TokenKind::StringLit(s) => Ok(Literal::String(s)),
+            TokenKind::True => Ok(Literal::Bool(true)),
+            TokenKind::False => Ok(Literal::Bool(false)),
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "literal value".to_string(),
+                found: token.kind,
+                position: token.position,
+            })
+        }
     }
 
     fn try_parse_assignment(&mut self) -> Result<AssignStmt, ParseError> {

@@ -48,6 +48,8 @@ pub struct CodeGenerator {
     current_env_var: Option<String>,
     /// Method receiver type when generating method bodies
     method_receiver_type: Option<Type>,
+    /// Whether we're currently inside a string switch (no break statements allowed)
+    in_string_switch: bool,
     /// Current iteration value variable name for for-in loops
     current_iter_value_name: Option<String>,
 }
@@ -65,6 +67,7 @@ impl CodeGenerator {
             hoisted_variables: HashMap::new(),
             current_env_var: None,
             method_receiver_type: None,
+            in_string_switch: false,
             current_iter_value_name: None,
         }
     }
@@ -263,8 +266,14 @@ impl CodeGenerator {
             Statement::ForIn(for_in_stmt) => {
                 self.generate_for_in_statement(for_in_stmt, type_checker)?;
             }
+            Statement::Switch(switch_stmt) => {
+                self.generate_switch_statement(switch_stmt, type_checker)?;
+            }
             Statement::Break(_) => {
-                self.output.push_str("  break;\n");
+                // Don't generate break statements inside string switches
+                if !self.in_string_switch {
+                    self.output.push_str("  break;\n");
+                }
             }
             Statement::Continue(_) => {
                 self.output.push_str("  continue;\n");
@@ -444,6 +453,123 @@ impl CodeGenerator {
 
         self.output.push_str("    }\n");
         self.output.push_str("  }\n");
+
+        Ok(())
+    }
+
+    fn generate_switch_statement(&mut self, switch_stmt: &SwitchStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Determine the type of the switch expression
+        let switch_type = self.infer_expression_type_for_codegen(&switch_stmt.value);
+
+        match switch_type {
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+            Type::Bool => {
+                // For integers and booleans, emit a C switch statement with fallthrough
+                self.output.push_str("  switch (");
+                self.generate_expression(&switch_stmt.value, type_checker)?;
+                self.output.push_str(") {\n");
+
+                // Generate cases
+                for case in &switch_stmt.cases {
+                    self.output.push_str("    case ");
+                    match &case.pattern {
+                        Literal::Integer(n) => self.output.push_str(&n.to_string()),
+                        Literal::Bool(b) => self.output.push_str(if *b { "1" } else { "0" }),
+                        _ => unreachable!("Type checker should prevent non-matching patterns"),
+                    }
+                    self.output.push_str(":\n");
+
+                    // Generate case body
+                    for statement in &case.body {
+                        self.generate_statement(statement, type_checker)?;
+                    }
+                }
+
+                // Generate default case if present
+                if let Some(default_statements) = &switch_stmt.default {
+                    self.output.push_str("    default:\n");
+                    for statement in default_statements {
+                        self.generate_statement(statement, type_checker)?;
+                    }
+                }
+
+                self.output.push_str("  }\n");
+            }
+            Type::String => {
+                // For strings, emit if/else chain with strcmp (no fallthrough support)
+                let temp_var = format!("__sw_val_{}", self.var_counter);
+                self.var_counter += 1;
+
+                self.output.push_str("  {\n");
+                self.output.push_str(&format!("    const char* {} = ", temp_var));
+                self.generate_expression(&switch_stmt.value, type_checker)?;
+                self.output.push_str(";\n");
+
+                let mut first_case = true;
+
+                // Set string switch context to suppress break statements
+                let old_in_string_switch = self.in_string_switch;
+                self.in_string_switch = true;
+
+                for case in &switch_stmt.cases {
+                    if !first_case {
+                        self.output.push_str("    } else ");
+                    } else {
+                        self.output.push_str("    ");
+                    }
+
+                    self.output.push_str("if (strcmp(");
+                    self.output.push_str(&temp_var);
+                    self.output.push_str(", ");
+
+                    match &case.pattern {
+                        Literal::String(s) => {
+                            self.output.push_str("\"");
+                            self.output.push_str(&Self::escape_c_string(s));
+                            self.output.push_str("\"");
+                        }
+                        _ => unreachable!("Type checker should prevent non-matching patterns"),
+                    }
+
+                    self.output.push_str(") == 0) {\n");
+
+                    // Generate case body
+                    for statement in &case.body {
+                        self.generate_statement(statement, type_checker)?;
+                    }
+
+                    first_case = false;
+                }
+
+                // Generate default case if present
+                if let Some(default_statements) = &switch_stmt.default {
+                    if !first_case {
+                        self.output.push_str("    } else {\n");
+                    } else {
+                        // No cases, just default
+                        self.output.push_str("    {\n");
+                    }
+                    for statement in default_statements {
+                        self.generate_statement(statement, type_checker)?;
+                    }
+                }
+
+                // Restore string switch context
+                self.in_string_switch = old_in_string_switch;
+
+                if !first_case || switch_stmt.default.is_some() {
+                    self.output.push_str("    }\n");
+                }
+                self.output.push_str("  }\n");
+            }
+            _ => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("switch on type {}", switch_type),
+                    phase: "future phases".to_string(),
+                });
+            }
+        }
 
         Ok(())
     }
@@ -2265,7 +2391,7 @@ impl CodeGenerator {
                 self.output.push_str(&format!("__match_val == {}", f));
             }
             Literal::String(s) => {
-                self.output.push_str(&format!("strcmp(__match_val, \"{}\") == 0", s));
+                self.output.push_str(&format!("strcmp(__match_val, \"{}\") == 0", Self::escape_c_string(s)));
             }
             Literal::Bool(b) => {
                 let value = if *b { "1" } else { "0" };
@@ -2273,5 +2399,28 @@ impl CodeGenerator {
             }
         }
         Ok(())
+    }
+
+    /// Escape a string for use in a C string literal
+    fn escape_c_string(s: &str) -> String {
+        let mut result = String::new();
+        for ch in s.chars() {
+            match ch {
+                '"' => result.push_str("\\\""),
+                '\\' => result.push_str("\\\\"),
+                '\n' => result.push_str("\\n"),
+                '\t' => result.push_str("\\t"),
+                '\r' => result.push_str("\\r"),
+                c if (c as u32) < 0x20 && c != '\n' && c != '\t' && c != '\r' => {
+                    // Escape control characters below 0x20 (except \n, \t, \r already handled)
+                    result.push_str(&format!("\\x{:02x}", c as u8));
+                }
+                c => {
+                    // Emit UTF-8 bytes directly - C99/C11 supports arbitrary bytes in string literals
+                    result.push(c);
+                }
+            }
+        }
+        result
     }
 }

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 7c-θ — Switch Statements**
+**Current phase: Phase 8 — Memory Model (Refcounting)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

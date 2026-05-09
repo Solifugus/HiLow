@@ -1387,3 +1387,123 @@ fn test_match_non_exhaustive_expression_error_integration() {
     assert!(error_message.contains("exhaustive") || error_message.contains("wildcard"),
             "Error should mention exhaustiveness or wildcard requirement, got: {}", error_message);
 }
+
+#[test]
+fn test_switch_int_basic_integration() {
+    let executable = compile_program("tests/programs/switch_int_basic.hl")
+        .expect("Failed to compile switch_int_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run switch_int_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/switch_int_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_switch_int_default_integration() {
+    let executable = compile_program("tests/programs/switch_int_default.hl")
+        .expect("Failed to compile switch_int_default.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run switch_int_default");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/switch_int_default.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_switch_int_fallthrough_integration() {
+    let executable = compile_program("tests/programs/switch_int_fallthrough.hl")
+        .expect("Failed to compile switch_int_fallthrough.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run switch_int_fallthrough");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/switch_int_fallthrough.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_switch_string_integration() {
+    let executable = compile_program("tests/programs/switch_string.hl")
+        .expect("Failed to compile switch_string.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run switch_string");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/switch_string.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_switch_bool_integration() {
+    let executable = compile_program("tests/programs/switch_bool.hl")
+        .expect("Failed to compile switch_bool.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run switch_bool");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/switch_bool.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_switch_no_default_integration() {
+    let executable = compile_program("tests/programs/switch_no_default.hl")
+        .expect("Failed to compile switch_no_default.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run switch_no_default");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/switch_no_default.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

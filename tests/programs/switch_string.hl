@@ -1,0 +1,14 @@
+high program(): i32 {
+  let cmd = "start"
+  switch (cmd) {
+    case "start":
+      print("starting")
+      break
+    case "stop":
+      print("stopping")
+      break
+    default:
+      print("unknown")
+  }
+  return 0
+}
