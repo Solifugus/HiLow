@@ -1,0 +1,11 @@
+high program(): i32 {
+  let p = { a: 1 }
+  if (p.b is nothing) {
+    print("missing")
+  }
+  if (p.a is nothing) {
+    print("present is nothing??")
+  }
+  print(p.a)
+  return 0
+}

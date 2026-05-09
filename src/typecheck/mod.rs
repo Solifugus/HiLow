@@ -217,12 +217,8 @@ impl TypeChecker {
                 inferred
             },
             (None, None) => {
-                // Error: no type and no initializer
-                self.add_error(
-                    "Type cannot be inferred without an initializer; either add a type annotation or an initializer".to_string(),
-                    let_decl.position.clone()
-                );
-                Type::Unknown
+                // Uninitialized let binding has type nothing
+                Type::Nothing
             }
         };
 
@@ -435,6 +431,7 @@ impl TypeChecker {
             Expression::StringLit(_, _) => Type::String,
             Expression::FString(fstring) => self.check_fstring(fstring),
             Expression::BoolLit(_, _) => Type::Bool,
+            Expression::Nothing(_) => Type::Nothing,
             Expression::Ident(name, pos) => {
                 // Look up variable in symbol table
                 self.lookup_variable(name, pos.clone())
@@ -626,8 +623,8 @@ impl TypeChecker {
                 }
             },
             UnaryOpKind::Not => {
-                // Logical not: operand must be bool
-                if operand_type != Type::Bool {
+                // Logical not: operand must be bool or nothing
+                if operand_type != Type::Bool && operand_type != Type::Nothing {
                     self.add_error(
                         format!("Cannot apply 'not' to non-bool type {}", operand_type),
                         unary_op.position.clone()
@@ -722,7 +719,8 @@ impl TypeChecker {
         match arg_type {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
-            Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String => {
+            Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String |
+            Type::Nothing => {
                 // These types are printable
             }
             _ => {
@@ -780,6 +778,8 @@ impl TypeChecker {
             Type::Isize | Type::Usize => true,
             // All float types are valid (truthy if non-zero)
             Type::F32 | Type::F64 => true,
+            // Nothing is always falsy
+            Type::Nothing => true,
             // Other types not yet implemented for truthy/falsy
             _ => false,
         }
@@ -925,6 +925,7 @@ impl TypeChecker {
                         Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
                         Type::Isize | Type::Usize |
                         Type::F32 | Type::F64 |
+                        Type::Nothing |
                         Type::ObjectIterValue => {
                             // These types can be interpolated
                             // ObjectIterValue gets runtime dispatch like print()
@@ -1134,12 +1135,8 @@ impl TypeChecker {
                 if let Some(prop_type) = self.find_property_in_chain(&object_type, &member_access.member, 0) {
                     prop_type
                 } else {
-                    // Property not found anywhere in the chain
-                    self.add_error(
-                        format!("Object does not have property '{}' (Phase 9 will allow runtime property access)", member_access.member),
-                        member_access.position.clone()
-                    );
-                    Type::Unknown
+                    // Property not found anywhere in the chain - return nothing
+                    Type::Nothing
                 }
             },
             Type::Unknown => Type::Unknown, // Error recovery
@@ -1383,7 +1380,7 @@ impl TypeChecker {
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
-            Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
+            Expression::FString(_) | Expression::BoolLit(_, _) | Expression::Nothing(_) | Expression::This(_) => {
                 // No variables to capture
             }
         }
@@ -1544,7 +1541,7 @@ impl TypeChecker {
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
-            Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
+            Expression::FString(_) | Expression::BoolLit(_, _) | Expression::Nothing(_) | Expression::This(_) => {
                 // No variables to capture
             }
         }
@@ -1676,6 +1673,7 @@ impl HasPosition for Expression {
             Expression::FunctionExpr(func_expr) => func_expr.position.clone(),
             Expression::Match(match_expr) => match_expr.position.clone(),
             Expression::WeakRef(_, pos) => pos.clone(),
+            Expression::Nothing(pos) => pos.clone(),
         }
     }
 

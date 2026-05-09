@@ -85,13 +85,7 @@ fn test_property_access_nonexistent_property() {
         let val = point.z
     }";
     let result = type_check_program(input);
-    assert!(result.is_err(), "Expected type error for accessing nonexistent property");
-
-    if let Err(errors) = result {
-        assert!(!errors.is_empty());
-        assert!(errors[0].message.contains("Object does not have property 'z'"));
-        assert!(errors[0].message.contains("Phase 9 will allow runtime property access"));
-    }
+    assert!(result.is_ok(), "Accessing nonexistent property should succeed and return nothing (Phase 9a)");
 }
 
 #[test]
@@ -120,8 +114,8 @@ fn test_property_assignment_nonexistent_property() {
 
     if let Err(errors) = result {
         assert!(!errors.is_empty());
-        assert!(errors[0].message.contains("Object does not have property 'z'"));
-        assert!(errors[0].message.contains("Phase 9 will allow runtime property access"));
+        // In Phase 9a, missing properties have type nothing, so assignment fails with type error
+        assert!(errors[0].message.contains("Cannot assign i32 to nothing"));
     }
 }
 

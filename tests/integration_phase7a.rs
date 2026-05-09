@@ -54,11 +54,11 @@ fn test_phase7a_integration() {
 }
 
 #[test]
-fn test_phase7a_strict_property_access() {
-    // Test that accessing non-existent properties fails in Phase 7a
+fn test_phase7a_missing_property_returns_nothing() {
+    // Test that accessing non-existent properties returns nothing (Phase 9a behavior)
     let input = "high program(): i32 {
         let obj = { x: 10 }
-        let val = obj.y  // Error: y doesn't exist
+        let val = obj.y  // Returns nothing (no longer an error)
         return 0
     }";
 
@@ -69,15 +69,8 @@ fn test_phase7a_strict_property_access() {
     let mut type_checker = TypeChecker::new();
     let typecheck_result = type_checker.check(&ast);
 
-    // Should fail with property not found error
-    assert!(typecheck_result.is_err(), "Should fail when accessing non-existent property");
-
-    if let Err(errors) = typecheck_result {
-        assert!(!errors.is_empty());
-        let error_msg = &errors[0].message;
-        assert!(error_msg.contains("Object does not have property 'y'"));
-        assert!(error_msg.contains("Phase 9 will allow runtime property access"));
-    }
+    // Should now succeed because missing properties return nothing
+    assert!(typecheck_result.is_ok(), "Should succeed when accessing non-existent property (Phase 9a)");
 }
 
 #[test]
@@ -102,7 +95,7 @@ fn test_phase7a_strict_property_assignment() {
     if let Err(errors) = typecheck_result {
         assert!(!errors.is_empty());
         let error_msg = &errors[0].message;
-        assert!(error_msg.contains("Object does not have property 'y'"));
-        assert!(error_msg.contains("Phase 9 will allow runtime property access"));
+        // In Phase 9a, missing properties have type nothing, so assignment fails with type error
+        assert!(error_msg.contains("Cannot assign i32 to nothing"));
     }
 }

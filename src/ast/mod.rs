@@ -272,6 +272,7 @@ pub enum Expression {
     FunctionExpr(FunctionExpr),
     Match(MatchExpr),
     WeakRef(Box<Expression>, Position),
+    Nothing(Position),
 }
 
 #[derive(Debug, Clone, PartialEq)]

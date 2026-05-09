@@ -182,12 +182,10 @@ fn test_undefined_variable() {
 
 #[test]
 fn test_let_with_no_type_and_no_initializer() {
-    // This should produce a parse error, not a type error
-    // But let's check that we handle it gracefully
+    // Phase 9a: let x without type or initializer is now valid (type nothing)
     let input = "high program(): i32 { let x }";
-    let parse_result = Parser::new(input).unwrap().parse();
-    // This should fail during parsing, not type checking
-    assert!(parse_result.is_err(), "Expected parse error for let with no type and no initializer");
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "let x without type or initializer should be valid in Phase 9a (type nothing)");
 }
 
 // Tests for various arithmetic combinations

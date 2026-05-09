@@ -33,6 +33,13 @@ void print_str(const char *value) {
     printf("%s\n", value);
 }
 
+// Nothing type support (Phase 9a)
+HiLowNothing the_nothing = { 42 }; // Global singleton
+
+void print_nothing(void) {
+    printf("nothing\n");
+}
+
 char* hl_format_binary(unsigned long long value) {
     // Allocate enough space for 64 bits + null terminator
     char* result = malloc(65);

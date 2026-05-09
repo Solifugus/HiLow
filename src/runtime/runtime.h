@@ -19,6 +19,15 @@ void print_f64(double value);
 void print_bool(bool value);
 void print_str(const char *value);
 
+// Nothing type support (Phase 9a)
+// Global nothing singleton - all nothing values are pointers to this
+typedef struct HiLowNothing {
+    int sentinel; // Just to make it a real struct
+} HiLowNothing;
+
+extern HiLowNothing the_nothing;
+void print_nothing(void);
+
 // F-string format helpers
 char* hl_format_binary(unsigned long long value);
 char* hl_format_center(const char* value, int width);

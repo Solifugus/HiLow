@@ -1,0 +1,6 @@
+high program(): i32 {
+  let x
+  print(x)
+  print(f"x is {x}")
+  return 0
+}

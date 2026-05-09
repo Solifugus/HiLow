@@ -389,10 +389,8 @@ impl CodeGenerator {
                 }
             }
         } else {
-            return Err(CodegenError::UnsupportedFeature {
-                feature: "uninitialized variables".to_string(),
-                phase: "Phase 9 (nothing type)".to_string(),
-            });
+            // Uninitialized variable has type nothing
+            Type::Nothing
         };
 
         // Check if this variable is hoisted to an environment
@@ -409,8 +407,8 @@ impl CodeGenerator {
                 self.generate_expression(initializer, type_checker)?;
                 self.function_expr_context = old_context;
             } else {
-                // Default initialization (though this shouldn't happen per Phase 2b rules)
-                self.output.push_str(" = 0");
+                // Uninitialized variable gets nothing value
+                self.output.push_str(" = &the_nothing");
             }
 
             self.output.push_str(";\n");
@@ -427,6 +425,9 @@ impl CodeGenerator {
                 self.function_expr_context = FunctionExprContext::LetInitializer;
                 self.generate_expression(initializer, type_checker)?;
                 self.function_expr_context = old_context;
+            } else {
+                // Uninitialized variable gets nothing value
+                self.output.push_str(" = &the_nothing");
             }
 
             self.output.push_str(";\n");
@@ -852,6 +853,10 @@ impl CodeGenerator {
                 self.generate_expression(condition, type_checker)?;
                 self.output.push_str(" != 0)");
             }
+            Type::Nothing => {
+                // Nothing is always falsy, emit false
+                self.output.push_str("false");
+            }
             _ => {
                 // This should be caught by the type checker, but handle gracefully
                 return Err(CodegenError::UnsupportedFeature {
@@ -957,6 +962,10 @@ impl CodeGenerator {
                 // The weak behavior is handled at the assignment level
                 self.generate_expression(expr, type_checker)?;
             }
+            Expression::Nothing(_) => {
+                // Emit reference to the global nothing singleton
+                self.output.push_str("&the_nothing");
+            }
         }
         Ok(())
     }
@@ -1001,14 +1010,28 @@ impl CodeGenerator {
     }
 
     fn generate_unary_op(&mut self, unary_op: &UnaryOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        let op_str = match unary_op.op {
-            UnaryOpKind::Neg => "-",
-            UnaryOpKind::Not => "!",
-            UnaryOpKind::BitNot => "~",
-        };
-
-        self.output.push_str(op_str);
-        self.generate_expression(&unary_op.operand, type_checker)?;
+        match unary_op.op {
+            UnaryOpKind::Not => {
+                // Special handling for not operator with nothing type
+                let operand_type = self.infer_expression_type_for_codegen(&unary_op.operand);
+                if matches!(operand_type, Type::Nothing) {
+                    // not nothing should be true (since nothing is falsy)
+                    self.output.push_str("true");
+                } else {
+                    // Regular not operator
+                    self.output.push_str("!");
+                    self.generate_expression(&unary_op.operand, type_checker)?;
+                }
+            }
+            UnaryOpKind::Neg => {
+                self.output.push_str("-");
+                self.generate_expression(&unary_op.operand, type_checker)?;
+            }
+            UnaryOpKind::BitNot => {
+                self.output.push_str("~");
+                self.generate_expression(&unary_op.operand, type_checker)?;
+            }
+        }
         Ok(())
     }
 
@@ -1088,6 +1111,11 @@ impl CodeGenerator {
             Type::F64 => "print_f64",
             Type::Bool => "print_bool",
             Type::String => "print_str",
+            Type::Nothing => {
+                // Special case: print_nothing() takes no arguments
+                self.output.push_str("print_nothing()");
+                return Ok(());
+            }
             Type::ObjectIterValue => {
                 // Runtime dispatch based on type tag
                 return self.generate_print_call_for_iter_value(arg, type_checker);
@@ -1259,7 +1287,7 @@ impl CodeGenerator {
             Type::String => "const char*".to_string(),
             Type::Usize => "size_t".to_string(),
             Type::Isize => "ssize_t".to_string(),
-            Type::Nothing => "void".to_string(),
+            Type::Nothing => "void*".to_string(),
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
@@ -1269,10 +1297,25 @@ impl CodeGenerator {
         }
     }
 
-    fn generate_is_check(&mut self, is_check: &IsCheck, _type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // For primitive types, is checks are done at compile time
-        let expr_type = self.infer_expression_type(&is_check.expression);
+    fn generate_is_check(&mut self, is_check: &IsCheck, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         let target_type = Type::from_ast_type(&is_check.ty);
+
+        // Special case: is nothing should be a runtime pointer comparison
+        if matches!(target_type, Type::Nothing) {
+            if is_check.negated {
+                self.output.push_str("(");
+                self.generate_expression(&is_check.expression, type_checker)?;
+                self.output.push_str(" != &the_nothing)");
+            } else {
+                self.output.push_str("(");
+                self.generate_expression(&is_check.expression, type_checker)?;
+                self.output.push_str(" == &the_nothing)");
+            }
+            return Ok(());
+        }
+
+        // For other primitive types, is checks are done at compile time
+        let expr_type = self.infer_expression_type_for_codegen(&is_check.expression);
 
         // Compare types at compile time
         let types_match = expr_type == target_type;
@@ -1287,6 +1330,28 @@ impl CodeGenerator {
     }
 
     fn generate_object_is_check(&mut self, obj_is_check: &ObjectIsCheck, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Check if either side is a nothing literal
+        let lhs_is_nothing = matches!(obj_is_check.lhs.as_ref(), Expression::Nothing(_));
+        let rhs_is_nothing = matches!(obj_is_check.rhs.as_ref(), Expression::Nothing(_));
+
+        if lhs_is_nothing || rhs_is_nothing {
+            // Handle is nothing as pointer comparison
+            if obj_is_check.negated {
+                self.output.push_str("(");
+                self.generate_expression(&obj_is_check.lhs, type_checker)?;
+                self.output.push_str(" != ");
+                self.generate_expression(&obj_is_check.rhs, type_checker)?;
+                self.output.push_str(")");
+            } else {
+                self.output.push_str("(");
+                self.generate_expression(&obj_is_check.lhs, type_checker)?;
+                self.output.push_str(" == ");
+                self.generate_expression(&obj_is_check.rhs, type_checker)?;
+                self.output.push_str(")");
+            }
+            return Ok(());
+        }
+
         // Generate: hl_object_is(lhs, rhs) for obj is obj
         if obj_is_check.negated {
             self.output.push_str("!");
@@ -1548,6 +1613,7 @@ impl CodeGenerator {
                 // Weak references have the same type as the inner expression
                 self.infer_expression_type_for_codegen(expr)
             }
+            Expression::Nothing(_) => Type::Nothing,
             _ => Type::Unknown
         }
     }
@@ -1758,6 +1824,10 @@ impl CodeGenerator {
                                 self.output.push_str("strcat(__fstring_buf, (");
                                 self.generate_expression(expr, type_checker)?;
                                 self.output.push_str(") ? \"true\" : \"false\"); ");
+                            }
+                            Type::Nothing => {
+                                // Nothing: just emit "nothing"
+                                self.output.push_str("strcat(__fstring_buf, \"nothing\"); ");
                             }
                             Type::ObjectIterValue => {
                                 // Runtime dispatch for iteration value
@@ -2036,7 +2106,7 @@ impl CodeGenerator {
             Type::Object(_) => {
                 // Use prototype chain lookup
                 self.find_property_type_in_chain(&object_type, &member_access.member, 0)
-                    .unwrap_or(Type::Unknown)
+                    .unwrap_or(Type::Nothing) // Missing properties return nothing
             }
             _ => Type::Unknown
         };
@@ -2052,6 +2122,11 @@ impl CodeGenerator {
             Type::String => self.output.push_str("hl_object_get_str("),
             Type::Object(_) => self.output.push_str("hl_object_get_object("),
             Type::Function(_, _) => self.output.push_str("hl_object_get_function("),
+            Type::Nothing => {
+                // Property doesn't exist, return the nothing singleton
+                self.output.push_str("&the_nothing");
+                return Ok(()); // Don't emit object or property name
+            }
             _ => {
                 return Err(CodegenError::UnsupportedFeature {
                     feature: format!("member access for type {}", member_type),

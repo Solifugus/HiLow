@@ -458,14 +458,7 @@ impl Parser {
             None
         };
 
-        // Require at least a type or an initializer
-        if ty.is_none() && initializer.is_none() {
-            return Err(ParseError::UnexpectedToken {
-                expected: "type annotation (': type') or initializer ('= value')".to_string(),
-                found: self.peek()?.kind.clone(),
-                position: start_pos,
-            });
-        }
+        // Phase 9a: allow uninitialized let bindings (they have type nothing)
 
         Ok(Statement::Let(LetDecl {
             name,
@@ -985,6 +978,7 @@ impl Parser {
             TokenKind::FStringStart => self.parse_f_string(token.position),
             TokenKind::True => Ok(Expression::BoolLit(true, token.position)),
             TokenKind::False => Ok(Expression::BoolLit(false, token.position)),
+            TokenKind::Nothing => Ok(Expression::Nothing(token.position)),
             TokenKind::Identifier => {
                 Ok(Expression::Ident(token.lexeme, token.position))
             }

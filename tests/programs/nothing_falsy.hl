@@ -1,0 +1,10 @@
+high program(): i32 {
+  let x
+  if (not x) {
+    print("falsy")
+  }
+  if (x) {
+    print("should not print")
+  }
+  return 0
+}

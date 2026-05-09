@@ -1,0 +1,7 @@
+high program(): i32 {
+  let x = nothing
+  if (x is nothing) {
+    print("yes")
+  }
+  return 0
+}
