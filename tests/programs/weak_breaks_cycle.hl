@@ -1,0 +1,9 @@
+high program(): i32 {
+  let a = { name: "A" }
+  let b = { name: "B", ref: weak a }
+
+  print(a.name)
+  print(b.name)
+  print(b.ref.name)
+  return 0
+}

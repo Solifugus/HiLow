@@ -68,6 +68,7 @@ pub enum TokenKind {
     This,
     Unknown,
     Watch,
+    Weak,
     When,
     While,
 
@@ -242,6 +243,7 @@ impl Lexer {
         keywords.insert("true".to_string(), TokenKind::True);
         keywords.insert("unknown".to_string(), TokenKind::Unknown);
         keywords.insert("watch".to_string(), TokenKind::Watch);
+        keywords.insert("weak".to_string(), TokenKind::Weak);
         keywords.insert("when".to_string(), TokenKind::When);
         keywords.insert("while".to_string(), TokenKind::While);
 

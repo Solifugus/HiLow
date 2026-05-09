@@ -1009,6 +1009,11 @@ impl Parser {
                 // Match expression
                 self.parse_match_expression(token.position)
             }
+            TokenKind::Weak => {
+                // Weak reference expression
+                let expr = self.parse_unary_expression()?;
+                Ok(Expression::WeakRef(Box::new(expr), token.position))
+            }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: token.kind,

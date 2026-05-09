@@ -1,0 +1,6 @@
+high program(): i32 {
+  let target = { name: "T" }
+  let holder = { ref: weak target }
+  print(holder.ref.name)
+  return 0
+}

@@ -271,6 +271,7 @@ pub enum Expression {
     ObjectLiteral(ObjectLiteral),
     FunctionExpr(FunctionExpr),
     Match(MatchExpr),
+    WeakRef(Box<Expression>, Position),
 }
 
 #[derive(Debug, Clone, PartialEq)]

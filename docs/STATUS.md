@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 8c — Manual Mode and Weak References  
-**Status:** Ready for implementation - Phase 8b completed with refcounting for all multi-owner heap value scenarios
+**Phase:** Phase 9 — Special Types (nothing, unknown, etc.)
+**Status:** Phase 8c completed - Phase 8 (memory model) is complete with weak references for cycle breaking
 **Branch:** main
-**Last commit:** Phase 8b: Refcounting for escaped values; closures and methods now work
+**Last commit:** Phase 8c: Weak references for cycle breaking; Phase 8 complete
 
 ---
 
@@ -32,6 +32,20 @@
 - **Refcounting correctness**: Objects and functions are properly retained when stored as properties or captured by closures; scope exit releases owned heap values with correct refcount decrement; memory leak detector confirms balanced allocation/deallocation for all multi-owner scenarios
 - **Core functionality**: Complete refcounting support for escaped values - heap values stored in object properties get refcounted, heap values captured by escaping closures get refcounted, heap values aliased through let bindings get refcounted
 - Commit: "Phase 8b: Refcounting for escaped values; closures and methods now work"
+
+### 2026-05-09 — Phase 8c: Weak references for cycle breaking; Phase 8 complete
+- **Context**: Phase 8b established complete refcounting for escaped values; Phase 8c adds weak references to break refcount cycles in object structures, completing the memory model
+- **Lexer enhancement**: Added `weak` keyword to lexer token kinds and keyword HashMap for parsing `weak EXPR` expressions
+- **AST and parser updates**: Added `Expression::WeakRef(Box<Expression>, Position)` to AST; parser recognizes `weak EXPR` syntax and creates appropriate AST nodes
+- **Type checking**: Added WeakRef case to expression type checking; validates that weak can only be applied to object types; returns same type as inner expression for compatibility
+- **Runtime weak reference infrastructure**: Extended HiLowObject with `WeakRef* weak_refs` linked list; added `is_weak` flag to Property struct; implemented hl_object_weak_register/unregister and hl_object_property_addr functions
+- **Memory management ordering**: Updated hl_object_release with correct ordering - weak properties unregistered first (no release), strong properties released normally, weak_refs list invalidated (sets locations to NULL), then object freed
+- **Codegen weak assignment**: Object property assignments detect weak references; skip retain calls for weak assignments; register weak reference with target using hl_object_weak_register and property address lookup
+- **Type inference fix**: Added WeakRef case to infer_expression_type_for_codegen to return same type as inner expression; fixed multiple pattern match exhaustiveness checks in typecheck
+- **Integration tests**: Added weak_basic.hl (basic weak reference functionality) and weak_breaks_cycle.hl (demonstrates cycle breaking) with expected outputs and test functions
+- **Manual verification**: Both test programs compile, execute correctly (output: T for basic, A/B/A for cycle), and exit with code 0 indicating no memory leaks
+- **Phase 8 completion**: Weak references provide manual cycle breaking for High mode; `manual` and `defer` deferred to Phase 12 (Low mode); complete memory model with scope-based cleanup, refcounting, and weak references
+- Commit: "Phase 8c: Weak references for cycle breaking; Phase 8 complete"
 
 ### 2026-05-09 — Phase 8a fixes: compile-time multi-owner rejection and complete leak coverage  
 - **Context**: Phase 8a was declared complete but had two critical gaps: missing compile-time rejection of multi-owner cases, and leak detector coverage gaps allowing programs with escaping closures to exit cleanly despite heap leaks

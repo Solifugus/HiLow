@@ -759,10 +759,14 @@ impl CodeGenerator {
                 });
             }
 
+            // Check if this is a weak reference assignment (Phase 8c)
+            let is_weak_assignment = matches!(assign_stmt.value, Expression::WeakRef(_, _));
+
             // Determine the type of the value to call the right setter
             let value_type = self.infer_expression_type_for_codegen(&assign_stmt.value);
 
             // Phase 8b: Object property assignment with heap values now supported via refcounting
+            // Phase 8c: Weak reference assignments handled specially
 
             match value_type {
                 Type::I32 => self.output.push_str("hl_object_set_i32("),
@@ -790,6 +794,26 @@ impl CodeGenerator {
             self.output.push_str("\", ");
             self.generate_expression(&assign_stmt.value, type_checker)?;
             self.output.push_str(");\n");
+
+            // Phase 8c: For weak object assignments, register the weak reference
+            if is_weak_assignment && matches!(value_type, Type::Object(_)) {
+                // Get the address of the property slot and register weak reference
+                self.output.push_str("{\n");
+                self.output.push_str("    HiLowObject** prop_addr = hl_object_property_addr(");
+                self.generate_expression(&member_access.object, type_checker)?;
+                self.output.push_str(", \"");
+                self.output.push_str(&member_access.member);
+                self.output.push_str("\");\n");
+                self.output.push_str("    if (prop_addr) {\n");
+                self.output.push_str("        hl_object_weak_register(");
+                // Generate the actual object being assigned (unwrapped from weak)
+                if let Expression::WeakRef(inner_expr, _) = &assign_stmt.value {
+                    self.generate_expression(inner_expr, type_checker)?;
+                }
+                self.output.push_str(", prop_addr);\n");
+                self.output.push_str("    }\n");
+                self.output.push_str("}\n");
+            }
         } else {
             // Regular assignment to variables
             self.generate_expression(&assign_stmt.target, type_checker)?;
@@ -927,6 +951,11 @@ impl CodeGenerator {
             }
             Expression::Match(match_expr) => {
                 self.generate_match_expression(match_expr, type_checker)?;
+            }
+            Expression::WeakRef(expr, _) => {
+                // For Phase 8c, weak references generate the same code as the underlying expression
+                // The weak behavior is handled at the assignment level
+                self.generate_expression(expr, type_checker)?;
             }
         }
         Ok(())
@@ -1514,6 +1543,10 @@ impl CodeGenerator {
                 } else {
                     Type::Nothing
                 }
+            }
+            Expression::WeakRef(expr, _) => {
+                // Weak references have the same type as the inner expression
+                self.infer_expression_type_for_codegen(expr)
             }
             _ => Type::Unknown
         }

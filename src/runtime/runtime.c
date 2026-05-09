@@ -104,6 +104,7 @@ HiLowObject* hl_object_new(void) {
     obj->properties = NULL;
     obj->property_count = 0;
     obj->property_capacity = 0;
+    obj->weak_refs = NULL;     // Initialize weak ref list to empty (Phase 8c)
     return obj;
 }
 
@@ -150,6 +151,7 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
         obj->properties[obj->property_count].key = strdup(key);  // Duplicate the key string
         hl_alloc_count++;  // Count strdup allocation
         obj->properties[obj->property_count].value = value;
+        obj->properties[obj->property_count].is_weak = false;  // Not weak by default (Phase 8c)
         obj->property_count++;
 
         // For new properties, don't retain - the object becomes the initial owner
@@ -711,14 +713,36 @@ void hl_object_release(HiLowObject* obj) {
     if (obj) {
         obj->refcount--;
         if (obj->refcount == 0) {
-            // Release all heap-typed property values before freeing the object
+            // Step 1: Handle weak properties first - unregister from targets, no release
             for (size_t i = 0; i < obj->property_count; i++) {
-                if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
-                    hl_object_release(obj->properties[i].value.value.obj_val);
-                } else if (obj->properties[i].value.type == HL_VALUE_FUNCTION && obj->properties[i].value.value.fn_val) {
-                    hl_function_release(obj->properties[i].value.value.fn_val);
+                if (obj->properties[i].is_weak && obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
+                    HiLowObject** prop_addr = &obj->properties[i].value.value.obj_val;
+                    hl_object_weak_unregister(obj->properties[i].value.value.obj_val, prop_addr);
                 }
             }
+
+            // Step 2: Release strong properties normally
+            for (size_t i = 0; i < obj->property_count; i++) {
+                if (!obj->properties[i].is_weak) {
+                    if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
+                        hl_object_release(obj->properties[i].value.value.obj_val);
+                    } else if (obj->properties[i].value.type == HL_VALUE_FUNCTION && obj->properties[i].value.value.fn_val) {
+                        hl_function_release(obj->properties[i].value.value.fn_val);
+                    }
+                }
+            }
+
+            // Step 3: Walk weak_refs list and invalidate all pointers
+            WeakRef* current = obj->weak_refs;
+            while (current) {
+                *current->location = NULL;  // Invalidate the weak reference
+                WeakRef* next = current->next;
+                free(current);
+                hl_free_count++;
+                current = next;
+            }
+
+            // Step 4: Free the object
             hl_object_free(obj);
         }
     }
@@ -737,4 +761,45 @@ void hl_function_release(HiLowFunction* fn) {
             hl_function_free(fn);
         }
     }
+}
+
+// Weak reference management functions (Phase 8c)
+
+void hl_object_weak_register(HiLowObject* target, HiLowObject** location) {
+    if (!target || !location) return;
+
+    WeakRef* weak_ref = malloc(sizeof(WeakRef));
+    hl_alloc_count++;
+    weak_ref->location = location;
+    weak_ref->next = target->weak_refs;
+    target->weak_refs = weak_ref;
+}
+
+void hl_object_weak_unregister(HiLowObject* target, HiLowObject** location) {
+    if (!target || !location) return;
+
+    WeakRef** current = &target->weak_refs;
+    while (*current) {
+        if ((*current)->location == location) {
+            WeakRef* to_remove = *current;
+            *current = (*current)->next;
+            free(to_remove);
+            hl_free_count++;
+            return;
+        }
+        current = &(*current)->next;
+    }
+}
+
+HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key) {
+    if (!obj || !key) return NULL;
+
+    for (size_t i = 0; i < obj->property_count; i++) {
+        if (strcmp(obj->properties[i].key, key) == 0) {
+            if (obj->properties[i].value.type == HL_VALUE_OBJECT) {
+                return &obj->properties[i].value.value.obj_val;
+            }
+        }
+    }
+    return NULL;
 }

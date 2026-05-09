@@ -476,6 +476,21 @@ impl TypeChecker {
             Expression::ObjectLiteral(obj_lit) => self.check_object_literal(obj_lit),
             Expression::FunctionExpr(func_expr) => self.check_function_expression(func_expr),
             Expression::Match(match_expr) => self.check_match_expression(match_expr),
+            Expression::WeakRef(expr, pos) => {
+                // Check that the expression has Object type
+                let expr_type = self.check_expression(expr);
+                if !matches!(expr_type, Type::Object(_)) {
+                    self.add_error(
+                        format!("weak can only be applied to object types, found {}", expr_type),
+                        pos.clone()
+                    );
+                    Type::Unknown
+                } else {
+                    // Return the same type as the expression (Object type)
+                    // The weak flag will be tracked at codegen time
+                    expr_type
+                }
+            },
         }
     }
 
@@ -1362,6 +1377,10 @@ impl TypeChecker {
                     }
                 }
             }
+            Expression::WeakRef(expr, _) => {
+                // Check for captures in the inner expression
+                self.check_for_captures_in_expression(expr, outer_scope_depth);
+            }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
@@ -1519,6 +1538,10 @@ impl TypeChecker {
                     }
                 }
             }
+            Expression::WeakRef(expr, _) => {
+                // Collect captures in the inner expression
+                self.collect_captures_in_expression(expr, outer_scope_depth, captures);
+            }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
@@ -1652,6 +1675,7 @@ impl HasPosition for Expression {
             Expression::ObjectLiteral(obj_lit) => obj_lit.position.clone(),
             Expression::FunctionExpr(func_expr) => func_expr.position.clone(),
             Expression::Match(match_expr) => match_expr.position.clone(),
+            Expression::WeakRef(_, pos) => pos.clone(),
         }
     }
 

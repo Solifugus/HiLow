@@ -61,10 +61,15 @@ typedef struct HiLowValue {
     } value;
 } HiLowValue;
 
+// Forward declaration for weak reference tracking (Phase 8c)
+struct HiLowObject;
+struct WeakRef;
+
 // Property in an object (key-value pair)
 typedef struct Property {
     const char* key;
     HiLowValue value;
+    bool is_weak;  // NEW: indicates if this property holds a weak reference
 } Property;
 
 // Object representation (heap-allocated with property table)
@@ -73,7 +78,14 @@ typedef struct HiLowObject {
     Property* properties;
     size_t property_count;
     size_t property_capacity;
+    struct WeakRef* weak_refs; // NEW: linked list of weak references to this object
 } HiLowObject;
+
+// Weak reference tracking (Phase 8c)
+typedef struct WeakRef {
+    HiLowObject** location;  // address of the pointer to invalidate
+    struct WeakRef* next;
+} WeakRef;
 
 // Object operations
 HiLowObject* hl_object_new(void);
@@ -146,5 +158,10 @@ void hl_object_retain(HiLowObject* obj);
 void hl_object_release(HiLowObject* obj);
 void hl_function_retain(HiLowFunction* fn);
 void hl_function_release(HiLowFunction* fn);
+
+// Weak reference operations (Phase 8c)
+void hl_object_weak_register(HiLowObject* target, HiLowObject** location);
+void hl_object_weak_unregister(HiLowObject* target, HiLowObject** location);
+HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key);
 
 #endif // HILOW_RUNTIME_H

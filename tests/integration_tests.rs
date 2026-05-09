@@ -1731,3 +1731,43 @@ fn test_accept_local_closure_no_capture_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_weak_basic_integration() {
+    let executable = compile_program("tests/programs/weak_basic.hl")
+        .expect("Failed to compile weak_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run weak_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/weak_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_weak_breaks_cycle_integration() {
+    let executable = compile_program("tests/programs/weak_breaks_cycle.hl")
+        .expect("Failed to compile weak_breaks_cycle.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run weak_breaks_cycle");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no leaks)");
+    assert!(stderr.is_empty(), "No stderr output expected (no leak messages)");
+
+    let expected_output = fs::read_to_string("tests/expected/weak_breaks_cycle.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
