@@ -1654,8 +1654,8 @@ fn test_scope_object_in_loop_integration() {
 
 #[test]
 fn test_accept_function_in_object_integration() {
-    let executable = compile_program("tests/programs/reject_function_in_object.hl")
-        .expect("Failed to compile reject_function_in_object.hl (now accept)");
+    let executable = compile_program("tests/programs/accept_function_in_object.hl")
+        .expect("Failed to compile accept_function_in_object.hl");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
         .expect("Failed to run function in object program");
@@ -1663,7 +1663,7 @@ fn test_accept_function_in_object_integration() {
     assert_eq!(exit_code, 0, "Program should exit with code 0 (no leaks)");
     assert!(stderr.is_empty(), "No stderr output expected (no leak messages)");
 
-    let expected_output = fs::read_to_string("tests/expected/reject_function_in_object.txt")
+    let expected_output = fs::read_to_string("tests/expected/accept_function_in_object.txt")
         .expect("Failed to read expected output");
 
     assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
@@ -1674,8 +1674,8 @@ fn test_accept_function_in_object_integration() {
 
 #[test]
 fn test_accept_escaping_closure_integration() {
-    let executable = compile_program("tests/programs/reject_escaping_closure.hl")
-        .expect("Failed to compile reject_escaping_closure.hl (now accept)");
+    let executable = compile_program("tests/programs/accept_escaping_closure.hl")
+        .expect("Failed to compile accept_escaping_closure.hl");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
         .expect("Failed to run escaping closure program");
@@ -1683,7 +1683,7 @@ fn test_accept_escaping_closure_integration() {
     assert_eq!(exit_code, 0, "Program should exit with code 0 (no leaks)");
     assert!(stderr.is_empty(), "No stderr output expected (no leak messages)");
 
-    let expected_output = fs::read_to_string("tests/expected/reject_escaping_closure.txt")
+    let expected_output = fs::read_to_string("tests/expected/accept_escaping_closure.txt")
         .expect("Failed to read expected output");
 
     assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
@@ -1694,8 +1694,8 @@ fn test_accept_escaping_closure_integration() {
 
 #[test]
 fn test_accept_object_alias_integration() {
-    let executable = compile_program("tests/programs/reject_object_alias.hl")
-        .expect("Failed to compile reject_object_alias.hl (now accept)");
+    let executable = compile_program("tests/programs/accept_object_alias.hl")
+        .expect("Failed to compile accept_object_alias.hl");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
         .expect("Failed to run object alias program");
@@ -1703,7 +1703,7 @@ fn test_accept_object_alias_integration() {
     assert_eq!(exit_code, 0, "Program should exit with code 0 (no leaks)");
     assert!(stderr.is_empty(), "No stderr output expected (no leak messages)");
 
-    let expected_output = fs::read_to_string("tests/expected/reject_object_alias.txt")
+    let expected_output = fs::read_to_string("tests/expected/accept_object_alias.txt")
         .expect("Failed to read expected output");
 
     assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
