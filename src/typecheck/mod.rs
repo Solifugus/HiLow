@@ -425,6 +425,7 @@ impl TypeChecker {
             Expression::QualifiedOp(qualified_op) => self.check_qualified_op_expression(qualified_op),
             Expression::ObjectLiteral(obj_lit) => self.check_object_literal(obj_lit),
             Expression::FunctionExpr(func_expr) => self.check_function_expression(func_expr),
+            Expression::Match(match_expr) => self.check_match_expression(match_expr),
         }
     }
 
@@ -1283,6 +1284,21 @@ impl TypeChecker {
                 // Nested function expressions get their own capture check
                 self.check_function_expression(func_expr);
             }
+            Expression::Match(match_expr) => {
+                self.check_for_captures_in_expression(&match_expr.value, outer_scope_depth);
+                for arm in &match_expr.arms {
+                    match &arm.body {
+                        MatchBody::Expression(expr) => {
+                            self.check_for_captures_in_expression(expr, outer_scope_depth);
+                        }
+                        MatchBody::Block(block) => {
+                            for stmt in &block.statements {
+                                self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                            }
+                        }
+                    }
+                }
+            }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
@@ -1412,6 +1428,21 @@ impl TypeChecker {
                 // Nested function expressions get their own capture check
                 self.check_function_expression(func_expr);
             }
+            Expression::Match(match_expr) => {
+                self.collect_captures_in_expression(&match_expr.value, outer_scope_depth, captures);
+                for arm in &match_expr.arms {
+                    match &arm.body {
+                        MatchBody::Expression(expr) => {
+                            self.collect_captures_in_expression(expr, outer_scope_depth, captures);
+                        }
+                        MatchBody::Block(block) => {
+                            for stmt in &block.statements {
+                                self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                            }
+                        }
+                    }
+                }
+            }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::This(_) => {
@@ -1430,6 +1461,92 @@ impl TypeChecker {
             }
         }
         None
+    }
+
+    fn check_match_expression(&mut self, match_expr: &MatchExpr) -> Type {
+        // Check the matched expression
+        let matched_type = self.check_expression(&match_expr.value);
+
+        // Check all arms
+        let mut arm_types = Vec::new();
+        let mut has_wildcard = false;
+
+        for arm in &match_expr.arms {
+            // Check pattern compatibility with matched expression type
+            match &arm.pattern {
+                MatchPattern::Literal(literal) => {
+                    let pattern_type = self.get_literal_type(literal);
+                    if pattern_type != matched_type {
+                        self.add_error(
+                            format!("Match pattern type {} does not match expression type {}",
+                                pattern_type, matched_type),
+                            arm.position.clone()
+                        );
+                    }
+                }
+                MatchPattern::Wildcard => {
+                    has_wildcard = true;
+                }
+            }
+
+            // Check body and collect its type
+            let body_type = match &arm.body {
+                MatchBody::Expression(expr) => self.check_expression(expr),
+                MatchBody::Block(block) => {
+                    // For blocks in match arms, we consider the type to be Nothing
+                    // unless it's used as an expression (then it needs a return type)
+                    self.enter_scope();
+                    self.check_block(block);
+                    self.exit_scope();
+                    Type::Nothing  // Blocks don't have return values in this context
+                }
+            };
+
+            arm_types.push(body_type);
+        }
+
+        // For match as expression: check that all arms have same type and exhaustiveness
+        // For match as statement: no type checking needed
+        // We can't distinguish context here, so we'll be permissive for now
+
+        // Check type consistency for expression context
+        if !arm_types.is_empty() {
+            let first_type = &arm_types[0];
+            for (i, arm_type) in arm_types.iter().enumerate().skip(1) {
+                if arm_type != first_type && *arm_type != Type::Nothing && *first_type != Type::Nothing {
+                    self.add_error(
+                        format!("Match arm {} has type {} but first arm has type {}",
+                            i + 1, arm_type, first_type),
+                        match_expr.arms[i].position.clone()
+                    );
+                }
+            }
+
+            // For exhaustiveness check on expressions with non-Nothing types
+            if !has_wildcard && *first_type != Type::Nothing {
+                // For now, only require wildcard for non-boolean types
+                // (boolean can be exhaustive with just true/false)
+                if matched_type != Type::Bool {
+                    self.add_error(
+                        "Match expression must be exhaustive; add a wildcard pattern (_) or cover all values".to_string(),
+                        match_expr.position.clone()
+                    );
+                }
+            }
+
+            first_type.clone()
+        } else {
+            Type::Nothing
+        }
+    }
+
+    fn get_literal_type(&self, literal: &Literal) -> Type {
+        match literal {
+            Literal::Integer(value) => Type::default_integer_type(*value),
+            Literal::Float(_) => Type::default_float_type(),
+            Literal::String(_) => Type::String,
+            Literal::Bool(_) => Type::Bool,
+        }
     }
 }
 
@@ -1458,6 +1575,7 @@ impl HasPosition for Expression {
             Expression::QualifiedOp(qualified_op) => qualified_op.position.clone(),
             Expression::ObjectLiteral(obj_lit) => obj_lit.position.clone(),
             Expression::FunctionExpr(func_expr) => func_expr.position.clone(),
+            Expression::Match(match_expr) => match_expr.position.clone(),
         }
     }
 

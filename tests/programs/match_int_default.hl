@@ -1,0 +1,9 @@
+high program(): i32 {
+  let x = 99
+  match x {
+    0 => print("zero"),
+    1 => print("one"),
+    _ => print("other")
+  }
+  return 0
+}

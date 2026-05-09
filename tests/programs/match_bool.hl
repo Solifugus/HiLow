@@ -1,0 +1,8 @@
+high program(): i32 {
+  let active = true
+  match active {
+    true => print("yes"),
+    false => print("no")
+  }
+  return 0
+}

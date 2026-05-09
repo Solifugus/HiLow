@@ -917,6 +917,10 @@ impl Parser {
                 // Function expression
                 self.parse_function_expression(token.position)
             }
+            TokenKind::Match => {
+                // Match expression
+                self.parse_match_expression(token.position)
+            }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
                 found: token.kind,
@@ -1079,6 +1083,28 @@ impl Parser {
 
     fn is_at_end(&self) -> bool {
         self.current >= self.tokens.len()
+    }
+
+    fn current_position(&self) -> Position {
+        if self.is_at_end() {
+            if self.tokens.is_empty() {
+                Position { line: 1, column: 1 }
+            } else {
+                self.tokens[self.tokens.len() - 1].position.clone()
+            }
+        } else {
+            self.tokens[self.current].position.clone()
+        }
+    }
+
+    fn previous(&self) -> Result<&Token, ParseError> {
+        if self.current == 0 {
+            return Err(ParseError::UnexpectedEof {
+                expected: "previous token".to_string(),
+                position: Position { line: 1, column: 1 },
+            });
+        }
+        Ok(&self.tokens[self.current - 1])
     }
 
     fn skip_semicolons(&mut self) {
@@ -1474,5 +1500,87 @@ impl Parser {
             position: start_pos,
             captures: RefCell::new(Vec::new()),  // Initialized by parser, populated by type checker
         }))
+    }
+
+    fn parse_match_expression(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        // Parse the matched expression
+        let value = self.parse_expression()?;
+
+        // Expect opening brace
+        self.expect_token(TokenKind::LeftBrace, "Expected '{' after match expression")?;
+
+        let mut arms = Vec::new();
+
+        // Parse match arms
+        while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
+            let arm_pos = self.current_position();
+
+            // Parse pattern
+            let pattern = self.parse_match_pattern()?;
+
+            // Expect arrow
+            self.expect_token(TokenKind::Arrow, "Expected '=>' after match pattern")?;
+
+            // Parse body
+            let body = self.parse_match_body()?;
+
+            arms.push(MatchArm {
+                pattern,
+                body,
+                position: arm_pos,
+            });
+
+            // Optional comma after arm
+            if self.check(&TokenKind::Comma) {
+                self.advance()?;
+            }
+        }
+
+        // Expect closing brace
+        self.expect_token(TokenKind::RightBrace, "Expected '}' after match arms")?;
+
+        if arms.is_empty() {
+            return Err(ParseError::UnexpectedToken {
+                expected: "at least one match arm".to_string(),
+                found: TokenKind::RightBrace,
+                position: self.previous()?.position.clone(),
+            });
+        }
+
+        Ok(Expression::Match(MatchExpr {
+            value: Box::new(value),
+            arms,
+            position: start_pos,
+        }))
+    }
+
+    fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
+        let token = self.advance()?;
+
+        match token.kind {
+            TokenKind::Integer(n) => Ok(MatchPattern::Literal(Literal::Integer(n))),
+            TokenKind::Float(f) => Ok(MatchPattern::Literal(Literal::Float(f))),
+            TokenKind::StringLit(s) => Ok(MatchPattern::Literal(Literal::String(s))),
+            TokenKind::True => Ok(MatchPattern::Literal(Literal::Bool(true))),
+            TokenKind::False => Ok(MatchPattern::Literal(Literal::Bool(false))),
+            TokenKind::Identifier if token.lexeme == "_" => Ok(MatchPattern::Wildcard),
+            _ => Err(ParseError::UnexpectedToken {
+                expected: "literal or wildcard pattern".to_string(),
+                found: token.kind,
+                position: token.position,
+            }),
+        }
+    }
+
+    fn parse_match_body(&mut self) -> Result<MatchBody, ParseError> {
+        if self.check(&TokenKind::LeftBrace) {
+            // Block body
+            let block = self.parse_block()?;
+            Ok(MatchBody::Block(block))
+        } else {
+            // Expression body
+            let expr = self.parse_expression()?;
+            Ok(MatchBody::Expression(expr))
+        }
     }
 }

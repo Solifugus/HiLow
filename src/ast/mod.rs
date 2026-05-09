@@ -218,6 +218,40 @@ pub struct FunctionExpr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum MatchPattern {
+    Literal(Literal),
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MatchBody {
+    Expression(Expression),
+    Block(Block),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: MatchBody,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchExpr {
+    pub value: Box<Expression>,
+    pub arms: Vec<MatchArm>,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Literal {
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
@@ -236,6 +270,7 @@ pub enum Expression {
     QualifiedOp(QualifiedOp),
     ObjectLiteral(ObjectLiteral),
     FunctionExpr(FunctionExpr),
+    Match(MatchExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]

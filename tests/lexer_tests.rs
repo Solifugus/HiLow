@@ -957,3 +957,31 @@ fn test_fstring_multiple_expressions_single_spaces() {
     assert_eq!(text_tokens[0], " ", "First space should be preserved");
     assert_eq!(text_tokens[1], " ", "Second space should be preserved");
 }
+
+#[test]
+fn test_arrow_token() {
+    let input = "=>";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2); // arrow + EOF
+    assert_eq!(tokens[0].kind, TokenKind::Arrow);
+    assert_eq!(tokens[0].lexeme, "=>");
+}
+
+#[test]
+fn test_arrow_vs_assignment() {
+    let input = "= => ==";
+    let tokens = Lexer::new(input).tokens();
+
+    // Should have Equal, Arrow tokens, but == should error
+    match tokens {
+        Ok(_) => panic!("Should error on == token"),
+        Err(_) => {
+            // Expected error for ==
+            let input2 = "= =>";
+            let tokens2 = Lexer::new(input2).tokens().unwrap();
+            assert_eq!(tokens2.len(), 3); // Equal, Arrow, EOF
+            assert_eq!(tokens2[0].kind, TokenKind::Equal);
+            assert_eq!(tokens2[1].kind, TokenKind::Arrow);
+        }
+    }
+}

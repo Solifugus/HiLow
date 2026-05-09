@@ -1260,3 +1260,130 @@ fn test_for_in_proto_excluded_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Match expression integration tests
+#[test]
+fn test_match_int_integration() {
+    let expected_output = fs::read_to_string("tests/expected/match_int.txt")
+        .expect("Failed to read expected output");
+
+    let executable = compile_program("tests/programs/match_int.hl")
+        .expect("Failed to compile match_int");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run match_int");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_match_int_default_integration() {
+    let expected_output = fs::read_to_string("tests/expected/match_int_default.txt")
+        .expect("Failed to read expected output");
+
+    let executable = compile_program("tests/programs/match_int_default.hl")
+        .expect("Failed to compile match_int_default");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run match_int_default");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_match_string_integration() {
+    let expected_output = fs::read_to_string("tests/expected/match_string.txt")
+        .expect("Failed to read expected output");
+
+    let executable = compile_program("tests/programs/match_string.hl")
+        .expect("Failed to compile match_string");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run match_string");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_match_bool_integration() {
+    let expected_output = fs::read_to_string("tests/expected/match_bool.txt")
+        .expect("Failed to read expected output");
+
+    let executable = compile_program("tests/programs/match_bool.hl")
+        .expect("Failed to compile match_bool");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run match_bool");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_match_as_expression_integration() {
+    let expected_output = fs::read_to_string("tests/expected/match_as_expression.txt")
+        .expect("Failed to read expected output");
+
+    let executable = compile_program("tests/programs/match_as_expression.hl")
+        .expect("Failed to compile match_as_expression");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run match_as_expression");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_match_block_body_integration() {
+    let expected_output = fs::read_to_string("tests/expected/match_block_body.txt")
+        .expect("Failed to read expected output");
+
+    let executable = compile_program("tests/programs/match_block_body.hl")
+        .expect("Failed to compile match_block_body");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run match_block_body");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_match_non_exhaustive_expression_error_integration() {
+    let result = compile_program("tests/programs/match_non_exhaustive_expression_error.hl");
+
+    // This should fail to compile
+    assert!(result.is_err(), "Expected compilation to fail for non-exhaustive match expression");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("exhaustive") || error_message.contains("wildcard"),
+            "Error should mention exhaustiveness or wildcard requirement, got: {}", error_message);
+}

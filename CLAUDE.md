@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 7c-η — Match Expressions**
+**Current phase: Phase 7c-θ — Switch Statements**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

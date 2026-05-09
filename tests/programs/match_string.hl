@@ -1,0 +1,10 @@
+high program(): i32 {
+  let role = "admin"
+  match role {
+    "user" => print("read-only"),
+    "editor" => print("can edit"),
+    "admin" => print("full access"),
+    _ => print("unknown role")
+  }
+  return 0
+}

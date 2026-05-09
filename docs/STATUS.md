@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 7c-ζ — For-In Iteration  
-**Status:** Complete - all for-in iteration tests pass end-to-end
+**Phase:** Phase 7c-η — Match Expressions  
+**Status:** Complete - all match expression tests pass end-to-end
 **Branch:** main
-**Last commit:** Phase 7c-ε: Method this binding
+**Last commit:** Phase 7c-η: Match expressions
 
 ---
 
@@ -20,6 +20,20 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-08 — Phase 7c-η: Match Expressions complete
+- **Context**: Phase 7c-ζ (for-in iteration) was complete, now implementing match expressions with literal patterns and wildcard matching; syntax `match expr { pattern => body, _ => default }` for both statement and expression contexts
+- **AST extensions**: Added `MatchExpr`, `MatchArm`, `MatchPattern` (Literal/Wildcard), `MatchBody` (Expression/Block), and `Literal` enum for pattern literals; added `Expression::Match` variant; enhanced existing expression match statements to handle Match cases
+- **Lexer support**: Added `Arrow` token (=>) for match arm syntax; enhanced lexer to distinguish `=>` from `=` and `>` operators; added lexer tests for arrow token validation
+- **Parser implementation**: Enhanced `parse_primary_expression` to handle `match` keyword; implemented `parse_match_expression`, `parse_match_pattern`, and `parse_match_body` methods; supports literal patterns (integers, strings, booleans) and wildcard `_` pattern
+- **Type system enhancements**: Added `check_match_expression` with pattern-expression type compatibility validation; exhaustiveness checking for expression context (requires wildcard for non-boolean types); boolean matches can be exhaustive with just true/false arms
+- **Statement vs expression context**: Match can be used as both statement (value discarded) and expression (value used); type checker enforces exhaustiveness only for expression context; same AST node works in both contexts
+- **Codegen implementation**: `generate_match_expression` emits C if-else chain with temporary variable for matched value; statement context generates direct if-else, expression context uses compound statement with result variable; string patterns use strcmp() for comparison
+- **Runtime dispatch**: Integer/boolean patterns use direct equality comparison; string patterns use `strcmp(__match_val, "literal") == 0`; wildcard patterns always match (condition: 1); proper C scoping with temporary variables
+- **Integration tests**: All seven canonical examples working end-to-end: integer matching (2 → "two"), string matching ("admin" → "full access"), boolean exhaustiveness (true → "yes"), match-as-expression ("one"), block bodies (10), default patterns ("other"), and compilation error for non-exhaustive expressions
+- **Verification**: All 72 integration tests + all unit tests passing; match expressions work correctly in both statement and expression contexts; proper exhaustiveness validation prevents runtime failures
+- **Core functionality**: Complete match expressions with literal patterns, wildcard patterns, both expression and block bodies, exhaustiveness checking, and proper C codegen for all pattern types
+- Commit: "Phase 7c-η: Match expressions"
 
 ### 2026-05-08 — Phase 7c-ζ: For-In Iteration over Objects complete
 - **Context**: Phase 7c-ε (method `this` binding) was complete, now implementing for-in iteration with syntax `for (let (key, value) in obj) { body }` that exposes each property as a key-value pair to the loop body

@@ -125,6 +125,9 @@ pub enum TokenKind {
     // Range operator
     DotDot,       // ..
 
+    // Arrow operator
+    Arrow,        // =>
+
     // Special
     Eof,
 }
@@ -538,6 +541,9 @@ impl Lexer {
                         position: start_pos,
                         suggestion: "'==' is not a valid operator in HiLow; use '?=' for equality or '=' for assignment".to_string(),
                     })
+                } else if self.peek() == '>' {
+                    self.advance();
+                    Ok(self.make_token(TokenKind::Arrow, start_pos, "=>".to_string()))
                 } else {
                     Ok(self.make_token(TokenKind::Equal, start_pos, "=".to_string()))
                 }

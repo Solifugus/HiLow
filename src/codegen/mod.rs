@@ -625,6 +625,9 @@ impl CodeGenerator {
             Expression::FunctionExpr(func_expr) => {
                 self.generate_function_expression(func_expr, type_checker)?;
             }
+            Expression::Match(match_expr) => {
+                self.generate_match_expression(match_expr, type_checker)?;
+            }
         }
         Ok(())
     }
@@ -1175,6 +1178,31 @@ impl CodeGenerator {
                     .collect();
                 let return_type = Type::from_ast_type(&func_expr.return_type);
                 Type::Function(param_types, Box::new(return_type))
+            }
+            Expression::Match(match_expr) => {
+                // For match expressions used in statement context, return Nothing
+                // For match expressions used as values, return the arm type
+                // Since we can't distinguish context here, check if all arms are statements
+                let all_void_expressions = match_expr.arms.iter().all(|arm| {
+                    match &arm.body {
+                        MatchBody::Expression(expr) => {
+                            // Check if this is a statement-like expression (e.g., print calls)
+                            matches!(expr, Expression::Call(_))
+                        }
+                        MatchBody::Block(_) => true, // Blocks don't return values
+                    }
+                });
+
+                if all_void_expressions {
+                    Type::Nothing
+                } else if let Some(first_arm) = match_expr.arms.first() {
+                    match &first_arm.body {
+                        MatchBody::Expression(expr) => self.infer_expression_type_for_codegen(expr),
+                        MatchBody::Block(_) => Type::Nothing,
+                    }
+                } else {
+                    Type::Nothing
+                }
             }
             _ => Type::Unknown
         }
@@ -2111,8 +2139,139 @@ impl CodeGenerator {
                 self.collect_captures_from_expression(&qualified_op.lhs, captured_locals);
                 self.collect_captures_from_expression(&qualified_op.rhs, captured_locals);
             }
+            Expression::Match(match_expr) => {
+                self.collect_captures_from_expression(&match_expr.value, captured_locals);
+                for arm in &match_expr.arms {
+                    match &arm.body {
+                        MatchBody::Expression(expr) => {
+                            self.collect_captures_from_expression(expr, captured_locals);
+                        }
+                        MatchBody::Block(block) => {
+                            self.collect_captures_from_statements(&block.statements, captured_locals);
+                        }
+                    }
+                }
+            }
             // Literals and identifiers don't contain function expressions
             _ => {}
         }
+    }
+
+    fn generate_match_expression(&mut self, match_expr: &MatchExpr, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate C code for match expression
+        // Strategy: use if-else chain with a temporary variable for the matched value
+
+        // Get type of matched expression
+        let matched_type = self.infer_expression_type_for_codegen(&match_expr.value);
+        let c_type = self.hilow_type_to_c(&matched_type);
+
+        // Check if we need to produce a result (expression context)
+        let result_type = self.infer_expression_type_for_codegen(&Expression::Match(match_expr.clone()));
+        let need_result = result_type != Type::Nothing && self.has_expression_body(match_expr);
+
+        if need_result {
+            // Expression context: use compound statement
+            self.output.push_str("({\n");
+        } else {
+            // Statement context: direct if-else
+            self.output.push_str("{\n");
+        }
+
+        // Emit temp variable declaration and assignment
+        self.output.push_str(&format!("    {} __match_val = ", c_type));
+        self.generate_expression(&match_expr.value, type_checker)?;
+        self.output.push_str(";\n");
+
+        // For match-as-expression, also declare result variable
+        if need_result {
+            let result_c_type = self.hilow_type_to_c(&result_type);
+            self.output.push_str(&format!("    {} __match_result;\n", result_c_type));
+        }
+
+        // Generate if-else chain for arms
+        let mut first_arm = true;
+        for arm in &match_expr.arms {
+            if first_arm {
+                self.output.push_str("    if (");
+                first_arm = false;
+            } else {
+                self.output.push_str(" else if (");
+            }
+
+            // Generate condition for pattern
+            match &arm.pattern {
+                MatchPattern::Literal(literal) => {
+                    self.generate_pattern_condition(&matched_type, literal)?;
+                }
+                MatchPattern::Wildcard => {
+                    // Wildcard matches everything - use 1 for true
+                    self.output.push_str("1");
+                }
+            }
+
+            self.output.push_str(") {\n");
+
+            // Generate body
+            match &arm.body {
+                MatchBody::Expression(expr) => {
+                    if need_result {
+                        self.output.push_str("        __match_result = ");
+                        self.generate_expression(expr, type_checker)?;
+                        self.output.push_str(";\n");
+                    } else {
+                        self.output.push_str("        ");
+                        self.generate_expression(expr, type_checker)?;
+                        self.output.push_str(";\n");
+                    }
+                }
+                MatchBody::Block(block) => {
+                    // Generate block statements with proper indentation
+                    for stmt in &block.statements {
+                        self.output.push_str("        ");
+                        self.generate_statement(stmt, type_checker)?;
+                    }
+                }
+            }
+
+            self.output.push_str("    }");
+        }
+
+        // Close the if-else chain
+        self.output.push_str("\n");
+
+        // Return result for expression context
+        if need_result {
+            self.output.push_str("    __match_result;\n");
+            self.output.push_str("})");
+        } else {
+            self.output.push_str("}");
+        }
+
+        Ok(())
+    }
+
+    fn has_expression_body(&self, match_expr: &MatchExpr) -> bool {
+        // Check if any arm has an expression body (not just blocks)
+        match_expr.arms.iter().any(|arm| matches!(arm.body, MatchBody::Expression(_)))
+    }
+
+    fn generate_pattern_condition(&mut self, matched_type: &Type, literal: &Literal) -> Result<(), CodegenError> {
+        // Generate condition to check if __match_val equals the literal
+        match literal {
+            Literal::Integer(n) => {
+                self.output.push_str(&format!("__match_val == {}", n));
+            }
+            Literal::Float(f) => {
+                self.output.push_str(&format!("__match_val == {}", f));
+            }
+            Literal::String(s) => {
+                self.output.push_str(&format!("strcmp(__match_val, \"{}\") == 0", s));
+            }
+            Literal::Bool(b) => {
+                let value = if *b { "1" } else { "0" };
+                self.output.push_str(&format!("__match_val == {}", value));
+            }
+        }
+        Ok(())
     }
 }

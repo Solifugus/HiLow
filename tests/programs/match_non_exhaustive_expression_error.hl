@@ -1,0 +1,9 @@
+high program(): i32 {
+  let x = 1
+  let label = match x {
+    0 => "zero",
+    1 => "one"
+  }
+  print(label)
+  return 0
+}
