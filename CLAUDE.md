@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 8c — Manual Mode and Weak References**
+**Current phase: Phase 9 — Special Types (nothing, unknown, etc.)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
