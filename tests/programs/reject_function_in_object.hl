@@ -1,0 +1,6 @@
+high program(): i32 {
+  let obj = {
+    greet: function(): i32 { return 42 }
+  }
+  return 0
+}

@@ -1660,3 +1660,58 @@ fn test_scope_object_in_loop_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 8a fix: Multi-owner rejection tests
+
+#[test]
+fn test_reject_function_in_object_integration() {
+    let result = compile_program("tests/programs/reject_function_in_object.hl");
+
+    assert!(result.is_err(), "Expected compilation to fail for function stored as object property");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("Multi-owner") && error_message.contains("Phase 8b"),
+            "Error should mention multi-owner and Phase 8b, got: {}", error_message);
+}
+
+#[test]
+fn test_reject_escaping_closure_integration() {
+    let result = compile_program("tests/programs/reject_escaping_closure.hl");
+
+    assert!(result.is_err(), "Expected compilation to fail for escaping closure with captures");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("Multi-owner") && error_message.contains("Phase 8b"),
+            "Error should mention multi-owner and Phase 8b, got: {}", error_message);
+}
+
+#[test]
+fn test_reject_object_alias_integration() {
+    let result = compile_program("tests/programs/reject_object_alias.hl");
+
+    assert!(result.is_err(), "Expected compilation to fail for object aliasing");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("Multi-owner") && error_message.contains("Phase 8b"),
+            "Error should mention multi-owner and Phase 8b, got: {}", error_message);
+}
+
+#[test]
+fn test_accept_local_closure_no_capture_integration() {
+    let executable = compile_program("tests/programs/accept_local_closure_no_capture.hl")
+        .expect("Failed to compile accept_local_closure_no_capture.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run accept_local_closure_no_capture");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no leaks)");
+    assert!(stderr.is_empty(), "No stderr output expected (no leak messages)");
+
+    let expected_output = fs::read_to_string("tests/expected/accept_local_closure_no_capture.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

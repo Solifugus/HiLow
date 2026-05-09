@@ -13,12 +13,24 @@ pub enum HeapType {
     FStringBuffer,  // char* from f-string
 }
 
+/// Context for function expression generation to detect escaping closures (Phase 8a)
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionExprContext {
+    Normal,           // Regular expression context
+    ReturnValue,      // Being returned from function
+    ObjectProperty,   // Being stored as object property
+    LetInitializer,   // Being assigned to let variable
+}
+
 /// Errors that can occur during code generation
 #[derive(Debug)]
 pub enum CodegenError {
     UnsupportedFeature {
         feature: String,
         phase: String,
+    },
+    MultiOwnerHeapValue {
+        message: String,
     },
 }
 
@@ -27,6 +39,9 @@ impl std::fmt::Display for CodegenError {
         match self {
             CodegenError::UnsupportedFeature { feature, phase } => {
                 write!(f, "Unsupported feature '{}' - will be implemented in {}", feature, phase)
+            }
+            CodegenError::MultiOwnerHeapValue { message } => {
+                write!(f, "{}", message)
             }
         }
     }
@@ -68,6 +83,10 @@ pub struct CodeGenerator {
     scope_depth: usize,
     /// Phase 8a: Variables that have had ownership transferred (don't free these)
     transferred_vars: HashSet<String>,
+    /// Phase 8a: Whether we're currently generating the main program (for special return handling)
+    in_main_program: bool,
+    /// Phase 8a: Context for function expression generation (to detect escaping closures)
+    function_expr_context: FunctionExprContext,
 }
 
 impl CodeGenerator {
@@ -88,6 +107,8 @@ impl CodeGenerator {
             heap_owners: HashMap::new(),
             scope_depth: 0,
             transferred_vars: HashSet::new(),
+            in_main_program: false,
+            function_expr_context: FunctionExprContext::Normal,
         }
     }
 
@@ -143,9 +164,17 @@ impl CodeGenerator {
 
         // Generate the main function
         self.output.push_str("int main() {\n");
+        self.output.push_str("  int return_value = 0;\n"); // Default return value
 
         if let Some(body) = &program.body {
+            // Mark that we're in the main program
+            self.in_main_program = true;
+            self.scope_depth = 1; // Main program starts at scope 1
             self.generate_program_body_statements(body, type_checker)?;
+            self.in_main_program = false;
+
+            // Phase 8a: Emit cleanup for all heap-owned variables in main scope
+            self.emit_scope_cleanup(1);
         }
 
         // Phase 8a: Emit memory leak check before program exit
@@ -155,6 +184,7 @@ impl CodeGenerator {
         self.output.push_str("                hl_alloc_count, hl_free_count, hl_alloc_count - hl_free_count);\n");
         self.output.push_str("        return 1;\n");
         self.output.push_str("    }\n");
+        self.output.push_str("    return return_value;\n");
 
         self.output.push_str("}\n");
         Ok(())
@@ -373,7 +403,11 @@ impl CodeGenerator {
 
             if let Some(ref initializer) = let_decl.initializer {
                 self.output.push_str(" = ");
+                // Phase 8a: Set context for escaping closure detection
+                let old_context = self.function_expr_context.clone();
+                self.function_expr_context = FunctionExprContext::LetInitializer;
                 self.generate_expression(initializer, type_checker)?;
+                self.function_expr_context = old_context;
             } else {
                 // Default initialization (though this shouldn't happen per Phase 2b rules)
                 self.output.push_str(" = 0");
@@ -388,7 +422,11 @@ impl CodeGenerator {
 
             if let Some(ref initializer) = let_decl.initializer {
                 self.output.push_str(" = ");
+                // Phase 8a: Set context for escaping closure detection
+                let old_context = self.function_expr_context.clone();
+                self.function_expr_context = FunctionExprContext::LetInitializer;
                 self.generate_expression(initializer, type_checker)?;
+                self.function_expr_context = old_context;
             }
 
             self.output.push_str(";\n");
@@ -425,6 +463,14 @@ impl CodeGenerator {
                         }
                     }
                 }
+                Expression::Ident(var_name, _) => {
+                    // Phase 8a: Check for heap value aliasing (multi-ownership)
+                    if self.heap_owners.contains_key(var_name) {
+                        return Err(CodegenError::MultiOwnerHeapValue {
+                            message: format!("Multi-owner heap value not yet supported (Phase 8b will add refcounting). Variable '{}' aliases another heap-owning variable.", &let_decl.name)
+                        });
+                    }
+                }
                 _ => {} // Non-heap-allocating expressions
             }
         }
@@ -444,17 +490,38 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 8a: Emit cleanup for all scopes before returning
-        for scope in (1..=self.scope_depth).rev() {
-            self.emit_scope_cleanup(scope);
-        }
+        if self.in_main_program {
+            // In main program: set return_value and let normal cleanup happen
+            self.output.push_str("  return_value = ");
+            if let Some(ref value) = return_stmt.value {
+                // Phase 8a: Set context for escaping closure detection
+                let old_context = self.function_expr_context.clone();
+                self.function_expr_context = FunctionExprContext::ReturnValue;
+                self.generate_expression(value, type_checker)?;
+                self.function_expr_context = old_context;
+            } else {
+                self.output.push_str("0");
+            }
+            self.output.push_str(";\n");
+            // Note: cleanup will happen at end of main program scope
+        } else {
+            // In regular function: emit cleanup and return immediately
+            // Phase 8a: Emit cleanup for all scopes before returning
+            for scope in (1..=self.scope_depth).rev() {
+                self.emit_scope_cleanup(scope);
+            }
 
-        self.output.push_str("  return");
-        if let Some(ref value) = return_stmt.value {
-            self.output.push_str(" ");
-            self.generate_expression(value, type_checker)?;
+            self.output.push_str("  return");
+            if let Some(ref value) = return_stmt.value {
+                self.output.push_str(" ");
+                // Phase 8a: Set context for escaping closure detection
+                let old_context = self.function_expr_context.clone();
+                self.function_expr_context = FunctionExprContext::ReturnValue;
+                self.generate_expression(value, type_checker)?;
+                self.function_expr_context = old_context;
+            }
+            self.output.push_str(";\n");
         }
-        self.output.push_str(";\n");
         Ok(())
     }
 
@@ -1803,6 +1870,15 @@ impl CodeGenerator {
     }
 
     fn generate_object_literal(&mut self, obj_lit: &ObjectLiteral, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 8a: Check for multi-owner heap values stored as object properties
+        for (prop_name, prop_expr) in &obj_lit.properties {
+            if self.is_heap_allocating_expression(prop_expr) {
+                return Err(CodegenError::MultiOwnerHeapValue {
+                    message: format!("Multi-owner heap value not yet supported (Phase 8b will add refcounting). Property '{}' on the object holds a heap value.", prop_name)
+                });
+            }
+        }
+
         // First, determine the complete object type for method context
         let mut object_properties = Vec::new();
         for (prop_name, prop_expr) in &obj_lit.properties {
@@ -1974,15 +2050,14 @@ impl CodeGenerator {
         let captures = func_expr.captures.borrow();
         let has_captures = !captures.is_empty();
 
-        // Phase 8a: Check for captured heap-owning variables (multi-ownership)
-        if has_captures {
-            for (var_name, _var_type, _pos) in captures.iter() {
-                if self.heap_owners.contains_key(var_name) {
-                    let var_name_owned = var_name.clone();
-                    drop(captures); // Release the borrow before returning error
-                    return self.check_multi_ownership(&var_name_owned, "captured by a function expression");
-                }
-            }
+        // Phase 8a: Check for escaping closure with captures (multi-ownership)
+        if has_captures && self.function_expr_context != FunctionExprContext::Normal {
+            // Find any captured variable for the error message
+            let captured_var = captures.iter().next().map(|(var_name, _, _)| var_name.clone()).unwrap_or_default();
+            drop(captures); // Release the borrow before returning error
+            return Err(CodegenError::MultiOwnerHeapValue {
+                message: format!("Multi-owner heap value not yet supported (Phase 8b will add refcounting). Closure captures '{}' and escapes its declaring scope.", captured_var)
+            });
         }
 
         let env_struct_name = if has_captures {
@@ -2062,10 +2137,13 @@ impl CodeGenerator {
             self.variable_types.insert(param.name.clone(), param_type);
         }
 
-        // Generate function body
+        // Generate function body (not in main program context)
+        let old_in_main_program = self.in_main_program;
+        self.in_main_program = false;
         for stmt in &func_expr.body.statements {
             self.generate_statement(stmt, type_checker)?;
         }
+        self.in_main_program = old_in_main_program;
 
         // Restore environment state
         self.variable_types = old_variable_types;
@@ -2589,15 +2667,16 @@ impl CodeGenerator {
         // Emit free calls in reverse order (LIFO scope cleanup)
         for var_name in vars_to_free.iter().rev() {
             if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
+                let c_var_name = self.mangle_variable_name(var_name);
                 match heap_type {
                     HeapType::Object => {
-                        self.output.push_str(&format!("    hl_object_free({});\n", var_name));
+                        self.output.push_str(&format!("    hl_object_free({});\n", c_var_name));
                     }
                     HeapType::Function => {
-                        self.output.push_str(&format!("    hl_function_free({});\n", var_name));
+                        self.output.push_str(&format!("    hl_function_free({});\n", c_var_name));
                     }
                     HeapType::Environment => {
-                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
+                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
                     }
                     HeapType::FStringBuffer => {
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
@@ -2621,5 +2700,27 @@ impl CodeGenerator {
             });
         }
         Ok(())
+    }
+
+    /// Phase 8a: Check if an expression creates a heap allocation
+    fn is_heap_allocating_expression(&self, expr: &Expression) -> bool {
+        match expr {
+            Expression::FunctionExpr(_) => true,
+            Expression::ObjectLiteral(_) => true,
+            Expression::FString(_) => true,
+            Expression::Call(call_expr) => {
+                // Check if this is a function call that returns a heap value
+                if let Expression::Ident(func_name, _) = call_expr.callee.as_ref() {
+                    if let Some(return_type) = self.functions.get(func_name) {
+                        matches!(return_type, Type::Object(_) | Type::Function(_, _))
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 }

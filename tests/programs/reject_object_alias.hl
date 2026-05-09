@@ -1,0 +1,5 @@
+high program(): i32 {
+  let a = { x: 1 }
+  let b = a
+  return 0
+}

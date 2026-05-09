@@ -54,8 +54,8 @@ fn test_return_statement_codegen() {
     assert!(result.is_ok());
     let c_code = result.unwrap();
 
-    // Should generate return statement
-    assert!(c_code.contains("return 42"));
+    // Should generate return_value assignment for main program (Phase 8a fix)
+    assert!(c_code.contains("return_value = 42"));
 }
 
 #[test]

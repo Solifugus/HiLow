@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 8a — Scope-Based Memory Cleanup  
-**Status:** Complete - automatic memory cleanup for single-owner heap allocations implemented with debug leak detection
+**Phase:** Phase 8b — Refcounting for Escaped Values  
+**Status:** Ready for implementation - Phase 8a fixes completed with compile-time multi-owner rejection and complete leak coverage
 **Branch:** main
-**Last commit:** Phase 8a: Scope-based memory cleanup; debug allocator added
+**Last commit:** Phase 8a fix: add compile-time multi-owner rejection and complete leak coverage
 
 ---
 
@@ -20,6 +20,18 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-09 — Phase 8a fixes: compile-time multi-owner rejection and complete leak coverage  
+- **Context**: Phase 8a was declared complete but had two critical gaps: missing compile-time rejection of multi-owner cases, and leak detector coverage gaps allowing programs with escaping closures to exit cleanly despite heap leaks
+- **Gap 1 diagnosis**: Compile-time rejection was missing - closure/method programs compiled and ran when they should fail with Phase 8b deferral errors; needed actual detection during codegen, not just ignored tests
+- **Gap 2 diagnosis**: Leak detector had blind spots - return statements in main program generated before leak check code, so programs always exited before leak detection ran; function expressions used return_value context incorrectly
+- **Leak detector fixes**: Modified main program generation to use return_value variable with cleanup before leak check; added proper scope boundaries in main program context; fixed in_main_program flag scope for function expressions; fixed variable name mangling in cleanup code for C keywords like "double"
+- **Compile-time rejection implementation**: Added MultiOwnerHeapValue error type; implemented detection for heap values stored as object properties, captured by escaping closures, and aliased between variables; added FunctionExprContext enum to track return/let/object contexts; proper error messages matching Phase 8b deferral specification
+- **Multi-owner detection**: Object literals check properties for heap-allocating expressions; return statements and let initializers set escape context for closure detection; function expressions with captures error when in escaping context; variable aliasing detection for heap owners
+- **Integration tests**: Added 4 new tests - reject_function_in_object, reject_escaping_closure, reject_object_alias (all fail compilation with proper errors), accept_local_closure_no_capture (compiles and runs successfully)
+- **Verification**: All 78 integration tests + all unit tests passing with 0 failures; 11 tests remain appropriately ignored for Phase 8b; manual verification confirms proper compile-time rejection with specific error messages; accepted cases compile and run with leak-free exit
+- **Key fixes**: Main program leak check now runs after cleanup; variable name mangling applied to cleanup code; compile-time detection prevents all multi-owner scenarios identified in Phase 8a spec
+- Commit: "Phase 8a fix: add compile-time multi-owner rejection and complete leak coverage"
 
 ### 2026-05-09 — Phase 8a: Scope-Based Memory Cleanup complete
 - **Context**: Phase 7 was complete with all sub-phases (7a through 7c-θ) landed; Phase 8a implements automatic memory cleanup for single-owner heap allocations when their owner's scope ends
