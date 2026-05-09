@@ -1,0 +1,9 @@
+high program(): i32 {
+  let a = { x: 1 }
+  let b = { y: 2 }
+  let c = { z: 3 }
+  print(a.x)
+  print(b.y)
+  print(c.z)
+  return 0
+}

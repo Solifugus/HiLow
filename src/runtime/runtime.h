@@ -131,4 +131,12 @@ HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t ind
 #define TYPE_OBJECT 9
 #define TYPE_FUNCTION 10
 
+// Debug allocator (Phase 8a)
+extern int hl_alloc_count;
+extern int hl_free_count;
+
+// Free helpers for heap-allocated types (Phase 8a)
+void hl_object_free(HiLowObject* obj);
+void hl_function_free(HiLowFunction* fn);
+
 #endif // HILOW_RUNTIME_H

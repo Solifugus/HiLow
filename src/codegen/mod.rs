@@ -2,7 +2,16 @@ use crate::ast::*;
 use crate::types::Type;
 use crate::typecheck::TypeChecker;
 use crate::lexer::Position;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Types of heap allocations for ownership tracking (Phase 8a)
+#[derive(Debug, Clone, PartialEq)]
+pub enum HeapType {
+    Object,         // HiLowObject*
+    Function,       // HiLowFunction*
+    Environment,    // hilow_env_N*
+    FStringBuffer,  // char* from f-string
+}
 
 /// Errors that can occur during code generation
 #[derive(Debug)]
@@ -52,6 +61,13 @@ pub struct CodeGenerator {
     in_string_switch: bool,
     /// Current iteration value variable name for for-in loops
     current_iter_value_name: Option<String>,
+    /// Phase 8a: Ownership tracking for heap allocations
+    /// Maps variable name to (heap_type, scope_depth) where heap_type is the type of heap allocation
+    heap_owners: HashMap<String, (HeapType, usize)>,
+    /// Phase 8a: Current scope depth for ownership tracking
+    scope_depth: usize,
+    /// Phase 8a: Variables that have had ownership transferred (don't free these)
+    transferred_vars: HashSet<String>,
 }
 
 impl CodeGenerator {
@@ -69,6 +85,9 @@ impl CodeGenerator {
             method_receiver_type: None,
             in_string_switch: false,
             current_iter_value_name: None,
+            heap_owners: HashMap::new(),
+            scope_depth: 0,
+            transferred_vars: HashSet::new(),
         }
     }
 
@@ -129,6 +148,14 @@ impl CodeGenerator {
             self.generate_program_body_statements(body, type_checker)?;
         }
 
+        // Phase 8a: Emit memory leak check before program exit
+        self.output.push_str("    // Memory leak check (Phase 8a)\n");
+        self.output.push_str("    if (hl_alloc_count != hl_free_count) {\n");
+        self.output.push_str("        fprintf(stderr, \"MEMORY LEAK: allocated %d, freed %d (diff=%d)\\n\",\n");
+        self.output.push_str("                hl_alloc_count, hl_free_count, hl_alloc_count - hl_free_count);\n");
+        self.output.push_str("        return 1;\n");
+        self.output.push_str("    }\n");
+
         self.output.push_str("}\n");
         Ok(())
     }
@@ -174,22 +201,34 @@ impl CodeGenerator {
     }
 
     fn generate_block(&mut self, block: &Block, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 8a: Enter new scope for ownership tracking
+        self.enter_scope();
+
         // Set up environment for captured locals (Phase 7c-δ)
         self.setup_environment_for_block(block)?;
 
         for statement in &block.statements {
             self.generate_statement(statement, type_checker)?;
         }
+
+        // Phase 8a: Exit scope and emit cleanup
+        self.exit_scope();
         Ok(())
     }
 
     fn generate_block_with_parameter_context(&mut self, block: &Block, params: &[Parameter], type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 8a: Enter new scope for ownership tracking
+        self.enter_scope();
+
         // Set up environment for captured locals (Phase 7c-δ)
         self.setup_environment_for_block_with_params(block, params)?;
 
         for statement in &block.statements {
             self.generate_statement(statement, type_checker)?;
         }
+
+        // Phase 8a: Exit scope and emit cleanup
+        self.exit_scope();
         Ok(())
     }
 
@@ -270,12 +309,18 @@ impl CodeGenerator {
                 self.generate_switch_statement(switch_stmt, type_checker)?;
             }
             Statement::Break(_) => {
+                // Phase 8a: Emit cleanup before break
+                self.emit_scope_cleanup(self.scope_depth);
+
                 // Don't generate break statements inside string switches
                 if !self.in_string_switch {
                     self.output.push_str("  break;\n");
                 }
             }
             Statement::Continue(_) => {
+                // Phase 8a: Emit cleanup before continue
+                self.emit_scope_cleanup(self.scope_depth);
+
                 self.output.push_str("  continue;\n");
             }
             Statement::Assign(assign_stmt) => {
@@ -350,12 +395,60 @@ impl CodeGenerator {
         }
 
         // Track the variable type for later reference
-        self.variable_types.insert(let_decl.name.clone(), var_type);
+        self.variable_types.insert(let_decl.name.clone(), var_type.clone());
+
+        // Phase 8a: Track heap ownership if initializer creates heap allocation
+        if let Some(ref initializer) = let_decl.initializer {
+            match initializer {
+                Expression::ObjectLiteral(_) => {
+                    self.track_heap_owner(&let_decl.name, HeapType::Object);
+                }
+                Expression::FunctionExpr(_) => {
+                    self.track_heap_owner(&let_decl.name, HeapType::Function);
+                }
+                Expression::FString(_) => {
+                    self.track_heap_owner(&let_decl.name, HeapType::FStringBuffer);
+                }
+                Expression::Call(call_expr) => {
+                    // Check if this is a function call that returns a heap value
+                    if let Expression::Ident(func_name, _) = call_expr.callee.as_ref() {
+                        if let Some(return_type) = self.functions.get(func_name) {
+                            match return_type {
+                                Type::Object(_) => {
+                                    self.track_heap_owner(&let_decl.name, HeapType::Object);
+                                }
+                                Type::Function(_, _) => {
+                                    self.track_heap_owner(&let_decl.name, HeapType::Function);
+                                }
+                                _ => {} // Non-heap return types
+                            }
+                        }
+                    }
+                }
+                _ => {} // Non-heap-allocating expressions
+            }
+        }
 
         Ok(())
     }
 
     fn generate_return_statement(&mut self, return_stmt: &ReturnStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 8a: Handle ownership transfer for returned heap values
+        if let Some(ref value) = return_stmt.value {
+            // Check if we're returning a variable that owns a heap value
+            if let Expression::Ident(var_name, _) = value {
+                if self.heap_owners.contains_key(var_name) {
+                    // Transfer ownership - don't free this variable
+                    self.transfer_ownership(var_name);
+                }
+            }
+        }
+
+        // Phase 8a: Emit cleanup for all scopes before returning
+        for scope in (1..=self.scope_depth).rev() {
+            self.emit_scope_cleanup(scope);
+        }
+
         self.output.push_str("  return");
         if let Some(ref value) = return_stmt.value {
             self.output.push_str(" ");
@@ -589,6 +682,16 @@ impl CodeGenerator {
 
             // Determine the type of the value to call the right setter
             let value_type = self.infer_expression_type_for_codegen(&assign_stmt.value);
+
+            // Phase 8a: Check for multi-ownership of heap values
+            if let Expression::Ident(var_name, _) = &assign_stmt.value {
+                match value_type {
+                    Type::Object(_) | Type::Function(_, _) => {
+                        self.check_multi_ownership(var_name, "stored as object property")?;
+                    }
+                    _ => {}
+                }
+            }
 
             match value_type {
                 Type::I32 => self.output.push_str("hl_object_set_i32("),
@@ -897,10 +1000,21 @@ impl CodeGenerator {
             }
         };
 
-        self.output.push_str(runtime_func);
-        self.output.push_str("(");
-        self.generate_expression(arg, type_checker)?;
-        self.output.push_str(")");
+        // Phase 8a: Handle f-string cleanup for inline usage
+        if matches!(arg, Expression::FString(_)) {
+            // F-string used inline in print - need to free buffer after use
+            self.output.push_str("({ char* __inline_fstr = ");
+            self.generate_expression(arg, type_checker)?;
+            self.output.push_str("; ");
+            self.output.push_str(runtime_func);
+            self.output.push_str("(__inline_fstr); free(__inline_fstr); hl_free_count++; })");
+        } else {
+            // Regular argument - no special cleanup needed
+            self.output.push_str(runtime_func);
+            self.output.push_str("(");
+            self.generate_expression(arg, type_checker)?;
+            self.output.push_str(")");
+        }
 
         Ok(())
     }
@@ -1404,7 +1518,7 @@ impl CodeGenerator {
         // Generate: malloc'd buffer with snprintf chain
         self.output.push_str("({ char* __fstring_buf = malloc(");
         self.output.push_str(&buffer_size.to_string());
-        self.output.push_str("); __fstring_buf[0] = '\\0'; ");
+        self.output.push_str("); hl_alloc_count++; __fstring_buf[0] = '\\0'; ");
 
         // Track position for potential future use
 
@@ -1859,6 +1973,18 @@ impl CodeGenerator {
         // Check if this function has captures and generate environment struct if needed
         let captures = func_expr.captures.borrow();
         let has_captures = !captures.is_empty();
+
+        // Phase 8a: Check for captured heap-owning variables (multi-ownership)
+        if has_captures {
+            for (var_name, _var_type, _pos) in captures.iter() {
+                if self.heap_owners.contains_key(var_name) {
+                    let var_name_owned = var_name.clone();
+                    drop(captures); // Release the borrow before returning error
+                    return self.check_multi_ownership(&var_name_owned, "captured by a function expression");
+                }
+            }
+        }
+
         let env_struct_name = if has_captures {
             let struct_name = format!("hilow_anon_{}_env", self.function_counter - 1);
             self.generate_environment_struct(func_expr, &struct_name);
@@ -2083,6 +2209,7 @@ impl CodeGenerator {
         // Allocate the environment
         self.output.push_str(&format!("  {}* {} = malloc(sizeof({}));\n",
                                      env_struct_name, env_var, env_struct_name));
+        self.output.push_str("  hl_alloc_count++;\n");
 
         // Track hoisted variables and current environment
         for (var_name, _var_type) in captured_locals {
@@ -2120,6 +2247,7 @@ impl CodeGenerator {
         // Allocate the environment
         self.output.push_str(&format!("  {}* {} = malloc(sizeof({}));\n",
                                      env_struct_name, env_var, env_struct_name));
+        self.output.push_str("  hl_alloc_count++;\n");
 
         // Copy captured parameters to environment (Fix for Bug 1)
         for (var_name, _var_type) in &captured_locals {
@@ -2422,5 +2550,76 @@ impl CodeGenerator {
             }
         }
         result
+    }
+
+    // Phase 8a: Ownership tracking methods
+
+    /// Record that a variable owns a heap allocation
+    fn track_heap_owner(&mut self, var_name: &str, heap_type: HeapType) {
+        self.heap_owners.insert(var_name.to_string(), (heap_type, self.scope_depth));
+    }
+
+    /// Mark a variable as having transferred ownership (don't free it)
+    fn transfer_ownership(&mut self, var_name: &str) {
+        self.transferred_vars.insert(var_name.to_string());
+    }
+
+    /// Enter a new scope (increase scope depth)
+    fn enter_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    /// Exit current scope and emit cleanup for variables declared in this scope
+    fn exit_scope(&mut self) {
+        self.emit_scope_cleanup(self.scope_depth);
+        self.scope_depth = self.scope_depth.saturating_sub(1);
+    }
+
+    /// Emit free calls for all heap owners at the specified scope depth
+    fn emit_scope_cleanup(&mut self, target_scope: usize) {
+        // Collect variables that need to be freed (declared at target_scope, not transferred)
+        let mut vars_to_free: Vec<String> = Vec::new();
+
+        for (var_name, (heap_type, scope_depth)) in &self.heap_owners {
+            if *scope_depth == target_scope && !self.transferred_vars.contains(var_name) {
+                vars_to_free.push(var_name.clone());
+            }
+        }
+
+        // Emit free calls in reverse order (LIFO scope cleanup)
+        for var_name in vars_to_free.iter().rev() {
+            if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
+                match heap_type {
+                    HeapType::Object => {
+                        self.output.push_str(&format!("    hl_object_free({});\n", var_name));
+                    }
+                    HeapType::Function => {
+                        self.output.push_str(&format!("    hl_function_free({});\n", var_name));
+                    }
+                    HeapType::Environment => {
+                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
+                    }
+                    HeapType::FStringBuffer => {
+                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
+                    }
+                }
+            }
+        }
+
+        // Remove freed variables from tracking
+        for var_name in &vars_to_free {
+            self.heap_owners.remove(var_name);
+        }
+    }
+
+    /// Check if assigning/storing a heap value would create multi-ownership (Phase 8b)
+    fn check_multi_ownership(&self, var_name: &str, operation: &str) -> Result<(), CodegenError> {
+        if self.heap_owners.contains_key(var_name) {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: format!("Multi-owner heap values not yet supported (Phase 8b will add refcounting). Variable '{}' is {}", var_name, operation),
+                phase: "Phase 8b".to_string(),
+            });
+        }
+        Ok(())
     }
 }

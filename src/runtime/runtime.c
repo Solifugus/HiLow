@@ -36,6 +36,7 @@ void print_str(const char *value) {
 char* hl_format_binary(unsigned long long value) {
     // Allocate enough space for 64 bits + null terminator
     char* result = malloc(65);
+    hl_alloc_count++;
     result[64] = '\0';
 
     // Handle zero case
@@ -68,6 +69,7 @@ char* hl_format_center(const char* value, int width) {
     if (len >= width) {
         // If value is already wider than or equal to the desired width, return as-is
         char* result = malloc(len + 1);
+        hl_alloc_count++;
         strcpy(result, value);
         return result;
     }
@@ -77,6 +79,7 @@ char* hl_format_center(const char* value, int width) {
     int right_padding = padding - left_padding;
 
     char* result = malloc(width + 1);
+    hl_alloc_count++;
     memset(result, ' ', width);
     result[width] = '\0';
 
@@ -96,6 +99,7 @@ static HiLowObject* hl_object_get_proto(HiLowObject* obj);
 
 HiLowObject* hl_object_new(void) {
     HiLowObject* obj = malloc(sizeof(HiLowObject));
+    hl_alloc_count++;
     obj->properties = NULL;
     obj->property_count = 0;
     obj->property_capacity = 0;
@@ -117,6 +121,7 @@ static void ensure_capacity(HiLowObject* obj) {
     if (obj->property_count >= obj->property_capacity) {
         size_t new_capacity = obj->property_capacity == 0 ? 4 : obj->property_capacity * 2;
         obj->properties = realloc(obj->properties, new_capacity * sizeof(Property));
+        hl_alloc_count++;  // Count realloc as allocation for Phase 8a
         obj->property_capacity = new_capacity;
     }
 }
@@ -129,6 +134,7 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
     } else {
         ensure_capacity(obj);
         obj->properties[obj->property_count].key = strdup(key);  // Duplicate the key string
+        hl_alloc_count++;  // Count strdup allocation
         obj->properties[obj->property_count].value = value;
         obj->property_count++;
     }
@@ -171,6 +177,7 @@ void hl_object_set_bool(HiLowObject* obj, const char* key, bool value) {
 
 void hl_object_set_str(HiLowObject* obj, const char* key, const char* value) {
     HiLowValue val = { .type = HL_VALUE_STR, .value.str_val = strdup(value) };  // Duplicate string
+    hl_alloc_count++;  // Count strdup allocation
     set_property(obj, key, val);
 }
 
@@ -489,6 +496,7 @@ HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key) {
 // Function value operations (Phase 7c-β)
 HiLowFunction* hl_function_new(void* fn_ptr) {
     HiLowFunction* f = malloc(sizeof(HiLowFunction));
+    hl_alloc_count++;
     f->fn_ptr = fn_ptr;
     f->env = NULL;
     return f;
@@ -496,6 +504,7 @@ HiLowFunction* hl_function_new(void* fn_ptr) {
 
 HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env) {
     HiLowFunction* f = malloc(sizeof(HiLowFunction));
+    hl_alloc_count++;
     f->fn_ptr = fn_ptr;
     f->env = env;
     return f;
@@ -630,4 +639,44 @@ HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t ind
         return NULL;
     }
     return obj->properties[index].value.value.fn_val;
+}
+
+// Debug allocator implementation (Phase 8a)
+int hl_alloc_count = 0;
+int hl_free_count = 0;
+
+void hl_object_free(HiLowObject* obj) {
+    if (obj) {
+        if (obj->properties) {
+            // Free all string values and keys that were strdup'd
+            for (size_t i = 0; i < obj->property_count; i++) {
+                // Free the key (always strdup'd)
+                free((void*)obj->properties[i].key);
+                hl_free_count++;
+
+                // Free string values that were strdup'd
+                if (obj->properties[i].value.type == HL_VALUE_STR && obj->properties[i].value.value.str_val) {
+                    free(obj->properties[i].value.value.str_val);
+                    hl_free_count++;
+                }
+            }
+            free(obj->properties);
+            hl_free_count++;  // For the properties array
+        }
+        free(obj);
+        hl_free_count++;  // For the object struct itself
+    }
+}
+
+void hl_function_free(HiLowFunction* fn) {
+    if (fn) {
+        // For Phase 8a, we assume env is owned by the function if non-NULL
+        // Function values that own their env should have that env freed
+        if (fn->env) {
+            free(fn->env);
+            hl_free_count++;
+        }
+        free(fn);
+        hl_free_count++;
+    }
 }

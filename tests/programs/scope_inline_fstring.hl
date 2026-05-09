@@ -1,0 +1,4 @@
+high program(): i32 {
+  print(f"x = {42}")
+  return 0
+}

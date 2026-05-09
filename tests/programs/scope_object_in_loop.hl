@@ -1,0 +1,9 @@
+high program(): i32 {
+  let i = 0
+  while (i < 3) {
+    let temp = { value: i }
+    print(temp.value)
+    i = i + 1
+  }
+  return 0
+}

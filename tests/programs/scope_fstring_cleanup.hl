@@ -1,0 +1,6 @@
+high program(): i32 {
+  let name = "Alice"
+  let greeting = f"Hello, {name}!"
+  print(greeting)
+  return 0
+}

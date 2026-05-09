@@ -1,0 +1,9 @@
+high program(): i32 {
+  function makeObj(): i32 {
+    let local = { x: 42 }
+    print(local.x)
+    return 0
+  }
+  makeObj()
+  return 0
+}

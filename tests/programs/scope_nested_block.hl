@@ -1,0 +1,7 @@
+high program(): i32 {
+  if (true) {
+    let inner = { z: 99 }
+    print(inner.z)
+  }
+  return 0
+}

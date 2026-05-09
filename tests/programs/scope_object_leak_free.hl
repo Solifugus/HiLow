@@ -1,0 +1,5 @@
+high program(): i32 {
+  let p = { x: 1, y: 2 }
+  print(p.x)
+  return 0
+}
