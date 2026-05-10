@@ -1108,13 +1108,17 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
 
     // Try to parse the date part: YYYY-MM-DD
     if (strlen(iso_string) < 10) {
-        HiLowUnknown* error = hl_unknown_new("invalid time format: too short");
+        char buf[256];
+        snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
+        HiLowUnknown* error = hl_unknown_new(buf);
         return hl_optional_new_unknown(error);
     }
 
     // Parse year-month-day
     if (sscanf(iso_string, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) != 3) {
-        HiLowUnknown* error = hl_unknown_new("invalid time format: could not parse date");
+        char buf[256];
+        snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
+        HiLowUnknown* error = hl_unknown_new(buf);
         return hl_optional_new_unknown(error);
     }
 
@@ -1357,25 +1361,23 @@ void print_duration(HiLowDuration duration) {
     // Print the largest non-zero unit
     if (days > 0) {
         printf("%ldd\n", days);
+    } else if (hours > 0 && minutes > 0 && seconds > 0) {
+        printf("%ldh%ldm%lds\n", hours, minutes, seconds);
+    } else if (hours > 0 && minutes > 0) {
+        printf("%ldh%ldm\n", hours, minutes);
     } else if (hours > 0) {
-        if (minutes > 0) {
-            printf("%lldh%lldm\n", hours, minutes);
-        } else {
-            printf("%lldh\n", hours);
-        }
+        printf("%ldh\n", hours);
+    } else if (minutes > 0 && seconds > 0) {
+        printf("%ldm%lds\n", minutes, seconds);
     } else if (minutes > 0) {
-        if (seconds > 0) {
-            printf("%lldm%llds\n", minutes, seconds);
-        } else {
-            printf("%lldm\n", minutes);
-        }
+        printf("%ldm\n", minutes);
     } else if (seconds > 0) {
-        printf("%llds\n", seconds);
+        printf("%lds\n", seconds);
     } else if (millis > 0) {
-        printf("%lldms\n", millis);
+        printf("%ldms\n", millis);
     } else if (micros > 0) {
-        printf("%lldus\n", micros);
+        printf("%ldus\n", micros);
     } else {
-        printf("%lldns\n", nanos);
+        printf("%ldns\n", nanos);
     }
 }
