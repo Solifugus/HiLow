@@ -1292,6 +1292,8 @@ impl TypeChecker {
                         Type::Isize | Type::Usize |
                         Type::F32 | Type::F64 |
                         Type::Nothing |
+                        Type::UnknownType |
+                        Type::Optional(_) |
                         Type::ObjectIterValue => {
                             // These types can be interpolated
                             // ObjectIterValue gets runtime dispatch like print()

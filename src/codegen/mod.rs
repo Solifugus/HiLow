@@ -1433,7 +1433,7 @@ impl CodeGenerator {
 
         // Special case: is unknown on optional types should be a runtime check
         if matches!(target_type, Type::UnknownType) {
-            let expr_type = self.infer_expression_type_for_codegen(&is_check.expression);
+            let expr_type = self.infer_expression_type_without_refinements(&is_check.expression);
             if matches!(expr_type, Type::Optional(_)) {
                 // Runtime check: is the value an unknown value?
                 if is_check.negated {
@@ -3111,6 +3111,21 @@ impl CodeGenerator {
             }
         }
         Ok(())
+    }
+
+    /// Get the type of an expression without applying type refinements
+    /// Used for contexts like 'is unknown' checks where we need the original type
+    fn infer_expression_type_without_refinements(&self, expr: &Expression) -> Type {
+        match expr {
+            Expression::Ident { name, .. } => {
+                // Look up the variable type from our tracking, ignoring refined_type
+                self.variable_types.get(name).cloned().unwrap_or(Type::Unknown)
+            }
+            _ => {
+                // For non-identifier expressions, use normal type inference
+                self.infer_expression_type_for_codegen(expr)
+            }
+        }
     }
 
     /// Emit code to access a variable that has been narrowed through type refinement
