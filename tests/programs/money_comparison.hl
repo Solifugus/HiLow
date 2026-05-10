@@ -1,0 +1,8 @@
+high program(): i32 {
+  let a: money = 10.00 USD
+  let b: money = 20.00 USD
+  if (b > a) {
+    print("b is greater")
+  }
+  return 0
+}

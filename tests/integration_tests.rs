@@ -2098,3 +2098,118 @@ fn test_time_parse_invalid_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 9d: Money tests
+
+#[test]
+fn test_money_basic_integration() {
+    let executable = compile_program("tests/programs/money_basic.hl")
+        .expect("Failed to compile money_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run money_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/money_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_money_arithmetic_integration() {
+    let executable = compile_program("tests/programs/money_arithmetic.hl")
+        .expect("Failed to compile money_arithmetic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run money_arithmetic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/money_arithmetic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_money_multiplication_integration() {
+    let executable = compile_program("tests/programs/money_multiplication.hl")
+        .expect("Failed to compile money_multiplication.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run money_multiplication");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/money_multiplication.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_money_currencies_integration() {
+    let executable = compile_program("tests/programs/money_currencies.hl")
+        .expect("Failed to compile money_currencies.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run money_currencies");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/money_currencies.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_money_comparison_integration() {
+    let executable = compile_program("tests/programs/money_comparison.hl")
+        .expect("Failed to compile money_comparison.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run money_comparison");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/money_comparison.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_reject_money_mismatch_integration() {
+    // This test should fail compilation with a currency mismatch error
+    let result = compile_program("tests/programs/reject_money_mismatch.hl");
+
+    assert!(result.is_err(), "reject_money_mismatch.hl should fail to compile");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("Cannot mix"), "Error should mention currency mixing: {}", error_message);
+    assert!(error_message.contains("USD") && error_message.contains("EUR"),
+            "Error should mention both USD and EUR: {}", error_message);
+}

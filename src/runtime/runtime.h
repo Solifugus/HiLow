@@ -76,6 +76,25 @@ typedef struct {
     int64_t nanos;
 } HiLowDuration;
 
+// Money type support (Phase 9d)
+// Currency enum for supported currencies
+typedef enum {
+    HL_CURRENCY_USD,
+    HL_CURRENCY_EUR,
+    HL_CURRENCY_GBP,
+    HL_CURRENCY_JPY,
+    HL_CURRENCY_CAD,
+    HL_CURRENCY_AUD,
+    HL_CURRENCY_CHF,
+    HL_CURRENCY_CNY,
+} HiLowCurrency;
+
+// Money type: amount in micro-units (4 decimal places) + currency
+typedef struct {
+    int64_t amount;           // amount in micro-units (e.g., $19.99 stored as 199900)
+    HiLowCurrency currency;
+} HiLowMoney;
+
 // Optional type support (Phase 9b fix 3a)
 // Proper wrapper struct for T? values to replace broken bit-packing approach
 typedef enum {
@@ -84,7 +103,8 @@ typedef enum {
     HL_OPT_UNKNOWN,
     HL_OPT_TIME,
     HL_OPT_DURATION,
-    // Add others as needed by tests; for Phase 9b just these three
+    HL_OPT_MONEY,
+    // Add others as needed by tests
 } HiLowOptionalKind;
 
 typedef struct HiLowOptional {
@@ -96,6 +116,7 @@ typedef struct HiLowOptional {
         HiLowUnknown* unk_val;
         HiLowTime time_val;
         HiLowDuration duration_val;
+        HiLowMoney money_val;
     } payload;
 } HiLowOptional;
 
@@ -108,6 +129,7 @@ HiLowOptional* hl_optional_new_string(const char* s);
 HiLowOptional* hl_optional_new_unknown(HiLowUnknown* u);
 HiLowOptional* hl_optional_new_time(HiLowTime t);
 HiLowOptional* hl_optional_new_duration(HiLowDuration d);
+HiLowOptional* hl_optional_new_money(HiLowMoney m);
 
 // Optional memory management
 void hl_optional_retain(HiLowOptional* opt);
@@ -136,7 +158,8 @@ typedef enum {
     HL_VALUE_BOOL,
     HL_VALUE_STR,
     HL_VALUE_OBJECT,
-    HL_VALUE_FUNCTION
+    HL_VALUE_FUNCTION,
+    HL_VALUE_MONEY
 } HiLowValueType;
 
 typedef struct HiLowValue {
@@ -152,6 +175,7 @@ typedef struct HiLowValue {
         char* str_val;
         struct HiLowObject* obj_val;
         HiLowFunction* fn_val;
+        HiLowMoney money_val;
     } value;
 } HiLowValue;
 
@@ -272,6 +296,7 @@ const char* hl_optional_unwrap_string(HiLowOptional* opt);
 HiLowUnknown* hl_optional_unwrap_unknown(HiLowOptional* opt);
 HiLowTime hl_optional_unwrap_time(HiLowOptional* opt);
 HiLowDuration hl_optional_unwrap_duration(HiLowOptional* opt);
+HiLowMoney hl_optional_unwrap_money(HiLowOptional* opt);
 
 // Print functions for optional types (Phase 9b)
 // These check the tag and call either print_unknown or print_T
@@ -283,6 +308,7 @@ void print_optional_f32(HiLowOptional* opt);
 void print_optional_f64(HiLowOptional* opt);
 void print_optional_bool(HiLowOptional* opt);
 void print_optional_string(HiLowOptional* opt);
+void print_optional_money(HiLowOptional* opt);
 
 // Time constructor functions
 HiLowTime hl_time_now(void);
@@ -313,5 +339,23 @@ bool hl_duration_ge(HiLowDuration lhs, HiLowDuration rhs);
 // Print functions for time and duration
 void print_time(HiLowTime time);
 void print_duration(HiLowDuration duration);
+
+// Money functions (Phase 9d)
+void print_money(HiLowMoney money);
+
+// Money arithmetic functions
+HiLowMoney hl_money_add(HiLowMoney lhs, HiLowMoney rhs);
+HiLowMoney hl_money_sub(HiLowMoney lhs, HiLowMoney rhs);
+HiLowMoney hl_money_mul_scalar(HiLowMoney money, double scalar);
+HiLowMoney hl_money_div_scalar(HiLowMoney money, double scalar);
+double hl_money_div_money(HiLowMoney lhs, HiLowMoney rhs);
+
+// Money comparison functions
+bool hl_money_eq(HiLowMoney lhs, HiLowMoney rhs);
+bool hl_money_ne(HiLowMoney lhs, HiLowMoney rhs);
+bool hl_money_lt(HiLowMoney lhs, HiLowMoney rhs);
+bool hl_money_le(HiLowMoney lhs, HiLowMoney rhs);
+bool hl_money_gt(HiLowMoney lhs, HiLowMoney rhs);
+bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs);
 
 #endif // HILOW_RUNTIME_H

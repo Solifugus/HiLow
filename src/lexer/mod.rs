@@ -13,6 +13,7 @@ pub enum TokenKind {
     Float(f64),
     StringLit(String),
     DurationLiteral(i64, String), // nanoseconds, original_unit
+    MoneyLit(i64, String), // amount in micro-units (4 decimal places), currency
     True,
     False,
 
@@ -72,6 +73,16 @@ pub enum TokenKind {
     Weak,
     When,
     While,
+
+    // Currency codes
+    USD,
+    EUR,
+    GBP,
+    JPY,
+    CAD,
+    AUD,
+    CHF,
+    CNY,
 
     // Single-character punctuation
     LeftParen,    // (
@@ -247,6 +258,16 @@ impl Lexer {
         keywords.insert("weak".to_string(), TokenKind::Weak);
         keywords.insert("when".to_string(), TokenKind::When);
         keywords.insert("while".to_string(), TokenKind::While);
+
+        // Currency codes
+        keywords.insert("USD".to_string(), TokenKind::USD);
+        keywords.insert("EUR".to_string(), TokenKind::EUR);
+        keywords.insert("GBP".to_string(), TokenKind::GBP);
+        keywords.insert("JPY".to_string(), TokenKind::JPY);
+        keywords.insert("CAD".to_string(), TokenKind::CAD);
+        keywords.insert("AUD".to_string(), TokenKind::AUD);
+        keywords.insert("CHF".to_string(), TokenKind::CHF);
+        keywords.insert("CNY".to_string(), TokenKind::CNY);
 
         Self {
             input: input.chars().collect(),
@@ -790,6 +811,35 @@ impl Lexer {
             return Ok(self.make_token(TokenKind::DurationLiteral(nanos, suffix), start_pos, full_lexeme));
         }
 
+        // Check for money literal: whitespace followed by currency code
+        let currency_code = self.try_money_currency();
+
+        // If we found a currency code, create a MoneyLit token
+        if let Some(currency) = currency_code {
+            let full_lexeme: String = self.input[start..self.current].iter().collect();
+
+            let numeric_part = if is_float {
+                match numeric_cleaned.parse::<f64>() {
+                    Ok(value) => value,
+                    Err(_) => return Err(LexError::InvalidNumber {
+                        text: full_lexeme,
+                        position: start_pos,
+                    }),
+                }
+            } else {
+                match numeric_cleaned.parse::<i64>() {
+                    Ok(value) => value as f64,
+                    Err(_) => return Err(LexError::InvalidNumber {
+                        text: full_lexeme,
+                        position: start_pos,
+                    }),
+                }
+            };
+
+            let micro_units = self.convert_to_micro_units(numeric_part);
+            return Ok(self.make_token(TokenKind::MoneyLit(micro_units, currency), start_pos, full_lexeme));
+        }
+
         // Regular number (not duration)
         let lexeme = numeric_lexeme;
         let cleaned = numeric_cleaned;
@@ -1199,5 +1249,66 @@ impl Lexer {
             _ => value, // fallback, shouldn't happen
         };
         nanos as i64
+    }
+
+    // Try to parse a currency code following whitespace after a number
+    fn try_money_currency(&mut self) -> Option<String> {
+        let saved_pos = self.current;
+
+        // Look for whitespace
+        if !self.is_at_end() && self.peek().is_whitespace() {
+            // Skip whitespace
+            while !self.is_at_end() && self.peek().is_whitespace() {
+                self.advance();
+            }
+
+            // Check for currency codes
+            let currencies = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "CNY"];
+
+            for currency in &currencies {
+                if self.matches_currency(currency) {
+                    // Consume the currency
+                    for _ in 0..currency.len() {
+                        self.advance();
+                    }
+                    return Some(currency.to_string());
+                }
+            }
+        }
+
+        // No currency found, restore position
+        self.current = saved_pos;
+        None
+    }
+
+    fn matches_currency(&self, currency: &str) -> bool {
+        let currency_chars: Vec<char> = currency.chars().collect();
+        if self.current + currency_chars.len() > self.input.len() {
+            return false;
+        }
+
+        for (i, &expected) in currency_chars.iter().enumerate() {
+            if self.input[self.current + i] != expected {
+                return false;
+            }
+        }
+
+        // Make sure there's no identifier character following (would mean it's not a currency)
+        let next_pos = self.current + currency_chars.len();
+        if next_pos < self.input.len() {
+            let next_char = self.input[next_pos];
+            if next_char.is_ascii_alphanumeric() || next_char == '_' {
+                return false; // This is part of a larger identifier
+            }
+        }
+
+        true
+    }
+
+    fn convert_to_micro_units(&self, value: f64) -> i64 {
+        // Store with 4 decimal places of internal precision
+        // So $19.99 becomes 199900 micro-units
+        // Round to avoid floating-point precision issues
+        (value * 10000.0 + 0.5) as i64
     }
 }

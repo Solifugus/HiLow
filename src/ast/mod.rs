@@ -29,6 +29,7 @@ pub enum PrimitiveType {
     Unknown,
     Time,
     Duration,
+    Money,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +41,7 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>), // parameter types, return type
     Unknown, // placeholder for unknown types
     Optional(Box<Type>), // T? syntax for "T or unknown"
+    MoneyOf(String), // parameterized money type: money<USD>, money<EUR>, etc.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -268,6 +270,7 @@ pub enum Expression {
     FloatLit(f64, Position),
     StringLit(String, Position),
     DurationLit(i64, String, Position), // nanoseconds, original_unit, position
+    MoneyLit(i64, String, Position), // micro-units (4 decimal places), currency, position
     FString(FString),
     BoolLit(bool, Position),
     Ident { name: String, refined_type: Option<Type>, position: Position },

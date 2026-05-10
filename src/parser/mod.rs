@@ -335,6 +335,42 @@ impl Parser {
                     "usize" => PrimitiveType::Usize,
                     "isize" => PrimitiveType::Isize,
                     "unknown" => PrimitiveType::Unknown,
+                    "time" => PrimitiveType::Time,
+                    "duration" => PrimitiveType::Duration,
+                    "money" => {
+                        // Check for parameterized money type: money<USD>
+                        if self.check(&TokenKind::Less) {
+                            self.advance()?; // consume '<'
+
+                            // Expect currency identifier
+                            let currency_token = self.advance()?;
+                            let currency = match &currency_token.kind {
+                                TokenKind::USD => "USD".to_string(),
+                                TokenKind::EUR => "EUR".to_string(),
+                                TokenKind::GBP => "GBP".to_string(),
+                                TokenKind::JPY => "JPY".to_string(),
+                                TokenKind::CAD => "CAD".to_string(),
+                                TokenKind::AUD => "AUD".to_string(),
+                                TokenKind::CHF => "CHF".to_string(),
+                                TokenKind::CNY => "CNY".to_string(),
+                                _ => {
+                                    return Err(ParseError::UnexpectedToken {
+                                        expected: "currency code".to_string(),
+                                        found: currency_token.kind.clone(),
+                                        position: currency_token.position,
+                                    });
+                                }
+                            };
+
+                            self.expect_token(TokenKind::Greater, "Expected '>' after currency")?;
+
+                            // Return parameterized money type directly (not wrapped in Primitive)
+                            return Ok(Type::MoneyOf(currency));
+                        } else {
+                            // Regular money type
+                            PrimitiveType::Money
+                        }
+                    },
                     _ => {
                         return Err(ParseError::UnexpectedToken {
                             expected: "primitive type name".to_string(),
@@ -987,6 +1023,7 @@ impl Parser {
             TokenKind::Float(f) => Ok(Expression::FloatLit(f, token.position)),
             TokenKind::StringLit(s) => Ok(Expression::StringLit(s, token.position)),
             TokenKind::DurationLiteral(nanos, unit) => Ok(Expression::DurationLit(nanos, unit, token.position)),
+            TokenKind::MoneyLit(micro_units, currency) => Ok(Expression::MoneyLit(micro_units, currency, token.position)),
             TokenKind::FStringStart => self.parse_f_string(token.position),
             TokenKind::True => Ok(Expression::BoolLit(true, token.position)),
             TokenKind::False => Ok(Expression::BoolLit(false, token.position)),

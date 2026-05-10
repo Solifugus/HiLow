@@ -173,6 +173,15 @@ HiLowOptional* hl_optional_new_duration(HiLowDuration d) {
     return opt;
 }
 
+HiLowOptional* hl_optional_new_money(HiLowMoney m) {
+    HiLowOptional* opt = malloc(sizeof(HiLowOptional));
+    hl_alloc_count++;
+    opt->refcount = 1;
+    opt->kind = HL_OPT_MONEY;
+    opt->payload.money_val = m;  // Copy the money struct
+    return opt;
+}
+
 void hl_optional_retain(HiLowOptional* opt) {
     if (opt) {
         opt->refcount++;
@@ -1022,6 +1031,11 @@ HiLowDuration hl_optional_unwrap_duration(HiLowOptional* opt) {
     return opt ? opt->payload.duration_val : (HiLowDuration){0};
 }
 
+HiLowMoney hl_optional_unwrap_money(HiLowOptional* opt) {
+    // Safe implementation: read from the wrapper struct's payload
+    return opt ? opt->payload.money_val : (HiLowMoney){0, HL_CURRENCY_USD};
+}
+
 // Print functions for optional types
 void print_optional_i32(HiLowOptional* opt) {
     if (hl_is_unknown(opt)) {
@@ -1084,6 +1098,14 @@ void print_optional_string(HiLowOptional* opt) {
         print_unknown(hl_optional_unwrap_unknown(opt));
     } else {
         print_str(hl_optional_unwrap_string(opt));
+    }
+}
+
+void print_optional_money(HiLowOptional* opt) {
+    if (hl_is_unknown(opt)) {
+        print_unknown(hl_optional_unwrap_unknown(opt));
+    } else {
+        print_money(hl_optional_unwrap_money(opt));
     }
 }
 
@@ -1384,4 +1406,158 @@ void print_duration(HiLowDuration duration) {
     } else {
         printf("%ldns\n", nanos);
     }
+}
+
+// Money functions (Phase 9d)
+
+void print_money(HiLowMoney money) {
+    const char* symbol;
+    int display_precision;
+
+    switch (money.currency) {
+        case HL_CURRENCY_USD:
+            symbol = "$";
+            display_precision = 2;
+            break;
+        case HL_CURRENCY_EUR:
+            symbol = "€";
+            display_precision = 2;
+            break;
+        case HL_CURRENCY_GBP:
+            symbol = "£";
+            display_precision = 2;
+            break;
+        case HL_CURRENCY_JPY:
+            symbol = "¥";
+            display_precision = 0;
+            break;
+        case HL_CURRENCY_CAD:
+            symbol = "C$";
+            display_precision = 2;
+            break;
+        case HL_CURRENCY_AUD:
+            symbol = "A$";
+            display_precision = 2;
+            break;
+        case HL_CURRENCY_CHF:
+            symbol = "Fr";
+            display_precision = 2;
+            break;
+        case HL_CURRENCY_CNY:
+            symbol = "¥";
+            display_precision = 0;
+            break;
+        default:
+            symbol = "?";
+            display_precision = 2;
+            break;
+    }
+
+    // Amount is stored with 4 decimal places of internal precision
+    // Display precision varies by currency
+    if (display_precision == 0) {
+        // JPY, CNY: no decimal places
+        printf("%s%ld\n", symbol, money.amount / 10000);
+    } else {
+        // USD, EUR, etc: 2 decimal places
+        int64_t whole = money.amount / 10000;
+        int64_t decimal = (money.amount % 10000) / 100; // Convert from 4 to 2 decimal places
+        printf("%s%ld.%02ld\n", symbol, whole, decimal);
+    }
+}
+
+// Money arithmetic functions
+HiLowMoney hl_money_add(HiLowMoney lhs, HiLowMoney rhs) {
+    // Currency mismatch should be caught at compile time, but check at runtime too
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot add different currencies\n");
+        exit(1);
+    }
+
+    HiLowMoney result;
+    result.currency = lhs.currency;
+    result.amount = lhs.amount + rhs.amount;
+    return result;
+}
+
+HiLowMoney hl_money_sub(HiLowMoney lhs, HiLowMoney rhs) {
+    // Currency mismatch should be caught at compile time, but check at runtime too
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot subtract different currencies\n");
+        exit(1);
+    }
+
+    HiLowMoney result;
+    result.currency = lhs.currency;
+    result.amount = lhs.amount - rhs.amount;
+    return result;
+}
+
+HiLowMoney hl_money_mul_scalar(HiLowMoney money, double scalar) {
+    HiLowMoney result;
+    result.currency = money.currency;
+    result.amount = (int64_t)(money.amount * scalar);
+    return result;
+}
+
+HiLowMoney hl_money_div_scalar(HiLowMoney money, double scalar) {
+    HiLowMoney result;
+    result.currency = money.currency;
+    result.amount = (int64_t)(money.amount / scalar);
+    return result;
+}
+
+double hl_money_div_money(HiLowMoney lhs, HiLowMoney rhs) {
+    // Currency mismatch should be caught at compile time, but check at runtime too
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot divide different currencies\n");
+        exit(1);
+    }
+
+    return (double)lhs.amount / (double)rhs.amount;
+}
+
+// Money comparison functions
+bool hl_money_eq(HiLowMoney lhs, HiLowMoney rhs) {
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot compare different currencies\n");
+        exit(1);
+    }
+    return lhs.amount == rhs.amount;
+}
+
+bool hl_money_ne(HiLowMoney lhs, HiLowMoney rhs) {
+    return !hl_money_eq(lhs, rhs);
+}
+
+bool hl_money_lt(HiLowMoney lhs, HiLowMoney rhs) {
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot compare different currencies\n");
+        exit(1);
+    }
+    return lhs.amount < rhs.amount;
+}
+
+bool hl_money_le(HiLowMoney lhs, HiLowMoney rhs) {
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot compare different currencies\n");
+        exit(1);
+    }
+    return lhs.amount <= rhs.amount;
+}
+
+bool hl_money_gt(HiLowMoney lhs, HiLowMoney rhs) {
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot compare different currencies\n");
+        exit(1);
+    }
+    return lhs.amount > rhs.amount;
+}
+
+bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs) {
+    if (lhs.currency != rhs.currency) {
+        fprintf(stderr, "Runtime error: cannot compare different currencies\n");
+        exit(1);
+    }
+    return lhs.amount >= rhs.amount;
 }

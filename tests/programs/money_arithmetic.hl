@@ -1,0 +1,6 @@
+high program(): i32 {
+  let price: money = 19.99 USD
+  let total = price + 5.00 USD
+  print(total)
+  return 0
+}

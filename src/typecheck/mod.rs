@@ -235,7 +235,16 @@ impl TypeChecker {
         let final_type = match (declared_type, initializer_type) {
             (Some(declared), Some(inferred)) => {
                 // Check that initializer matches declared type
-                if declared != inferred {
+                // Special handling for money types: money<USD> is assignable to money
+                let types_compatible = if declared == inferred {
+                    true
+                } else if matches!(&declared, Type::Money) && matches!(&inferred, Type::MoneyOf(_)) {
+                    true // money<X> can be assigned to money
+                } else {
+                    false
+                };
+
+                if !types_compatible {
                     self.add_error(
                         format!("Type mismatch: declared {} but initializer has type {}",
                                 declared, inferred),
@@ -243,7 +252,12 @@ impl TypeChecker {
                     );
                     declared // Use declared type for symbol table
                 } else {
-                    declared
+                    // For compatible money assignments, preserve the specific currency
+                    if matches!(&declared, Type::Money) && matches!(&inferred, Type::MoneyOf(_)) {
+                        inferred // Use specific currency type (money<USD>) instead of generic money
+                    } else {
+                        declared
+                    }
                 }
             },
             (Some(declared), None) => {
@@ -508,6 +522,7 @@ impl TypeChecker {
             Expression::FString(fstring) => self.check_fstring(fstring),
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::DurationLit(_, _, _) => Type::Duration,
+            Expression::MoneyLit(_, currency, _) => Type::MoneyOf(currency.clone()),
             Expression::Nothing(_) => Type::Nothing,
             Expression::Ident { name, position, .. } => {
                 // Look up variable in symbol table with refinement support
@@ -594,6 +609,22 @@ impl TypeChecker {
                         );
                         Type::Unknown
                     }
+                    // Money addition: same currency required
+                    (Type::Money, Type::Money) => Type::Money, // money + money → money (generic)
+                    (Type::MoneyOf(c1), Type::MoneyOf(c2)) => {
+                        if c1 == c2 {
+                            Type::MoneyOf(c1.clone()) // same currency → result is that currency
+                        } else {
+                            self.add_error(
+                                format!("Cannot mix money<{}> and money<{}> in arithmetic; explicit conversion required", c1, c2),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (Type::Money, Type::MoneyOf(currency)) | (Type::MoneyOf(currency), Type::Money) => {
+                        Type::MoneyOf(currency.clone()) // specific currency takes precedence
+                    }
                     _ => {
                         // Regular numeric addition
                         if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
@@ -630,6 +661,22 @@ impl TypeChecker {
                         );
                         Type::Unknown
                     }
+                    // Money subtraction: same currency required
+                    (Type::Money, Type::Money) => Type::Money, // money - money → money (generic)
+                    (Type::MoneyOf(c1), Type::MoneyOf(c2)) => {
+                        if c1 == c2 {
+                            Type::MoneyOf(c1.clone()) // same currency → result is that currency
+                        } else {
+                            self.add_error(
+                                format!("Cannot mix money<{}> and money<{}> in arithmetic; explicit conversion required", c1, c2),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (Type::Money, Type::MoneyOf(currency)) | (Type::MoneyOf(currency), Type::Money) => {
+                        Type::MoneyOf(currency.clone()) // specific currency takes precedence
+                    }
                     _ => {
                         // Regular numeric subtraction
                         if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
@@ -653,11 +700,153 @@ impl TypeChecker {
                     }
                 }
             },
-            BinaryOpKind::Mul | BinaryOpKind::Div | BinaryOpKind::Mod => {
-                // No special time/duration cases for these operations
-                if !lhs_type.is_numeric() {
+            BinaryOpKind::Mul => {
+                // Handle money multiplication: money * scalar
+                match (&lhs_type, &rhs_type) {
+                    (Type::Money, rhs_t) => {
+                        if rhs_t.is_numeric() {
+                            Type::Money // money * scalar → money
+                        } else {
+                            self.add_error(
+                                format!("Cannot multiply money by non-numeric type"),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (lhs_t, Type::Money) => {
+                        if lhs_t.is_numeric() {
+                            Type::Money // scalar * money → money
+                        } else {
+                            self.add_error(
+                                format!("Cannot multiply money by non-numeric type"),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (Type::MoneyOf(currency), rhs_t) => {
+                        if rhs_t.is_numeric() {
+                            Type::MoneyOf(currency.clone()) // money<USD> * scalar → money<USD>
+                        } else {
+                            self.add_error(
+                                format!("Cannot multiply money by non-numeric type"),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (lhs_t, Type::MoneyOf(currency)) => {
+                        if lhs_t.is_numeric() {
+                            Type::MoneyOf(currency.clone()) // scalar * money<USD> → money<USD>
+                        } else {
+                            self.add_error(
+                                format!("Cannot multiply money by non-numeric type"),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    _ => {
+                        // Regular numeric multiplication
+                        if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+                            self.add_error(
+                                format!("Cannot multiply {} and {}; operands must be numeric", lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        if lhs_type != rhs_type {
+                            self.add_error(
+                                format!("Cannot multiply {} and {}; types must match exactly", lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        lhs_type
+                    }
+                }
+            },
+            BinaryOpKind::Div => {
+                // Handle money division: money / scalar or money / money
+                match (&lhs_type, &rhs_type) {
+                    // money / scalar → money
+                    (Type::Money, rhs) => {
+                        if rhs.is_numeric() {
+                            Type::Money
+                        } else {
+                            self.add_error(
+                                format!("Cannot divide money by non-numeric type"),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (Type::MoneyOf(currency), rhs) => {
+                        if rhs.is_numeric() {
+                            Type::MoneyOf(currency.clone())
+                        } else {
+                            self.add_error(
+                                format!("Cannot divide money by non-numeric type"),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    // money / money (same currency) → f64 ratio
+                    (Type::Money, Type::Money) => Type::F64,
+                    (Type::MoneyOf(c1), Type::MoneyOf(c2)) => {
+                        if c1 == c2 {
+                            Type::F64 // ratio
+                        } else {
+                            self.add_error(
+                                format!("Cannot divide money<{}> by money<{}>; currencies must match", c1, c2),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    (Type::Money, Type::MoneyOf(_)) | (Type::MoneyOf(_), Type::Money) => {
+                        Type::F64 // ratio (mixed generic/specific money)
+                    }
+                    _ => {
+                        // Regular numeric division
+                        if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+                            self.add_error(
+                                format!("Cannot divide {} and {}; operands must be numeric", lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        if lhs_type != rhs_type {
+                            self.add_error(
+                                format!("Cannot divide {} and {}; types must match exactly", lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        lhs_type
+                    }
+                }
+            },
+            BinaryOpKind::Mod => {
+                // Mod not supported for money
+                if matches!(lhs_type, Type::Money | Type::MoneyOf(_)) || matches!(rhs_type, Type::Money | Type::MoneyOf(_)) {
                     self.add_error(
-                        format!("Cannot apply arithmetic operator to non-numeric type {}", lhs_type),
+                        "Modulo operator not supported for money types".to_string(),
+                        binary_op.position.clone()
+                    );
+                    return Type::Unknown;
+                }
+
+                // Regular numeric mod
+                if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+                    self.add_error(
+                        format!("Cannot apply mod to non-numeric types {} and {}", lhs_type, rhs_type),
                         binary_op.position.clone()
                     );
                     return Type::Unknown;
@@ -665,8 +854,7 @@ impl TypeChecker {
 
                 if lhs_type != rhs_type {
                     self.add_error(
-                        format!("Cannot {} {} and {}; types must match exactly",
-                                binary_op.op.operator_name(), lhs_type, rhs_type),
+                        format!("Cannot mod {} and {}; types must match exactly", lhs_type, rhs_type),
                         binary_op.position.clone()
                     );
                     return Type::Unknown;
@@ -679,7 +867,7 @@ impl TypeChecker {
             BinaryOpKind::Less | BinaryOpKind::Greater |
             BinaryOpKind::LessEq | BinaryOpKind::GreaterEq |
             BinaryOpKind::NotLess | BinaryOpKind::NotGreater => {
-                // Allow time-time, duration-duration, and optional time/duration comparisons
+                // Allow time-time, duration-duration, money-money, and optional comparisons
                 if (lhs_type == Type::Time && rhs_type == Type::Time) ||
                    (lhs_type == Type::Duration && rhs_type == Type::Duration) ||
                    (matches!(&lhs_type, Type::Optional(inner) if **inner == Type::Time) &&
@@ -687,37 +875,82 @@ impl TypeChecker {
                    (matches!(&lhs_type, Type::Optional(inner) if **inner == Type::Duration) &&
                     matches!(&rhs_type, Type::Optional(inner) if **inner == Type::Duration)) {
                     Type::Bool
-                } else if lhs_type.is_numeric() && rhs_type.is_numeric() {
-                    if lhs_type != rhs_type {
-                        self.add_error(
-                            format!("Cannot compare {} and {}; types must match exactly", lhs_type, rhs_type),
-                            binary_op.position.clone()
-                        );
-                        return Type::Unknown;
-                    }
-                    Type::Bool
                 } else {
-                    self.add_error(
-                        format!("Cannot compare {} and {}; operands must be same numeric type, both time, or both duration",
-                                lhs_type, rhs_type),
-                        binary_op.position.clone()
-                    );
-                    Type::Unknown
+                    // Check for money comparisons
+                    match (&lhs_type, &rhs_type) {
+                        (Type::Money, Type::Money) => Type::Bool,
+                        (Type::MoneyOf(c1), Type::MoneyOf(c2)) => {
+                            if c1 == c2 {
+                                Type::Bool
+                            } else {
+                                self.add_error(
+                                    format!("Cannot compare money<{}> and money<{}>; currencies must match", c1, c2),
+                                    binary_op.position.clone()
+                                );
+                                Type::Unknown
+                            }
+                        }
+                        (Type::Money, Type::MoneyOf(_)) | (Type::MoneyOf(_), Type::Money) => {
+                            Type::Bool // mixed money comparisons are allowed
+                        }
+                        _ => {
+                            // Regular numeric comparisons
+                            if lhs_type.is_numeric() && rhs_type.is_numeric() {
+                                if lhs_type != rhs_type {
+                                    self.add_error(
+                                        format!("Cannot compare {} and {}; types must match exactly", lhs_type, rhs_type),
+                                        binary_op.position.clone()
+                                    );
+                                    return Type::Unknown;
+                                }
+
+                                Type::Bool
+                            } else {
+                                self.add_error(
+                                    format!("Cannot compare {} and {}; types must be numeric, time, duration, or money",
+                                            lhs_type, rhs_type),
+                                    binary_op.position.clone()
+                                );
+                                Type::Unknown
+                            }
+                        }
+                    }
                 }
             },
 
             // Equality operators: both operands must be same type (any type), result is bool
             BinaryOpKind::Eq | BinaryOpKind::NotEq => {
-                if lhs_type != rhs_type {
-                    self.add_error(
-                        format!("Cannot compare {} and {} for equality; types must match exactly",
-                                lhs_type, rhs_type),
-                        binary_op.position.clone()
-                    );
-                    return Type::Unknown;
-                }
+                // Special handling for money types
+                match (&lhs_type, &rhs_type) {
+                    // Same type money comparisons
+                    (Type::Money, Type::Money) => Type::Bool,
+                    (Type::MoneyOf(c1), Type::MoneyOf(c2)) => {
+                        if c1 == c2 {
+                            Type::Bool
+                        } else {
+                            self.add_error(
+                                format!("Cannot compare money<{}> and money<{}> for equality; currencies must match", c1, c2),
+                                binary_op.position.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                    // Mixed money and money<X>
+                    (Type::Money, Type::MoneyOf(_)) | (Type::MoneyOf(_), Type::Money) => Type::Bool,
+                    _ => {
+                        // Regular equality check
+                        if lhs_type != rhs_type {
+                            self.add_error(
+                                format!("Cannot compare {} and {} for equality; types must match exactly",
+                                        lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
 
-                Type::Bool
+                        Type::Bool
+                    }
+                }
             },
 
             // Logical operators: both operands must be bool
@@ -884,7 +1117,7 @@ impl TypeChecker {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
             Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String |
-            Type::Time | Type::Duration |
+            Type::Time | Type::Duration | Type::Money | Type::MoneyOf(_) |
             Type::Nothing | Type::UnknownType => {
                 // These types are printable
             }
@@ -1129,7 +1362,7 @@ impl TypeChecker {
             }
             // Literals don't contain variables to refine
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
-            Expression::StringLit(_, _) | Expression::BoolLit(_, _) |
+            Expression::MoneyLit(_, _, _) | Expression::StringLit(_, _) | Expression::BoolLit(_, _) |
             Expression::This(_) | Expression::Nothing(_) => {
                 // No variables to refine
             }
@@ -1643,6 +1876,7 @@ impl TypeChecker {
             Expression::FloatLit(_, _) => Type::default_float_type(),
             Expression::StringLit(_, _) => Type::String,
             Expression::DurationLit(_, _, _) => Type::Duration,
+            Expression::MoneyLit(_, currency, _) => Type::MoneyOf(currency.clone()),
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident { name, .. } => {
                 // Look up in symbol table
@@ -1871,7 +2105,8 @@ impl TypeChecker {
                 }
             }
             // Literal expressions don't contain variable references
-            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) | Expression::StringLit(_, _) |
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
+            Expression::MoneyLit(_, _, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::Nothing(_) | Expression::This(_) => {
                 // No variables to capture
             }
@@ -2039,7 +2274,8 @@ impl TypeChecker {
                 }
             }
             // Literal expressions don't contain variable references
-            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) | Expression::StringLit(_, _) |
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
+            Expression::MoneyLit(_, _, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::Nothing(_) | Expression::This(_) => {
                 // No variables to capture
             }
@@ -2193,6 +2429,7 @@ impl HasPosition for Expression {
             Expression::FloatLit(_, pos) => pos.clone(),
             Expression::StringLit(_, pos) => pos.clone(),
             Expression::DurationLit(_, _, pos) => pos.clone(),
+            Expression::MoneyLit(_, _, pos) => pos.clone(),
             Expression::FString(fstring) => fstring.position.clone(),
             Expression::BoolLit(_, pos) => pos.clone(),
             Expression::Ident { position, .. } => position.clone(),

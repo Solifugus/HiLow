@@ -1,0 +1,9 @@
+high program(): i32 {
+  let usd: money = 100.00 USD
+  let eur: money = 50.00 EUR
+  let jpy: money = 1000 JPY
+  print(usd)
+  print(eur)
+  print(jpy)
+  return 0
+}

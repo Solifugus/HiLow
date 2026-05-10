@@ -21,6 +21,8 @@ pub enum Type {
     UnknownType, // The unknown primitive type
     Time,
     Duration,
+    Money,       // Any currency
+    MoneyOf(String), // Specific currency (money<USD>)
 
     /// Optional types (T? syntax)
     Optional(Box<Type>), // T or unknown
@@ -123,6 +125,7 @@ impl Type {
                 ast::PrimitiveType::Unknown => Type::UnknownType,
                 ast::PrimitiveType::Time => Type::Time,
                 ast::PrimitiveType::Duration => Type::Duration,
+                ast::PrimitiveType::Money => Type::Money,
             },
             ast::Type::Optional(inner_type) => {
                 Type::Optional(Box::new(Type::from_ast_type(inner_type)))
@@ -147,6 +150,7 @@ impl Type {
                     Box::new(Type::from_ast_type(return_type))
                 )
             },
+            ast::Type::MoneyOf(currency) => Type::MoneyOf(currency.clone()),
             ast::Type::Unknown => Type::Unknown,
         }
     }
@@ -193,6 +197,8 @@ impl Type {
                 let ast_param_types = param_types.iter().map(|t| t.to_ast_type()).collect();
                 ast::Type::Function(ast_param_types, Box::new(return_type.to_ast_type()))
             },
+            Type::Money => ast::Type::Primitive(ast::PrimitiveType::Money),
+            Type::MoneyOf(currency) => ast::Type::MoneyOf(currency.clone()),
             Type::ObjectIterValue => ast::Type::Unknown, // Special type maps to Unknown in AST
             Type::Unknown => ast::Type::Unknown,
         }
@@ -222,6 +228,8 @@ impl std::fmt::Display for Type {
             Type::UnknownType => write!(f, "unknown"),
             Type::Time => write!(f, "time"),
             Type::Duration => write!(f, "duration"),
+            Type::Money => write!(f, "money"),
+            Type::MoneyOf(currency) => write!(f, "money<{}>", currency),
             Type::Optional(inner_type) => write!(f, "{}?", inner_type),
             Type::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
             Type::DynamicArray(elem) => write!(f, "[{}]", elem),

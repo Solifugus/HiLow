@@ -400,6 +400,7 @@ impl CodeGenerator {
                 Expression::FloatLit(_, _) => Type::default_float_type(),
                 Expression::StringLit(_, _) => Type::String,
                 Expression::DurationLit(_, _, _) => Type::Duration,
+                Expression::MoneyLit(_, currency, _) => Type::MoneyOf(currency.clone()),
                 Expression::BoolLit(_, _) => Type::Bool,
                 Expression::ObjectLiteral(obj_lit) => {
                     // Infer object type from literal
@@ -1007,6 +1008,22 @@ impl CodeGenerator {
                 // Emit duration as struct initializer
                 self.output.push_str(&format!("((HiLowDuration){{ {} }})", nanos));
             }
+            Expression::MoneyLit(micro_units, currency, _) => {
+                // Convert currency string to enum value
+                let currency_enum = match currency.as_str() {
+                    "USD" => "HL_CURRENCY_USD",
+                    "EUR" => "HL_CURRENCY_EUR",
+                    "GBP" => "HL_CURRENCY_GBP",
+                    "JPY" => "HL_CURRENCY_JPY",
+                    "CAD" => "HL_CURRENCY_CAD",
+                    "AUD" => "HL_CURRENCY_AUD",
+                    "CHF" => "HL_CURRENCY_CHF",
+                    "CNY" => "HL_CURRENCY_CNY",
+                    _ => "HL_CURRENCY_USD", // fallback
+                };
+                // Emit money as struct initializer
+                self.output.push_str(&format!("((HiLowMoney){{ {}, {} }})", micro_units, currency_enum));
+            }
             Expression::FString(fstring) => {
                 self.generate_fstring(fstring, type_checker)?;
             }
@@ -1275,6 +1292,183 @@ impl CodeGenerator {
                 return Ok(());
             }
 
+            // Money arithmetic
+            (Type::Money, Type::Money, BinaryOpKind::Add) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::Add) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::Add) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::Add) => {
+                self.output.push_str("hl_money_add(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::Sub) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::Sub) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::Sub) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::Sub) => {
+                self.output.push_str("hl_money_sub(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            // Money * scalar (need separate patterns to check is_numeric properly)
+            (Type::Money, rhs_t, BinaryOpKind::Mul) if rhs_t.is_numeric() => {
+                self.output.push_str("hl_money_mul_scalar(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::MoneyOf(_), rhs_t, BinaryOpKind::Mul) if rhs_t.is_numeric() => {
+                self.output.push_str("hl_money_mul_scalar(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            // scalar * Money
+            (lhs_t, Type::Money, BinaryOpKind::Mul) if lhs_t.is_numeric() => {
+                self.output.push_str("hl_money_mul_scalar(");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (lhs_t, Type::MoneyOf(_), BinaryOpKind::Mul) if lhs_t.is_numeric() => {
+                self.output.push_str("hl_money_mul_scalar(");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            // Money / scalar
+            (Type::Money, rhs_t, BinaryOpKind::Div) if rhs_t.is_numeric() => {
+                self.output.push_str("hl_money_div_scalar(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::MoneyOf(_), rhs_t, BinaryOpKind::Div) if rhs_t.is_numeric() => {
+                self.output.push_str("hl_money_div_scalar(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            // Money / Money (same currency) → f64 ratio
+            (Type::Money, Type::Money, BinaryOpKind::Div) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::Div) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::Div) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::Div) => {
+                self.output.push_str("hl_money_div_money(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
+            // Money comparisons
+            (Type::Money, Type::Money, BinaryOpKind::Eq) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::Eq) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::Eq) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::Eq) => {
+                self.output.push_str("hl_money_eq(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::NotEq) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::NotEq) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::NotEq) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::NotEq) => {
+                self.output.push_str("hl_money_ne(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::Less) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::Less) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::Less) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::Less) => {
+                self.output.push_str("hl_money_lt(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::LessEq) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::LessEq) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::LessEq) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::LessEq) => {
+                self.output.push_str("hl_money_le(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::Greater) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::Greater) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::Greater) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::Greater) => {
+                self.output.push_str("hl_money_gt(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::GreaterEq) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::GreaterEq) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::GreaterEq) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::GreaterEq) => {
+                self.output.push_str("hl_money_ge(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::NotLess) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::NotLess) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::NotLess) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::NotLess) => {
+                self.output.push_str("hl_money_ge(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Money, Type::Money, BinaryOpKind::NotGreater) |
+            (Type::MoneyOf(_), Type::MoneyOf(_), BinaryOpKind::NotGreater) |
+            (Type::Money, Type::MoneyOf(_), BinaryOpKind::NotGreater) |
+            (Type::MoneyOf(_), Type::Money, BinaryOpKind::NotGreater) => {
+                self.output.push_str("hl_money_le(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
             _ => {
                 // Fall through to regular binary operation
             }
@@ -1427,6 +1621,8 @@ impl CodeGenerator {
             Type::String => "print_str",
             Type::Time => "print_time",
             Type::Duration => "print_duration",
+            Type::Money => "print_money",
+            Type::MoneyOf(_) => "print_money",
             Type::Nothing => {
                 // Special case: print_nothing() takes no arguments
                 self.output.push_str("print_nothing()");
@@ -1642,6 +1838,8 @@ impl CodeGenerator {
             Type::Nothing => "void*".to_string(),
             Type::Time => "HiLowTime".to_string(),
             Type::Duration => "HiLowDuration".to_string(),
+            Type::Money => "HiLowMoney".to_string(),
+            Type::MoneyOf(_) => "HiLowMoney".to_string(),
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
@@ -1775,6 +1973,7 @@ impl CodeGenerator {
             Expression::FloatLit(_, _) => Type::F64, // Default float type
             Expression::StringLit(_, _) => Type::String,
             Expression::DurationLit(_, _, _) => Type::Duration,
+            Expression::MoneyLit(_, currency, _) => Type::MoneyOf(currency.clone()),
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident { name, .. } => {
@@ -1865,6 +2064,7 @@ impl CodeGenerator {
             Expression::FloatLit(_, _) => Type::F64,
             Expression::StringLit(_, _) => Type::String,
             Expression::DurationLit(_, _, _) => Type::Duration,
+            Expression::MoneyLit(_, currency, _) => Type::MoneyOf(currency.clone()),
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident { name, refined_type, .. } => {
@@ -1918,6 +2118,13 @@ impl CodeGenerator {
                             (Type::Time, Type::Duration) => Type::Time,        // time + duration → time
                             (Type::Duration, Type::Time) => Type::Time,        // duration + time → time
                             (Type::Duration, Type::Duration) => Type::Duration, // duration + duration → duration
+                            // Money + Money → Money (currency from left operand, type checker ensures same currency)
+                            (Type::MoneyOf(currency), Type::MoneyOf(_)) => Type::MoneyOf(currency.clone()),
+                            // Generic money + specific currency → specific currency
+                            (Type::Money, Type::MoneyOf(currency)) => Type::MoneyOf(currency.clone()),
+                            (Type::MoneyOf(currency), Type::Money) => Type::MoneyOf(currency.clone()),
+                            // Generic money + generic money → generic money
+                            (Type::Money, Type::Money) => Type::Money,
                             _ => {
                                 // Regular numeric addition
                                 if matches!(lhs_type, Type::F32 | Type::F64) ||
@@ -1938,6 +2145,13 @@ impl CodeGenerator {
                             (Type::Time, Type::Duration) => Type::Time,         // time - duration → time
                             (Type::Time, Type::Time) => Type::Duration,        // time - time → duration
                             (Type::Duration, Type::Duration) => Type::Duration, // duration - duration → duration
+                            // Money - Money → Money (currency from left operand, type checker ensures same currency)
+                            (Type::MoneyOf(currency), Type::MoneyOf(_)) => Type::MoneyOf(currency.clone()),
+                            // Generic money + specific currency → specific currency
+                            (Type::Money, Type::MoneyOf(currency)) => Type::MoneyOf(currency.clone()),
+                            (Type::MoneyOf(currency), Type::Money) => Type::MoneyOf(currency.clone()),
+                            // Generic money + generic money → generic money
+                            (Type::Money, Type::Money) => Type::Money,
                             _ => {
                                 // Regular numeric subtraction
                                 if matches!(lhs_type, Type::F32 | Type::F64) ||
@@ -1949,7 +2163,55 @@ impl CodeGenerator {
                             }
                         }
                     }
-                    BinaryOpKind::Mul | BinaryOpKind::Div | BinaryOpKind::Mod => {
+                    BinaryOpKind::Mul => {
+                        let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
+                        let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
+
+                        // Handle money multiplication
+                        match (&lhs_type, &rhs_type) {
+                            // Money * Numeric → Money (currency from left)
+                            (Type::MoneyOf(currency), _) if rhs_type.is_numeric() => Type::MoneyOf(currency.clone()),
+                            (Type::Money, _) if rhs_type.is_numeric() => Type::Money,
+                            // Numeric * Money → Money (currency from right)
+                            (_, Type::MoneyOf(currency)) if lhs_type.is_numeric() => Type::MoneyOf(currency.clone()),
+                            (_, Type::Money) if lhs_type.is_numeric() => Type::Money,
+                            _ => {
+                                // Regular numeric multiplication
+                                if matches!(lhs_type, Type::F32 | Type::F64) ||
+                                   matches!(rhs_type, Type::F32 | Type::F64) {
+                                    Type::F64
+                                } else {
+                                    Type::I32
+                                }
+                            }
+                        }
+                    }
+                    BinaryOpKind::Div => {
+                        let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
+                        let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
+
+                        // Handle money division
+                        match (&lhs_type, &rhs_type) {
+                            // Money / Money → F64 (ratio)
+                            (Type::MoneyOf(_), Type::MoneyOf(_)) => Type::F64,
+                            (Type::Money, Type::Money) => Type::F64,
+                            (Type::Money, Type::MoneyOf(_)) => Type::F64,
+                            (Type::MoneyOf(_), Type::Money) => Type::F64,
+                            // Money / Numeric → Money (currency from left)
+                            (Type::MoneyOf(currency), _) if rhs_type.is_numeric() => Type::MoneyOf(currency.clone()),
+                            (Type::Money, _) if rhs_type.is_numeric() => Type::Money,
+                            _ => {
+                                // Regular numeric division
+                                if matches!(lhs_type, Type::F32 | Type::F64) ||
+                                   matches!(rhs_type, Type::F32 | Type::F64) {
+                                    Type::F64
+                                } else {
+                                    Type::I32
+                                }
+                            }
+                        }
+                    }
+                    BinaryOpKind::Mod => {
                         let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
                         let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
                         if matches!(lhs_type, Type::F32 | Type::F64) ||
