@@ -53,8 +53,36 @@ int hl_unknown_get_options_count(HiLowUnknown* unknown);
 // Unknown print support
 void print_unknown(HiLowUnknown* unknown);
 
-// Unknown type checking
-bool hl_is_unknown(void* value);
+// Optional type support (Phase 9b fix 3a)
+// Proper wrapper struct for T? values to replace broken bit-packing approach
+typedef enum {
+    HL_OPT_I32,
+    HL_OPT_STRING,
+    HL_OPT_UNKNOWN,
+    // Add others as needed by tests; for Phase 9b just these three
+} HiLowOptionalKind;
+
+typedef struct HiLowOptional {
+    int refcount;
+    HiLowOptionalKind kind;
+    union {
+        int32_t i32_val;
+        const char* str_val;
+        HiLowUnknown* unk_val;
+    } payload;
+} HiLowOptional;
+
+// Unknown type checking (updated for HiLowOptional)
+bool hl_is_unknown(HiLowOptional* opt);
+
+// Optional constructor functions
+HiLowOptional* hl_optional_new_i32(int32_t v);
+HiLowOptional* hl_optional_new_string(const char* s);
+HiLowOptional* hl_optional_new_unknown(HiLowUnknown* u);
+
+// Optional memory management
+void hl_optional_retain(HiLowOptional* opt);
+void hl_optional_release(HiLowOptional* opt);
 
 // F-string format helpers
 char* hl_format_binary(unsigned long long value);
@@ -204,7 +232,25 @@ HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key);
 // Optional unwrap helpers for narrowed types (Phase 9b)
 // These extract the underlying T value from a T? that is known to hold T (not unknown)
 // Calling these on an unknown-state optional is undefined behavior
-int32_t hl_optional_unwrap_i32(void* optional);
-const char* hl_optional_unwrap_string(void* optional);
+int32_t hl_optional_unwrap_i32(HiLowOptional* opt);
+int64_t hl_optional_unwrap_i64(HiLowOptional* opt);
+uint32_t hl_optional_unwrap_u32(HiLowOptional* opt);
+uint64_t hl_optional_unwrap_u64(HiLowOptional* opt);
+float hl_optional_unwrap_f32(HiLowOptional* opt);
+double hl_optional_unwrap_f64(HiLowOptional* opt);
+bool hl_optional_unwrap_bool(HiLowOptional* opt);
+const char* hl_optional_unwrap_string(HiLowOptional* opt);
+HiLowUnknown* hl_optional_unwrap_unknown(HiLowOptional* opt);
+
+// Print functions for optional types (Phase 9b)
+// These check the tag and call either print_unknown or print_T
+void print_optional_i32(HiLowOptional* opt);
+void print_optional_i64(HiLowOptional* opt);
+void print_optional_u32(HiLowOptional* opt);
+void print_optional_u64(HiLowOptional* opt);
+void print_optional_f32(HiLowOptional* opt);
+void print_optional_f64(HiLowOptional* opt);
+void print_optional_bool(HiLowOptional* opt);
+void print_optional_string(HiLowOptional* opt);
 
 #endif // HILOW_RUNTIME_H

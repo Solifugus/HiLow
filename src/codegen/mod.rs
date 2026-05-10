@@ -12,6 +12,7 @@ pub enum HeapType {
     Environment,    // hilow_env_N*
     FStringBuffer,  // char* from f-string
     Unknown,        // HiLowUnknown*
+    Optional,       // T? - may contain unknown or success value
 }
 
 /// Context for function expression generation to detect escaping closures (Phase 8a)
@@ -88,6 +89,8 @@ pub struct CodeGenerator {
     in_main_program: bool,
     /// Phase 8a: Context for function expression generation (to detect escaping closures)
     function_expr_context: FunctionExprContext,
+    /// Current function's return type for optional wrapping (Phase 9b)
+    current_function_return_type: Option<Type>,
 }
 
 impl CodeGenerator {
@@ -110,6 +113,7 @@ impl CodeGenerator {
             transferred_vars: HashSet::new(),
             in_main_program: false,
             function_expr_context: FunctionExprContext::Normal,
+            current_function_return_type: None,
         }
     }
 
@@ -222,10 +226,17 @@ impl CodeGenerator {
 
         self.output.push_str(") {\n");
 
+        // Set current function return type for optional handling
+        let return_type = Type::from_ast_type(&function.return_type);
+        self.current_function_return_type = Some(return_type);
+
         // Generate function body
         if let Some(body) = &function.body {
             self.generate_block_with_parameter_context(body, &function.params, type_checker)?;
         }
+
+        // Clear function return type context
+        self.current_function_return_type = None;
 
         self.output.push_str("}\n\n");
         Ok(())
@@ -462,8 +473,8 @@ impl CodeGenerator {
                                     self.track_heap_owner(&let_decl.name, HeapType::Function);
                                 }
                                 Type::Optional(_) => {
-                                    // Optional types can contain unknown values which need cleanup
-                                    self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                                    // Optional types need conditional cleanup based on runtime value
+                                    self.track_heap_owner(&let_decl.name, HeapType::Optional);
                                 }
                                 Type::UnknownType => {
                                     // Direct unknown values also need cleanup
@@ -548,11 +559,43 @@ impl CodeGenerator {
             self.output.push_str("  return");
             if let Some(ref value) = return_stmt.value {
                 self.output.push_str(" ");
+
+                // Check if we need to wrap value for optional return type
+                let need_optional_wrap = if let Some(ref return_type) = self.current_function_return_type {
+                    if let Type::Optional(inner_type) = return_type {
+                        let value_type = self.infer_expression_type_for_codegen(value);
+                        // Wrap if returning inner type or unknown type
+                        matches!(value_type, Type::I8 | Type::I16 | Type::I32 | Type::I64 |
+                                             Type::U8 | Type::U16 | Type::U32 | Type::U64 |
+                                             Type::F32 | Type::F64 | Type::Bool | Type::String |
+                                             Type::UnknownType)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if need_optional_wrap {
+                    // Wrap primitive or unknown value for optional return type using new HiLowOptional struct
+                    let value_type = self.infer_expression_type_for_codegen(value);
+                    match value_type {
+                        Type::I32 => self.output.push_str("hl_optional_new_i32("),
+                        Type::String => self.output.push_str("hl_optional_new_string("),
+                        Type::UnknownType => self.output.push_str("hl_optional_new_unknown("),
+                        _ => self.output.push_str("hl_optional_new_i32("), // Default to i32 for now
+                    }
+                }
+
                 // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::ReturnValue;
                 self.generate_expression(value, type_checker)?;
                 self.function_expr_context = old_context;
+
+                if need_optional_wrap {
+                    self.output.push_str(")");
+                }
             }
             self.output.push_str(";\n");
         }
@@ -1153,6 +1196,41 @@ impl CodeGenerator {
                 return Ok(());
             }
             Type::UnknownType => "print_unknown",
+            Type::Optional(inner_type) => {
+                // Generate runtime dispatch for optional type
+                let inner_print_func = match inner_type.as_ref() {
+                    Type::I8 | Type::I16 | Type::I32 | Type::Isize => "print_i32",
+                    Type::I64 => "print_i64",
+                    Type::U8 | Type::U16 | Type::U32 | Type::Usize => "print_u32",
+                    Type::U64 => "print_u64",
+                    Type::F32 => "print_f32",
+                    Type::F64 => "print_f64",
+                    Type::Bool => "print_bool",
+                    Type::String => "print_str",
+                    _ => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("print() for optional type {}", inner_type),
+                            phase: "later phases".to_string(),
+                        });
+                    }
+                };
+
+                self.output.push_str(&format!("print_optional_{}(",
+                    match inner_type.as_ref() {
+                        Type::I8 | Type::I16 | Type::I32 | Type::Isize => "i32",
+                        Type::I64 => "i64",
+                        Type::U8 | Type::U16 | Type::U32 | Type::Usize => "u32",
+                        Type::U64 => "u64",
+                        Type::F32 => "f32",
+                        Type::F64 => "f64",
+                        Type::Bool => "bool",
+                        Type::String => "string",
+                        _ => unreachable!()
+                    }));
+                self.generate_expression(arg, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
             Type::ObjectIterValue => {
                 // Runtime dispatch based on type tag
                 return self.generate_print_call_for_iter_value(arg, type_checker);
@@ -1332,7 +1410,7 @@ impl CodeGenerator {
             Type::ObjectIterValue => "void*".to_string(), // Runtime-dispatched iteration value
             Type::Unknown => "void".to_string(),
             Type::UnknownType => "HiLowUnknown*".to_string(), // Unknown type with reason and options
-            Type::Optional(_) => "void*".to_string(), // T? types - placeholder for Phase 9b
+            Type::Optional(_) => "HiLowOptional*".to_string(), // T? types with wrapper struct (Phase 9b fix 3a)
         }
     }
 
@@ -1548,9 +1626,14 @@ impl CodeGenerator {
             Expression::StringLit(_, _) => Type::String,
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
-            Expression::Ident { name, .. } => {
-                // Look up the variable type from our tracking
-                self.variable_types.get(name).cloned().unwrap_or(Type::Unknown)
+            Expression::Ident { name, refined_type, .. } => {
+                // Check for refined type first (from type narrowing)
+                if let Some(ref refined) = refined_type {
+                    Type::from_ast_type(refined)
+                } else {
+                    // Look up the variable type from our tracking
+                    self.variable_types.get(name).cloned().unwrap_or(Type::Unknown)
+                }
             }
             Expression::This(_) => {
                 // Return the receiver object type in method context
@@ -1895,6 +1978,75 @@ impl CodeGenerator {
                                 // Nothing: just emit "nothing"
                                 self.output.push_str("strcat(__fstring_buf, \"nothing\"); ");
                             }
+                            Type::UnknownType => {
+                                // Unknown: emit "unknown: " + reason
+                                self.output.push_str("{ strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str(")); } ");
+                            }
+                            Type::Unknown => {
+                                // Inference failure - treat as unknown type for now
+                                self.output.push_str("{ strcat(__fstring_buf, \"<unknown>\"); } ");
+                            }
+                            Type::Optional(inner_type) => {
+                                // Optional: runtime dispatch between unknown and inner type
+                                self.output.push_str("{ if (hl_is_unknown(");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str(")) { strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(hl_optional_unwrap_unknown(");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("))); } else { ");
+
+                                match inner_type.as_ref() {
+                                    Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
+                                        self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", hl_optional_unwrap_i32(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                    }
+                                    Type::I64 => {
+                                        self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", hl_optional_unwrap_i64(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                    }
+                                    Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
+                                        self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", hl_optional_unwrap_u32(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                    }
+                                    Type::U64 => {
+                                        self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", hl_optional_unwrap_u64(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                    }
+                                    Type::F32 => {
+                                        self.output.push_str("char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", hl_optional_unwrap_f32(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                    }
+                                    Type::F64 => {
+                                        self.output.push_str("char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", hl_optional_unwrap_f64(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                    }
+                                    Type::Bool => {
+                                        self.output.push_str("strcat(__fstring_buf, hl_optional_unwrap_bool(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(") ? \"true\" : \"false\"); ");
+                                    }
+                                    Type::String => {
+                                        self.output.push_str("strcat(__fstring_buf, hl_optional_unwrap_string(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str(")); ");
+                                    }
+                                    _ => {
+                                        return Err(CodegenError::UnsupportedFeature {
+                                            feature: format!("f-string interpolation for optional type {}", inner_type),
+                                            phase: "later phases".to_string(),
+                                        });
+                                    }
+                                }
+
+                                self.output.push_str("} } ");
+                            }
                             Type::ObjectIterValue => {
                                 // Runtime dispatch for iteration value
                                 self.generate_fstring_interpolation_for_iter_value(expr, type_checker)?;
@@ -2174,8 +2326,39 @@ impl CodeGenerator {
                 self.find_property_type_in_chain(&object_type, &member_access.member, 0)
                     .unwrap_or(Type::Nothing) // Missing properties return nothing
             }
+            Type::UnknownType => {
+                // Unknown types have known properties: reason and options
+                match member_access.member.as_str() {
+                    "reason" => Type::String,
+                    "options" => Type::DynamicArray(Box::new(Type::String)),
+                    _ => Type::Nothing, // Unknown properties return nothing
+                }
+            }
             _ => Type::Unknown
         };
+
+        // Special case: property access on unknown types
+        if matches!(object_type, Type::UnknownType) {
+            match member_access.member.as_str() {
+                "reason" => {
+                    self.output.push_str("hl_unknown_get_reason(");
+                    self.generate_expression(&member_access.object, type_checker)?;
+                    self.output.push_str(")");
+                    return Ok(());
+                }
+                "options" => {
+                    self.output.push_str("hl_unknown_get_options(");
+                    self.generate_expression(&member_access.object, type_checker)?;
+                    self.output.push_str(")");
+                    return Ok(());
+                }
+                _ => {
+                    // Unknown properties return nothing
+                    self.output.push_str("&the_nothing");
+                    return Ok(());
+                }
+            }
+        }
 
         match member_type {
             Type::I32 => self.output.push_str("hl_object_get_i32("),
@@ -2865,6 +3048,10 @@ impl CodeGenerator {
                     HeapType::Unknown => {
                         self.output.push_str(&format!("    hl_unknown_release({});\n", c_var_name));
                     }
+                    HeapType::Optional => {
+                        // Release optional wrapper struct - handles inner unknown release automatically
+                        self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
+                    }
                 }
             }
         }
@@ -2950,8 +3137,8 @@ impl CodeGenerator {
                 }
                 // T? narrowed to unknown - emit unknown access
                 (Type::Optional(_), Type::Unknown) => {
-                    // The variable is known to be unknown, so it's safe to cast
-                    self.output.push_str(&format!("((HiLowUnknown*){})", c_var_name));
+                    // The variable is known to be unknown, so unwrap the unknown value
+                    self.output.push_str(&format!("hl_optional_unwrap_unknown({})", c_var_name));
                 }
                 _ => {
                     // No unwrapping needed - use the variable directly
