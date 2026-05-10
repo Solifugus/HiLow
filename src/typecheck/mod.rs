@@ -142,7 +142,7 @@ impl TypeChecker {
         }
 
         // Exit function scope
-        self.exit_scope();
+        self.exit_function_scope();
     }
 
     fn check_block(&mut self, block: &Block) {
@@ -185,7 +185,7 @@ impl TypeChecker {
         self.final_refinements = self.persistent_refinements.clone();
 
         // Exit program body scope
-        self.exit_scope();
+        self.exit_function_scope();
     }
 
     fn check_statement(&mut self, statement: &Statement) {
@@ -908,7 +908,11 @@ impl TypeChecker {
 
     fn exit_scope(&mut self) {
         self.scopes.pop();
-        // Clear persistent refinements when exiting a scope
+    }
+
+    fn exit_function_scope(&mut self) {
+        self.scopes.pop();
+        // Clear persistent refinements when exiting a function scope
         self.clear_persistent_refinements();
     }
 
@@ -1713,7 +1717,7 @@ impl TypeChecker {
         // For now, just convert the return type from AST to type system
         let return_type = Type::from_ast_type(&func_expr.return_type);
 
-        self.exit_scope();
+        self.exit_function_scope();
 
         // Return the function type
         Type::Function(param_types, Box::new(return_type))

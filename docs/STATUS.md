@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 9c — `time` Type
-**Status:** Phase 9c completed - `time` type with duration literals, arithmetic, and precision-aware comparison
+**Phase:** Phase 9d — `money` Type  
+**Status:** Phase 9c completed with multi-variable narrowing fix - ready to begin Phase 9d
 **Branch:** main
-**Last commit:** Phase 9b fix: cleanup of unknown-typed locals; Phase 9b complete
+**Last commit:** Phase 9c fix: multi-variable narrowing across sequential if-blocks; Phase 9c complete
 
 ---
 
@@ -20,6 +20,16 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-10 — Phase 9c: Multi-variable narrowing fix; Phase 9c complete
+- **Context**: Phase 9c (`time` type) was functionally complete but had a critical bug in post-block narrowing for multi-variable scenarios; sequential `is unknown` checks on different variables would only preserve the most recent narrowing
+- **Bug analysis**: The root cause was in `exit_scope()` clearing persistent refinements when exiting any block scope, not just function scopes; after `if (t1 is unknown) { return }`, t1 would be narrowed from `time?` to `time`, but when `if (t2 is unknown) { return }` executed, its block exit would clear t1's narrowing, leaving only t2 narrowed
+- **Type checker fix**: Split scope management into `exit_scope()` (for block scopes) and `exit_function_scope()` (for function scopes); persistent refinements now only clear when exiting function-level scopes, allowing post-block narrowings to accumulate within the same function as intended
+- **Scope management refinement**: Updated all exit calls to use appropriate method - `check_function`, `check_program_body`, and `check_function_expression` use `exit_function_scope()` to clear refinements; `check_block`, `check_for_in_statement`, and `check_match_expression` use `exit_scope()` to preserve refinements across sequential blocks
+- **Test case fix**: Updated failing test assertion to match actual error message format; type errors for arithmetic on optional types use "Cannot add X? and Y" format, not "arithmetic"/"non-numeric" keywords the test was expecting
+- **Verification results**: Multi-variable narrowing now works correctly - `time_precision_compare` test compiles and outputs "equal at minute precision" as expected; all regression tests still pass; complete verification ritual shows 106 passed, 0 failed, 1 ignored with no compilation errors
+- **Phase 9c completion**: The `time` type implementation is now fully complete with working multi-variable narrowing; all time/duration functionality operational; ready to proceed to Phase 9d (`money` type)
+- Commit: "Phase 9c fix: multi-variable narrowing across sequential if-blocks; Phase 9c complete"
 
 ### 2026-05-10 — Phase 9c: The `time` Type complete
 - **Context**: Phase 9b (`unknown` type) was complete; Phase 9c implements the `time` type with duration literals, arithmetic, and precision-aware comparison; `money` type deferred to Phase 9d

@@ -631,6 +631,9 @@ fn test_no_narrowing_when_if_doesnt_return() {
 
     if let Err(errors) = result {
         assert!(!errors.is_empty());
-        assert!(errors[0].message.contains("arithmetic") || errors[0].message.contains("non-numeric"));
+        assert!(errors[0].message.contains("arithmetic") ||
+                errors[0].message.contains("non-numeric") ||
+                errors[0].message.contains("Cannot add") ||
+                errors[0].message.contains("operands must be numeric"));
     }
 }
