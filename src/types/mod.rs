@@ -19,6 +19,8 @@ pub enum Type {
     /// Special types
     Nothing,
     UnknownType, // The unknown primitive type
+    Time,
+    Duration,
 
     /// Optional types (T? syntax)
     Optional(Box<Type>), // T or unknown
@@ -119,6 +121,8 @@ impl Type {
                 ast::PrimitiveType::Isize => Type::Isize,
                 ast::PrimitiveType::Nothing => Type::Nothing,
                 ast::PrimitiveType::Unknown => Type::UnknownType,
+                ast::PrimitiveType::Time => Type::Time,
+                ast::PrimitiveType::Duration => Type::Duration,
             },
             ast::Type::Optional(inner_type) => {
                 Type::Optional(Box::new(Type::from_ast_type(inner_type)))
@@ -168,6 +172,8 @@ impl Type {
             Type::Isize => ast::Type::Primitive(ast::PrimitiveType::Isize),
             Type::Nothing => ast::Type::Primitive(ast::PrimitiveType::Nothing),
             Type::UnknownType => ast::Type::Primitive(ast::PrimitiveType::Unknown),
+            Type::Time => ast::Type::Primitive(ast::PrimitiveType::Time),
+            Type::Duration => ast::Type::Primitive(ast::PrimitiveType::Duration),
             Type::Optional(inner_type) => {
                 ast::Type::Optional(Box::new(inner_type.to_ast_type()))
             },
@@ -214,6 +220,8 @@ impl std::fmt::Display for Type {
             Type::Isize => write!(f, "isize"),
             Type::Nothing => write!(f, "nothing"),
             Type::UnknownType => write!(f, "unknown"),
+            Type::Time => write!(f, "time"),
+            Type::Duration => write!(f, "duration"),
             Type::Optional(inner_type) => write!(f, "{}?", inner_type),
             Type::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
             Type::DynamicArray(elem) => write!(f, "[{}]", elem),

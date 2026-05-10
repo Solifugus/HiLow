@@ -1,0 +1,5 @@
+high program(): i32 {
+  let t = time.now()
+  print(t > time.parse("2020-01-01"))
+  return 0
+}

@@ -12,6 +12,7 @@ pub enum TokenKind {
     Integer(i64),
     Float(f64),
     StringLit(String),
+    DurationLiteral(i64, String), // nanoseconds, original_unit
     True,
     False,
 
@@ -755,9 +756,45 @@ impl Lexer {
             }
         }
 
-        let lexeme: String = self.input[start..self.current].iter().collect();
-        let cleaned = lexeme.replace('_', "");
+        // Get the numeric part first (without suffix)
+        let numeric_end = self.current;
+        let numeric_lexeme: String = self.input[start..numeric_end].iter().collect();
+        let numeric_cleaned = numeric_lexeme.replace('_', "");
 
+        // Check for duration suffix immediately following the number (no whitespace)
+        let duration_suffix = self.try_duration_suffix();
+
+        // If we found a duration suffix, create a DurationLiteral token
+        if let Some(suffix) = duration_suffix {
+            let full_lexeme: String = self.input[start..self.current].iter().collect();
+
+            let numeric_part = if is_float {
+                match numeric_cleaned.parse::<f64>() {
+                    Ok(value) => value,
+                    Err(_) => return Err(LexError::InvalidNumber {
+                        text: full_lexeme,
+                        position: start_pos,
+                    }),
+                }
+            } else {
+                match numeric_cleaned.parse::<i64>() {
+                    Ok(value) => value as f64,
+                    Err(_) => return Err(LexError::InvalidNumber {
+                        text: full_lexeme,
+                        position: start_pos,
+                    }),
+                }
+            };
+
+            let nanos = self.convert_to_nanoseconds(numeric_part, &suffix);
+            return Ok(self.make_token(TokenKind::DurationLiteral(nanos, suffix), start_pos, full_lexeme));
+        }
+
+        // Regular number (not duration)
+        let lexeme = numeric_lexeme;
+        let cleaned = numeric_cleaned;
+
+        // Regular number (not duration)
         if is_float {
             match cleaned.parse::<f64>() {
                 Ok(value) => Ok(self.make_token(TokenKind::Float(value), start_pos, lexeme)),
@@ -1102,5 +1139,65 @@ impl Lexer {
         }
 
         Err(LexError::UnterminatedString { position: start_pos })
+    }
+
+    // Try to parse a duration suffix immediately following a number (no whitespace)
+    fn try_duration_suffix(&mut self) -> Option<String> {
+        let saved_pos = self.current;
+
+        // Check for duration suffixes in priority order (longer first)
+        let suffixes = ["ns", "us", "ms", "s", "m", "h", "d"];
+
+        for suffix in &suffixes {
+            if self.matches_suffix(suffix) {
+                // Consume the suffix
+                for _ in 0..suffix.len() {
+                    self.advance();
+                }
+                return Some(suffix.to_string());
+            }
+        }
+
+        // No suffix found, restore position
+        self.current = saved_pos;
+        None
+    }
+
+    fn matches_suffix(&self, suffix: &str) -> bool {
+        let suffix_chars: Vec<char> = suffix.chars().collect();
+        if self.current + suffix_chars.len() > self.input.len() {
+            return false;
+        }
+
+        for (i, &expected) in suffix_chars.iter().enumerate() {
+            if self.input[self.current + i] != expected {
+                return false;
+            }
+        }
+
+        // Make sure there's no identifier character following (would mean it's not a suffix)
+        let next_pos = self.current + suffix_chars.len();
+        if next_pos < self.input.len() {
+            let next_char = self.input[next_pos];
+            if next_char.is_ascii_alphanumeric() || next_char == '_' {
+                return false; // This is part of a larger identifier
+            }
+        }
+
+        true
+    }
+
+    fn convert_to_nanoseconds(&self, value: f64, suffix: &str) -> i64 {
+        let nanos = match suffix {
+            "ns" => value,
+            "us" => value * 1_000.0,
+            "ms" => value * 1_000_000.0,
+            "s" => value * 1_000_000_000.0,
+            "m" => value * 60.0 * 1_000_000_000.0,
+            "h" => value * 60.0 * 60.0 * 1_000_000_000.0,
+            "d" => value * 24.0 * 60.0 * 60.0 * 1_000_000_000.0,
+            _ => value, // fallback, shouldn't happen
+        };
+        nanos as i64
     }
 }

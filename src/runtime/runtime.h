@@ -253,4 +253,57 @@ void print_optional_f64(HiLowOptional* opt);
 void print_optional_bool(HiLowOptional* opt);
 void print_optional_string(HiLowOptional* opt);
 
+// Time and duration type support (Phase 9c)
+// Time precision levels for precision-aware comparison
+typedef enum {
+    HL_TIME_PREC_DAY,
+    HL_TIME_PREC_HOUR,
+    HL_TIME_PREC_MINUTE,
+    HL_TIME_PREC_SECOND,
+    HL_TIME_PREC_MILLI,
+    HL_TIME_PREC_MICRO,
+    HL_TIME_PREC_NANO,
+} HiLowTimePrecision;
+
+// Time type: nanoseconds since epoch + precision tag
+typedef struct {
+    int64_t nanos_since_epoch;
+    HiLowTimePrecision precision;
+} HiLowTime;
+
+// Duration type: just nanoseconds (no precision tag)
+typedef struct {
+    int64_t nanos;
+} HiLowDuration;
+
+// Time constructor functions
+HiLowTime hl_time_now(void);
+HiLowOptional* hl_time_parse(const char* iso_string);
+
+// Time arithmetic functions
+HiLowTime hl_time_add_duration(HiLowTime time, HiLowDuration duration);
+HiLowTime hl_time_sub_duration(HiLowTime time, HiLowDuration duration);
+HiLowDuration hl_time_sub_time(HiLowTime lhs, HiLowTime rhs);
+HiLowDuration hl_duration_add(HiLowDuration lhs, HiLowDuration rhs);
+
+// Time comparison functions (precision-aware)
+bool hl_time_eq(HiLowTime lhs, HiLowTime rhs);
+bool hl_time_ne(HiLowTime lhs, HiLowTime rhs);
+bool hl_time_lt(HiLowTime lhs, HiLowTime rhs);
+bool hl_time_le(HiLowTime lhs, HiLowTime rhs);
+bool hl_time_gt(HiLowTime lhs, HiLowTime rhs);
+bool hl_time_ge(HiLowTime lhs, HiLowTime rhs);
+
+// Duration comparison functions
+bool hl_duration_eq(HiLowDuration lhs, HiLowDuration rhs);
+bool hl_duration_ne(HiLowDuration lhs, HiLowDuration rhs);
+bool hl_duration_lt(HiLowDuration lhs, HiLowDuration rhs);
+bool hl_duration_le(HiLowDuration lhs, HiLowDuration rhs);
+bool hl_duration_gt(HiLowDuration lhs, HiLowDuration rhs);
+bool hl_duration_ge(HiLowDuration lhs, HiLowDuration rhs);
+
+// Print functions for time and duration
+void print_time(HiLowTime time);
+void print_duration(HiLowDuration duration);
+
 #endif // HILOW_RUNTIME_H

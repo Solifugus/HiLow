@@ -483,6 +483,10 @@ impl TypeChecker {
                     Type::default_float_type()
                 }
             },
+            Expression::DurationLit(_, _, _) => {
+                // Duration literals always have type duration
+                Type::Duration
+            },
             _ => {
                 // For non-literals, use regular type checking
                 self.check_expression(expression)
@@ -503,6 +507,7 @@ impl TypeChecker {
             Expression::StringLit(_, _) => Type::String,
             Expression::FString(fstring) => self.check_fstring(fstring),
             Expression::BoolLit(_, _) => Type::Bool,
+            Expression::DurationLit(_, _, _) => Type::Duration,
             Expression::Nothing(_) => Type::Nothing,
             Expression::Ident { name, position, .. } => {
                 // Look up variable in symbol table with refinement support
@@ -575,9 +580,81 @@ impl TypeChecker {
         let rhs_type = self.check_expression(&binary_op.rhs);
 
         match binary_op.op {
-            // Arithmetic operators: both operands must be same numeric type
-            BinaryOpKind::Add | BinaryOpKind::Sub | BinaryOpKind::Mul |
-            BinaryOpKind::Div | BinaryOpKind::Mod => {
+            // Arithmetic operators: handle numeric types and time/duration
+            BinaryOpKind::Add => {
+                // Special cases for time and duration
+                match (&lhs_type, &rhs_type) {
+                    (Type::Time, Type::Duration) => Type::Time,        // time + duration → time
+                    (Type::Duration, Type::Time) => Type::Time,        // duration + time → time
+                    (Type::Duration, Type::Duration) => Type::Duration, // duration + duration → duration
+                    (Type::Time, Type::Time) => {
+                        self.add_error(
+                            "Cannot add time to time; use time - time to get duration".to_string(),
+                            binary_op.position.clone()
+                        );
+                        Type::Unknown
+                    }
+                    _ => {
+                        // Regular numeric addition
+                        if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+                            self.add_error(
+                                format!("Cannot add {} and {}; operands must be numeric or time/duration",
+                                        lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        if lhs_type != rhs_type {
+                            self.add_error(
+                                format!("Cannot add {} and {}; types must match exactly", lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        lhs_type
+                    }
+                }
+            },
+            BinaryOpKind::Sub => {
+                // Special cases for time and duration
+                match (&lhs_type, &rhs_type) {
+                    (Type::Time, Type::Duration) => Type::Time,         // time - duration → time
+                    (Type::Time, Type::Time) => Type::Duration,        // time - time → duration
+                    (Type::Duration, Type::Duration) => Type::Duration, // duration - duration → duration
+                    (Type::Duration, Type::Time) => {
+                        self.add_error(
+                            "Cannot subtract time from duration; use time - duration instead".to_string(),
+                            binary_op.position.clone()
+                        );
+                        Type::Unknown
+                    }
+                    _ => {
+                        // Regular numeric subtraction
+                        if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+                            self.add_error(
+                                format!("Cannot subtract {} and {}; operands must be numeric or time/duration",
+                                        lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        if lhs_type != rhs_type {
+                            self.add_error(
+                                format!("Cannot subtract {} and {}; types must match exactly", lhs_type, rhs_type),
+                                binary_op.position.clone()
+                            );
+                            return Type::Unknown;
+                        }
+
+                        lhs_type
+                    }
+                }
+            },
+            BinaryOpKind::Mul | BinaryOpKind::Div | BinaryOpKind::Mod => {
+                // No special time/duration cases for these operations
                 if !lhs_type.is_numeric() {
                     self.add_error(
                         format!("Cannot apply arithmetic operator to non-numeric type {}", lhs_type),
@@ -602,23 +679,27 @@ impl TypeChecker {
             BinaryOpKind::Less | BinaryOpKind::Greater |
             BinaryOpKind::LessEq | BinaryOpKind::GreaterEq |
             BinaryOpKind::NotLess | BinaryOpKind::NotGreater => {
-                if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
+                // Allow time-time comparisons and duration-duration comparisons
+                if (lhs_type == Type::Time && rhs_type == Type::Time) ||
+                   (lhs_type == Type::Duration && rhs_type == Type::Duration) {
+                    Type::Bool
+                } else if lhs_type.is_numeric() && rhs_type.is_numeric() {
+                    if lhs_type != rhs_type {
+                        self.add_error(
+                            format!("Cannot compare {} and {}; types must match exactly", lhs_type, rhs_type),
+                            binary_op.position.clone()
+                        );
+                        return Type::Unknown;
+                    }
+                    Type::Bool
+                } else {
                     self.add_error(
-                        format!("Cannot compare non-numeric types {} and {}", lhs_type, rhs_type),
+                        format!("Cannot compare {} and {}; operands must be same numeric type, both time, or both duration",
+                                lhs_type, rhs_type),
                         binary_op.position.clone()
                     );
-                    return Type::Unknown;
+                    Type::Unknown
                 }
-
-                if lhs_type != rhs_type {
-                    self.add_error(
-                        format!("Cannot compare {} and {}; types must match exactly", lhs_type, rhs_type),
-                        binary_op.position.clone()
-                    );
-                    return Type::Unknown;
-                }
-
-                Type::Bool
             },
 
             // Equality operators: both operands must be same type (any type), result is bool
@@ -799,6 +880,7 @@ impl TypeChecker {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
             Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String |
+            Type::Time | Type::Duration |
             Type::Nothing | Type::UnknownType => {
                 // These types are printable
             }
@@ -1038,7 +1120,7 @@ impl TypeChecker {
                 }
             }
             // Literals don't contain variables to refine
-            Expression::IntLit(_, _) | Expression::FloatLit(_, _) |
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
             Expression::StringLit(_, _) | Expression::BoolLit(_, _) |
             Expression::This(_) | Expression::Nothing(_) => {
                 // No variables to refine
@@ -1495,6 +1577,24 @@ impl TypeChecker {
     }
 
     fn check_member_access(&mut self, member_access: &MemberAccess) -> Type {
+        // Special handling for builtin types like `time`
+        if let Expression::Ident { name, .. } = member_access.object.as_ref() {
+            if name == "time" {
+                // time is a builtin type with methods
+                match member_access.member.as_str() {
+                    "now" => return Type::Function(vec![], Box::new(Type::Time)), // time.now() -> time
+                    "parse" => return Type::Function(vec![Type::String], Box::new(Type::Optional(Box::new(Type::Time)))), // time.parse(string) -> time?
+                    _ => {
+                        self.add_error(
+                            format!("time builtin does not have a method named '{}'", member_access.member),
+                            member_access.position.clone()
+                        );
+                        return Type::Unknown;
+                    }
+                }
+            }
+        }
+
         let object_type = self.check_expression(&member_access.object);
 
         match object_type {
@@ -1534,6 +1634,7 @@ impl TypeChecker {
             Expression::IntLit(value, _) => Type::default_integer_type(*value),
             Expression::FloatLit(_, _) => Type::default_float_type(),
             Expression::StringLit(_, _) => Type::String,
+            Expression::DurationLit(_, _, _) => Type::Duration,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident { name, .. } => {
                 // Look up in symbol table
@@ -1762,7 +1863,7 @@ impl TypeChecker {
                 }
             }
             // Literal expressions don't contain variable references
-            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::Nothing(_) | Expression::This(_) => {
                 // No variables to capture
             }
@@ -1930,7 +2031,7 @@ impl TypeChecker {
                 }
             }
             // Literal expressions don't contain variable references
-            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) | Expression::StringLit(_, _) |
             Expression::FString(_) | Expression::BoolLit(_, _) | Expression::Nothing(_) | Expression::This(_) => {
                 // No variables to capture
             }
@@ -2083,6 +2184,7 @@ impl HasPosition for Expression {
             Expression::IntLit(_, pos) => pos.clone(),
             Expression::FloatLit(_, pos) => pos.clone(),
             Expression::StringLit(_, pos) => pos.clone(),
+            Expression::DurationLit(_, _, pos) => pos.clone(),
             Expression::FString(fstring) => fstring.position.clone(),
             Expression::BoolLit(_, pos) => pos.clone(),
             Expression::Ident { position, .. } => position.clone(),

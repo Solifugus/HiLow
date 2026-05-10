@@ -985,3 +985,106 @@ fn test_arrow_vs_assignment() {
         }
     }
 }
+
+// Duration literal tests
+#[test]
+fn test_duration_literal_seconds() {
+    let input = "30s";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2); // duration + EOF
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(30_000_000_000, "s".to_string()));
+    assert_eq!(tokens[0].lexeme, "30s");
+}
+
+#[test]
+fn test_duration_literal_minutes() {
+    let input = "2m";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(2 * 60 * 1_000_000_000, "m".to_string()));
+    assert_eq!(tokens[0].lexeme, "2m");
+}
+
+#[test]
+fn test_duration_literal_hours() {
+    let input = "2h";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(2 * 60 * 60 * 1_000_000_000, "h".to_string()));
+    assert_eq!(tokens[0].lexeme, "2h");
+}
+
+#[test]
+fn test_duration_literal_milliseconds() {
+    let input = "500ms";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(500_000_000, "ms".to_string()));
+    assert_eq!(tokens[0].lexeme, "500ms");
+}
+
+#[test]
+fn test_duration_literal_microseconds() {
+    let input = "250us";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(250_000, "us".to_string()));
+    assert_eq!(tokens[0].lexeme, "250us");
+}
+
+#[test]
+fn test_duration_literal_nanoseconds() {
+    let input = "100ns";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(100, "ns".to_string()));
+    assert_eq!(tokens[0].lexeme, "100ns");
+}
+
+#[test]
+fn test_duration_literal_days() {
+    let input = "1d";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(24 * 60 * 60 * 1_000_000_000, "d".to_string()));
+    assert_eq!(tokens[0].lexeme, "1d");
+}
+
+#[test]
+fn test_duration_literal_float() {
+    let input = "1.5h";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    // 1.5 hours = 1.5 * 60 * 60 * 1_000_000_000 = 5400000000000
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(5_400_000_000_000, "h".to_string()));
+    assert_eq!(tokens[0].lexeme, "1.5h");
+}
+
+#[test]
+fn test_duration_literal_whitespace_separation() {
+    let input = "2 h";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 3); // integer + identifier + EOF
+    assert_eq!(tokens[0].kind, TokenKind::Integer(2));
+    assert_eq!(tokens[1].kind, TokenKind::Identifier);
+    assert_eq!(tokens[1].lexeme, "h");
+}
+
+#[test]
+fn test_duration_literal_ms_vs_m_priority() {
+    let input = "1ms";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2);
+    // Should be milliseconds (ms), not minutes (m) followed by 's'
+    assert_eq!(tokens[0].kind, TokenKind::DurationLiteral(1_000_000, "ms".to_string()));
+    assert_eq!(tokens[0].lexeme, "1ms");
+}
+
+#[test]
+fn test_duration_literal_not_part_of_identifier() {
+    let input = "status";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens.len(), 2); // identifier + EOF
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+    assert_eq!(tokens[0].lexeme, "status");
+}

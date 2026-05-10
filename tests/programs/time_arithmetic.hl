@@ -1,0 +1,8 @@
+high program(): i32 {
+  let now = time.parse("2024-01-15T12:00:00")
+  let later = now + 2h
+  let earlier = now - 30m
+  print(later)
+  print(earlier)
+  return 0
+}

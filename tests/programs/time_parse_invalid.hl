@@ -1,0 +1,7 @@
+high program(): i32 {
+  let t = time.parse("not a date")
+  if (t is unknown) {
+    print(f"parse failed: {t.reason}")
+  }
+  return 0
+}

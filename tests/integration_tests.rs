@@ -1976,3 +1976,125 @@ fn test_unknown_print_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 9c: Time type integration tests
+
+#[test]
+fn test_time_now_integration() {
+    let executable = compile_program("tests/programs/time_now.hl")
+        .expect("Failed to compile time_now.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run time_now");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/time_now.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_time_arithmetic_integration() {
+    let executable = compile_program("tests/programs/time_arithmetic.hl")
+        .expect("Failed to compile time_arithmetic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run time_arithmetic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/time_arithmetic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_duration_arithmetic_integration() {
+    let executable = compile_program("tests/programs/duration_arithmetic.hl")
+        .expect("Failed to compile duration_arithmetic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run duration_arithmetic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/duration_arithmetic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_time_comparison_integration() {
+    let executable = compile_program("tests/programs/time_comparison.hl")
+        .expect("Failed to compile time_comparison.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run time_comparison");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/time_comparison.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_time_precision_compare_integration() {
+    let executable = compile_program("tests/programs/time_precision_compare.hl")
+        .expect("Failed to compile time_precision_compare.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run time_precision_compare");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/time_precision_compare.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_time_parse_invalid_integration() {
+    let executable = compile_program("tests/programs/time_parse_invalid.hl")
+        .expect("Failed to compile time_parse_invalid.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run time_parse_invalid");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/time_parse_invalid.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

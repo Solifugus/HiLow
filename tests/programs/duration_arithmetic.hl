@@ -1,0 +1,5 @@
+high program(): i32 {
+  let total = 2h + 30m + 15s
+  print(total)
+  return 0
+}

@@ -27,6 +27,8 @@ pub enum PrimitiveType {
     Isize,
     Nothing,
     Unknown,
+    Time,
+    Duration,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +267,7 @@ pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
     StringLit(String, Position),
+    DurationLit(i64, String, Position), // nanoseconds, original_unit, position
     FString(FString),
     BoolLit(bool, Position),
     Ident { name: String, refined_type: Option<Type>, position: Position },

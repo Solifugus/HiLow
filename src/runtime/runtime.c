@@ -1056,3 +1056,300 @@ void print_optional_string(HiLowOptional* opt) {
         print_str(hl_optional_unwrap_string(opt));
     }
 }
+
+// Time and duration implementations (Phase 9c)
+#include <time.h>
+#include <string.h>
+
+// Get current time at nanosecond precision
+HiLowTime hl_time_now(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+
+    HiLowTime result;
+    result.nanos_since_epoch = (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+    result.precision = HL_TIME_PREC_NANO;
+    return result;
+}
+
+// Parse ISO 8601 time string, return time? (time or unknown)
+HiLowOptional* hl_time_parse(const char* iso_string) {
+    HiLowTime time;
+    struct tm tm = {0};
+    char* end_ptr;
+
+    // Try to parse the date part: YYYY-MM-DD
+    if (strlen(iso_string) < 10) {
+        HiLowUnknown* error = hl_unknown_new("invalid time format: too short");
+        return hl_optional_new_unknown(error);
+    }
+
+    // Parse year-month-day
+    if (sscanf(iso_string, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) != 3) {
+        HiLowUnknown* error = hl_unknown_new("invalid time format: could not parse date");
+        return hl_optional_new_unknown(error);
+    }
+
+    tm.tm_year -= 1900;  // struct tm expects year since 1900
+    tm.tm_mon -= 1;      // struct tm expects 0-11 months
+
+    // Default time precision is day
+    time.precision = HL_TIME_PREC_DAY;
+
+    // Initialize fractional variables at function scope
+    int millis = 0, micros = 0, nanos = 0;
+
+    // Check if there's a time part (T)
+    if (strlen(iso_string) > 10 && iso_string[10] == 'T') {
+        const char* time_part = iso_string + 11;  // Skip past "T"
+        int hour, minute, second = 0;
+
+        // Try to parse hour:minute
+        if (sscanf(time_part, "%d:%d", &hour, &minute) >= 2) {
+            tm.tm_hour = hour;
+            tm.tm_min = minute;
+            time.precision = HL_TIME_PREC_MINUTE;
+
+            // Try to parse seconds
+            if (strlen(time_part) > 5 && time_part[2] == ':') {
+                if (sscanf(time_part + 3, "%d", &second) == 1) {
+                    tm.tm_sec = second;
+                    time.precision = HL_TIME_PREC_SECOND;
+
+                    // Try to parse fractional seconds
+                    const char* dot_pos = strchr(time_part, '.');
+                    if (dot_pos) {
+                        const char* frac_part = dot_pos + 1;
+                        int frac_len = 0;
+                        while (frac_part[frac_len] >= '0' && frac_part[frac_len] <= '9' && frac_len < 9) {
+                            frac_len++;
+                        }
+
+                        if (frac_len >= 3) {
+                            sscanf(frac_part, "%3d", &millis);
+                            time.precision = HL_TIME_PREC_MILLI;
+                        }
+                        if (frac_len >= 6) {
+                            sscanf(frac_part + 3, "%3d", &micros);
+                            time.precision = HL_TIME_PREC_MICRO;
+                        }
+                        if (frac_len >= 9) {
+                            sscanf(frac_part + 6, "%3d", &nanos);
+                            time.precision = HL_TIME_PREC_NANO;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Convert to time_t and then to nanoseconds
+    time_t epoch_time = mktime(&tm);
+    if (epoch_time == -1) {
+        HiLowUnknown* error = hl_unknown_new("invalid time: could not convert to timestamp");
+        return hl_optional_new_unknown(error);
+    }
+
+    time.nanos_since_epoch = (int64_t)epoch_time * 1000000000LL +
+                             (int64_t)millis * 1000000LL +
+                             (int64_t)micros * 1000LL +
+                             (int64_t)nanos;
+
+    // For now, return a successful time as an i64 (we'll need to extend the optional system for time)
+    // This is a simplification for Phase 9c - we'll represent time as nanoseconds
+    // TODO: Need to add HiLowOptional time support
+    return hl_optional_new_i32((int32_t)(time.nanos_since_epoch / 1000000000)); // Simplified: return seconds
+}
+
+// Time arithmetic
+HiLowTime hl_time_add_duration(HiLowTime time, HiLowDuration duration) {
+    HiLowTime result = time;
+    result.nanos_since_epoch += duration.nanos;
+    return result;
+}
+
+HiLowTime hl_time_sub_duration(HiLowTime time, HiLowDuration duration) {
+    HiLowTime result = time;
+    result.nanos_since_epoch -= duration.nanos;
+    return result;
+}
+
+HiLowDuration hl_time_sub_time(HiLowTime lhs, HiLowTime rhs) {
+    HiLowDuration result;
+    result.nanos = lhs.nanos_since_epoch - rhs.nanos_since_epoch;
+    return result;
+}
+
+HiLowDuration hl_duration_add(HiLowDuration lhs, HiLowDuration rhs) {
+    HiLowDuration result;
+    result.nanos = lhs.nanos + rhs.nanos;
+    return result;
+}
+
+// Helper function to truncate time to precision for comparison
+static int64_t truncate_time_to_precision(int64_t nanos, HiLowTimePrecision precision) {
+    switch (precision) {
+        case HL_TIME_PREC_DAY:   return (nanos / (24LL * 60LL * 60LL * 1000000000LL)) * (24LL * 60LL * 60LL * 1000000000LL);
+        case HL_TIME_PREC_HOUR:  return (nanos / (60LL * 60LL * 1000000000LL)) * (60LL * 60LL * 1000000000LL);
+        case HL_TIME_PREC_MINUTE: return (nanos / (60LL * 1000000000LL)) * (60LL * 1000000000LL);
+        case HL_TIME_PREC_SECOND: return (nanos / 1000000000LL) * 1000000000LL;
+        case HL_TIME_PREC_MILLI: return (nanos / 1000000LL) * 1000000LL;
+        case HL_TIME_PREC_MICRO: return (nanos / 1000LL) * 1000LL;
+        case HL_TIME_PREC_NANO:  return nanos;
+        default: return nanos;
+    }
+}
+
+// Get the coarser of two precisions
+static HiLowTimePrecision min_precision(HiLowTimePrecision a, HiLowTimePrecision b) {
+    return (a < b) ? a : b;
+}
+
+// Time comparison functions (precision-aware)
+bool hl_time_eq(HiLowTime lhs, HiLowTime rhs) {
+    HiLowTimePrecision precision = min_precision(lhs.precision, rhs.precision);
+    int64_t lhs_truncated = truncate_time_to_precision(lhs.nanos_since_epoch, precision);
+    int64_t rhs_truncated = truncate_time_to_precision(rhs.nanos_since_epoch, precision);
+    return lhs_truncated == rhs_truncated;
+}
+
+bool hl_time_ne(HiLowTime lhs, HiLowTime rhs) {
+    return !hl_time_eq(lhs, rhs);
+}
+
+bool hl_time_lt(HiLowTime lhs, HiLowTime rhs) {
+    HiLowTimePrecision precision = min_precision(lhs.precision, rhs.precision);
+    int64_t lhs_truncated = truncate_time_to_precision(lhs.nanos_since_epoch, precision);
+    int64_t rhs_truncated = truncate_time_to_precision(rhs.nanos_since_epoch, precision);
+    return lhs_truncated < rhs_truncated;
+}
+
+bool hl_time_le(HiLowTime lhs, HiLowTime rhs) {
+    return hl_time_lt(lhs, rhs) || hl_time_eq(lhs, rhs);
+}
+
+bool hl_time_gt(HiLowTime lhs, HiLowTime rhs) {
+    return !hl_time_le(lhs, rhs);
+}
+
+bool hl_time_ge(HiLowTime lhs, HiLowTime rhs) {
+    return !hl_time_lt(lhs, rhs);
+}
+
+// Duration comparison functions
+bool hl_duration_eq(HiLowDuration lhs, HiLowDuration rhs) {
+    return lhs.nanos == rhs.nanos;
+}
+
+bool hl_duration_ne(HiLowDuration lhs, HiLowDuration rhs) {
+    return lhs.nanos != rhs.nanos;
+}
+
+bool hl_duration_lt(HiLowDuration lhs, HiLowDuration rhs) {
+    return lhs.nanos < rhs.nanos;
+}
+
+bool hl_duration_le(HiLowDuration lhs, HiLowDuration rhs) {
+    return lhs.nanos <= rhs.nanos;
+}
+
+bool hl_duration_gt(HiLowDuration lhs, HiLowDuration rhs) {
+    return lhs.nanos > rhs.nanos;
+}
+
+bool hl_duration_ge(HiLowDuration lhs, HiLowDuration rhs) {
+    return lhs.nanos >= rhs.nanos;
+}
+
+// Print functions for time and duration
+void print_time(HiLowTime time) {
+    time_t seconds = (time_t)(time.nanos_since_epoch / 1000000000LL);
+    struct tm* tm_info = gmtime(&seconds);
+
+    switch (time.precision) {
+        case HL_TIME_PREC_DAY:
+            printf("%04d-%02d-%02d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday);
+            break;
+        case HL_TIME_PREC_HOUR:
+            printf("%04d-%02d-%02dT%02d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_hour);
+            break;
+        case HL_TIME_PREC_MINUTE:
+            printf("%04d-%02d-%02dT%02d:%02d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_hour, tm_info->tm_min);
+            break;
+        case HL_TIME_PREC_SECOND:
+            printf("%04d-%02d-%02dT%02d:%02d:%02d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday, tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
+            break;
+        case HL_TIME_PREC_MILLI:
+        case HL_TIME_PREC_MICRO:
+        case HL_TIME_PREC_NANO:
+            {
+                int64_t sub_second = time.nanos_since_epoch % 1000000000LL;
+                if (time.precision == HL_TIME_PREC_MILLI) {
+                    printf("%04d-%02d-%02dT%02d:%02d:%02d.%03d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday,
+                           tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec, (int)(sub_second / 1000000LL));
+                } else if (time.precision == HL_TIME_PREC_MICRO) {
+                    printf("%04d-%02d-%02dT%02d:%02d:%02d.%06d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday,
+                           tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec, (int)(sub_second / 1000LL));
+                } else {
+                    printf("%04d-%02d-%02dT%02d:%02d:%02d.%09d\n", tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday,
+                           tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec, (int)sub_second);
+                }
+            }
+            break;
+    }
+}
+
+void print_duration(HiLowDuration duration) {
+    int64_t nanos = duration.nanos;
+    bool negative = false;
+
+    if (nanos < 0) {
+        negative = true;
+        nanos = -nanos;
+    }
+
+    int64_t days = nanos / (24LL * 60LL * 60LL * 1000000000LL);
+    nanos %= (24LL * 60LL * 60LL * 1000000000LL);
+
+    int64_t hours = nanos / (60LL * 60LL * 1000000000LL);
+    nanos %= (60LL * 60LL * 1000000000LL);
+
+    int64_t minutes = nanos / (60LL * 1000000000LL);
+    nanos %= (60LL * 1000000000LL);
+
+    int64_t seconds = nanos / 1000000000LL;
+    nanos %= 1000000000LL;
+
+    int64_t millis = nanos / 1000000LL;
+    nanos %= 1000000LL;
+
+    int64_t micros = nanos / 1000LL;
+    nanos %= 1000LL;
+
+    if (negative) printf("-");
+
+    // Print the largest non-zero unit
+    if (days > 0) {
+        printf("%ldd\n", days);
+    } else if (hours > 0) {
+        if (minutes > 0) {
+            printf("%lldh%lldm\n", hours, minutes);
+        } else {
+            printf("%lldh\n", hours);
+        }
+    } else if (minutes > 0) {
+        if (seconds > 0) {
+            printf("%lldm%llds\n", minutes, seconds);
+        } else {
+            printf("%lldm\n", minutes);
+        }
+    } else if (seconds > 0) {
+        printf("%llds\n", seconds);
+    } else if (millis > 0) {
+        printf("%lldms\n", millis);
+    } else if (micros > 0) {
+        printf("%lldus\n", micros);
+    } else {
+        printf("%lldns\n", nanos);
+    }
+}

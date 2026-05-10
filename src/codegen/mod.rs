@@ -386,6 +386,7 @@ impl CodeGenerator {
                 Expression::IntLit(value, _) => Type::default_integer_type(*value),
                 Expression::FloatLit(_, _) => Type::default_float_type(),
                 Expression::StringLit(_, _) => Type::String,
+                Expression::DurationLit(_, _, _) => Type::Duration,
                 Expression::BoolLit(_, _) => Type::Bool,
                 Expression::ObjectLiteral(obj_lit) => {
                     // Infer object type from literal
@@ -965,6 +966,10 @@ impl CodeGenerator {
                 }
                 self.output.push('"');
             }
+            Expression::DurationLit(nanos, _, _) => {
+                // Emit duration as struct initializer
+                self.output.push_str(&format!("((HiLowDuration){{ {} }})", nanos));
+            }
             Expression::FString(fstring) => {
                 self.generate_fstring(fstring, type_checker)?;
             }
@@ -1053,6 +1058,192 @@ impl CodeGenerator {
     }
 
     fn generate_binary_op(&mut self, binary_op: &BinaryOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Check for time/duration arithmetic that needs runtime function calls
+        let lhs_type = self.infer_expression_type_for_codegen(&binary_op.lhs);
+        let rhs_type = self.infer_expression_type_for_codegen(&binary_op.rhs);
+
+        // Handle time/duration special cases
+        match (&lhs_type, &rhs_type, &binary_op.op) {
+            // Time arithmetic
+            (Type::Time, Type::Duration, BinaryOpKind::Add) => {
+                self.output.push_str("hl_time_add_duration(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Time, BinaryOpKind::Add) => {
+                self.output.push_str("hl_time_add_duration(");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Duration, BinaryOpKind::Sub) => {
+                self.output.push_str("hl_time_sub_duration(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::Sub) => {
+                self.output.push_str("hl_time_sub_time(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::Add) => {
+                self.output.push_str("hl_duration_add(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
+            // Time comparisons
+            (Type::Time, Type::Time, BinaryOpKind::Eq) => {
+                self.output.push_str("hl_time_eq(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::NotEq) => {
+                self.output.push_str("hl_time_ne(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::Less) => {
+                self.output.push_str("hl_time_lt(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::LessEq) => {
+                self.output.push_str("hl_time_le(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::Greater) => {
+                self.output.push_str("hl_time_gt(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::GreaterEq) => {
+                self.output.push_str("hl_time_ge(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::NotLess) => {
+                self.output.push_str("hl_time_ge(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Time, Type::Time, BinaryOpKind::NotGreater) => {
+                self.output.push_str("hl_time_le(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
+            // Duration comparisons
+            (Type::Duration, Type::Duration, BinaryOpKind::Eq) => {
+                self.output.push_str("hl_duration_eq(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::NotEq) => {
+                self.output.push_str("hl_duration_ne(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::Less) => {
+                self.output.push_str("hl_duration_lt(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::LessEq) => {
+                self.output.push_str("hl_duration_le(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::Greater) => {
+                self.output.push_str("hl_duration_gt(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::GreaterEq) => {
+                self.output.push_str("hl_duration_ge(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::NotLess) => {
+                self.output.push_str("hl_duration_ge(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::Duration, Type::Duration, BinaryOpKind::NotGreater) => {
+                self.output.push_str("hl_duration_le(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
+            _ => {
+                // Fall through to regular binary operation
+            }
+        }
+
+        // Regular binary operation
         self.output.push_str("(");
         self.generate_expression(&binary_op.lhs, type_checker)?;
 
@@ -1193,6 +1384,8 @@ impl CodeGenerator {
             Type::F64 => "print_f64",
             Type::Bool => "print_bool",
             Type::String => "print_str",
+            Type::Time => "print_time",
+            Type::Duration => "print_duration",
             Type::Nothing => {
                 // Special case: print_nothing() takes no arguments
                 self.output.push_str("print_nothing()");
@@ -1406,6 +1599,8 @@ impl CodeGenerator {
             Type::Usize => "size_t".to_string(),
             Type::Isize => "ssize_t".to_string(),
             Type::Nothing => "void*".to_string(),
+            Type::Time => "HiLowTime".to_string(),
+            Type::Duration => "HiLowDuration".to_string(),
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
@@ -1538,6 +1733,7 @@ impl CodeGenerator {
             Expression::IntLit(_, _) => Type::I32, // Default integer type
             Expression::FloatLit(_, _) => Type::F64, // Default float type
             Expression::StringLit(_, _) => Type::String,
+            Expression::DurationLit(_, _, _) => Type::Duration,
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident { name, .. } => {
@@ -1627,6 +1823,7 @@ impl CodeGenerator {
             Expression::IntLit(_, _) => Type::I32,
             Expression::FloatLit(_, _) => Type::F64,
             Expression::StringLit(_, _) => Type::String,
+            Expression::DurationLit(_, _, _) => Type::Duration,
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Ident { name, refined_type, .. } => {
@@ -2599,12 +2796,55 @@ impl CodeGenerator {
         Ok(())
     }
 
+    fn generate_time_builtin_call(
+        &mut self,
+        call: &Call,
+        member_access: &MemberAccess,
+        _type_checker: &TypeChecker
+    ) -> Result<(), CodegenError> {
+        match member_access.member.as_str() {
+            "now" => {
+                if !call.args.is_empty() {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: "time.now() with arguments".to_string(),
+                        phase: "Phase 9c".to_string(),
+                    });
+                }
+                self.output.push_str("hl_time_now()");
+                Ok(())
+            }
+            "parse" => {
+                if call.args.len() != 1 {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: "time.parse() with incorrect number of arguments".to_string(),
+                        phase: "Phase 9c".to_string(),
+                    });
+                }
+                self.output.push_str("hl_time_parse(");
+                self.generate_expression(&call.args[0], _type_checker)?;
+                self.output.push_str(")");
+                Ok(())
+            }
+            _ => Err(CodegenError::UnsupportedFeature {
+                feature: format!("time builtin method '{}'", member_access.member),
+                phase: "Phase 9c".to_string(),
+            })
+        }
+    }
+
     fn generate_member_function_call(
         &mut self,
         call: &Call,
         member_access: &MemberAccess,
         type_checker: &TypeChecker
     ) -> Result<(), CodegenError> {
+        // Special handling for time builtin methods
+        if let Expression::Ident { name, .. } = member_access.object.as_ref() {
+            if name == "time" {
+                return self.generate_time_builtin_call(call, member_access, type_checker);
+            }
+        }
+
         // For obj.fnProp() calls, retrieve the function and call it
         // This is a simplified approach - we assume the property is a function value
 

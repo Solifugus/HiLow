@@ -1,0 +1,8 @@
+high program(): i32 {
+  let t1 = time.parse("2024-01-15T10:00")
+  let t2 = time.parse("2024-01-15T10:00:30")
+  if (t1 ?= t2) {
+    print("equal at minute precision")
+  }
+  return 0
+}

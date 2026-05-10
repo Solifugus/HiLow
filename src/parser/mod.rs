@@ -986,6 +986,7 @@ impl Parser {
             TokenKind::Integer(n) => Ok(Expression::IntLit(n, token.position)),
             TokenKind::Float(f) => Ok(Expression::FloatLit(f, token.position)),
             TokenKind::StringLit(s) => Ok(Expression::StringLit(s, token.position)),
+            TokenKind::DurationLiteral(nanos, unit) => Ok(Expression::DurationLit(nanos, unit, token.position)),
             TokenKind::FStringStart => self.parse_f_string(token.position),
             TokenKind::True => Ok(Expression::BoolLit(true, token.position)),
             TokenKind::False => Ok(Expression::BoolLit(false, token.position)),
