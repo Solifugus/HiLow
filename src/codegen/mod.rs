@@ -61,6 +61,8 @@ pub struct CodeGenerator {
     function_counter: usize,
     /// Generated function definitions (Phase 7c-β)
     generated_functions: String,
+    /// Optional variables declared in main program (for cleanup fix)
+    main_program_optionals: Vec<String>,
     /// Function symbols - maps function name to its return type
     functions: HashMap<String, Type>,
     /// Variable types - maps variable name to its type
@@ -114,6 +116,7 @@ impl CodeGenerator {
             in_main_program: false,
             function_expr_context: FunctionExprContext::Normal,
             current_function_return_type: None,
+            main_program_optionals: Vec::new(),
         }
     }
 
@@ -177,6 +180,16 @@ impl CodeGenerator {
             self.scope_depth = 1; // Main program starts at scope 1
             self.generate_program_body_statements(body, type_checker)?;
             self.in_main_program = false;
+
+            // Phase 9c fix: Final cleanup for any remaining Optional variables
+            // This ensures cleanup happens even if scope-based cleanup missed them due to type narrowing
+            for var_name in &self.main_program_optionals.clone() {
+                if self.heap_owners.contains_key(var_name) {
+                    let c_var_name = self.mangle_variable_name(var_name);
+                    self.output.push_str(&format!("    // Phase 9c fix: Final cleanup for {}\n", var_name));
+                    self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
+                }
+            }
 
             // Phase 8a: Emit cleanup for all heap-owned variables in main scope
             self.emit_scope_cleanup(1);
@@ -353,7 +366,7 @@ impl CodeGenerator {
             }
             Statement::Break(_) => {
                 // Phase 8a: Emit cleanup before break
-                self.emit_scope_cleanup(self.scope_depth);
+                self.emit_early_return_cleanup(self.scope_depth);
 
                 // Don't generate break statements inside string switches
                 if !self.in_string_switch {
@@ -362,7 +375,7 @@ impl CodeGenerator {
             }
             Statement::Continue(_) => {
                 // Phase 8a: Emit cleanup before continue
-                self.emit_scope_cleanup(self.scope_depth);
+                self.emit_early_return_cleanup(self.scope_depth);
 
                 self.output.push_str("  continue;\n");
             }
@@ -500,6 +513,10 @@ impl CodeGenerator {
                             Type::Optional(_) => {
                                 // Optional types need conditional cleanup based on runtime value
                                 self.track_heap_owner(&let_decl.name, HeapType::Optional);
+                                // Track Optional variables in main program for backup cleanup
+                                if self.in_main_program {
+                                    self.main_program_optionals.push(let_decl.name.clone());
+                                }
                             }
                             Type::UnknownType => {
                                 // Direct unknown values also need cleanup
@@ -568,7 +585,7 @@ impl CodeGenerator {
 
             // Phase 9b fix: Emit cleanup for all scopes before returning
             for scope in (1..=self.scope_depth).rev() {
-                self.emit_scope_cleanup(scope);
+                self.emit_early_return_cleanup(scope);
             }
 
             // Phase 9b fix: Emit memory leak check and actual return
@@ -577,7 +594,7 @@ impl CodeGenerator {
             // In regular function: emit cleanup and return immediately
             // Phase 8a: Emit cleanup for all scopes before returning
             for scope in (1..=self.scope_depth).rev() {
-                self.emit_scope_cleanup(scope);
+                self.emit_early_return_cleanup(scope);
             }
 
             self.output.push_str("  return");
@@ -3442,6 +3459,49 @@ impl CodeGenerator {
         for var_name in &vars_to_release {
             self.heap_owners.remove(var_name);
         }
+    }
+
+    /// Emit release calls for early returns without modifying heap_owners
+    /// This preserves heap_owners for function-end cleanup
+    fn emit_early_return_cleanup(&mut self, target_scope: usize) {
+        // Collect variables that need to be released (declared at target_scope, not transferred)
+        let mut vars_to_release: Vec<String> = Vec::new();
+
+        for (var_name, (heap_type, scope_depth)) in &self.heap_owners {
+            if *scope_depth == target_scope && !self.transferred_vars.contains(var_name) {
+                vars_to_release.push(var_name.clone());
+            }
+        }
+
+        // Emit release calls in reverse order (LIFO scope cleanup)
+        for var_name in vars_to_release.iter().rev() {
+            if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
+                let c_var_name = self.mangle_variable_name(var_name);
+                match heap_type {
+                    HeapType::Object => {
+                        self.output.push_str(&format!("    hl_object_release({});\n", c_var_name));
+                    }
+                    HeapType::Function => {
+                        self.output.push_str(&format!("    hl_function_release({});\n", c_var_name));
+                    }
+                    HeapType::Environment => {
+                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
+                    }
+                    HeapType::FStringBuffer => {
+                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
+                    }
+                    HeapType::Unknown => {
+                        self.output.push_str(&format!("    hl_unknown_release({});\n", c_var_name));
+                    }
+                    HeapType::Optional => {
+                        // Release optional wrapper struct - handles inner unknown release automatically
+                        self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
+                    }
+                }
+            }
+        }
+
+        // Do NOT modify heap_owners - function-end cleanup needs the same list
     }
 
     fn emit_leak_check_and_return(&mut self) {
