@@ -1,3 +1,5 @@
+#define _GNU_SOURCE  // For timegm
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include "runtime.h"
 
@@ -1088,6 +1090,7 @@ void print_optional_string(HiLowOptional* opt) {
 // Time and duration implementations (Phase 9c)
 #include <time.h>
 #include <string.h>
+#include <stdlib.h>
 
 // Get current time at nanosecond precision
 HiLowTime hl_time_now(void) {
@@ -1124,6 +1127,7 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
 
     tm.tm_year -= 1900;  // struct tm expects year since 1900
     tm.tm_mon -= 1;      // struct tm expects 0-11 months
+    tm.tm_isdst = 0;     // Not daylight saving time (UTC has no DST)
 
     // Default time precision is day
     time.precision = HL_TIME_PREC_DAY;
@@ -1175,8 +1179,8 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
         }
     }
 
-    // Convert to time_t and then to nanoseconds
-    time_t epoch_time = mktime(&tm);
+    // Convert to time_t and then to nanoseconds (treat as UTC)
+    time_t epoch_time = timegm(&tm);
     if (epoch_time == -1) {
         HiLowUnknown* error = hl_unknown_new("invalid time: could not convert to timestamp");
         return hl_optional_new_unknown(error);
