@@ -1,17 +1,10 @@
 high program(): i32 {
-  let parsed_t1 = time.parse("2024-01-15T10:00")
-  let parsed_t2 = time.parse("2024-01-15T10:00:30")
-
-  if (parsed_t1 is unknown) {
-    print("parse failed for t1")
-    return 1
-  }
-  if (parsed_t2 is unknown) {
-    print("parse failed for t2")
-    return 1
-  }
-
-  if (parsed_t1 ?= parsed_t2) {
+  let t1 = time.parse("2024-01-15T10:00")
+  let t2 = time.parse("2024-01-15T10:00:30")
+  if (t1 is unknown) { return 1 }
+  if (t2 is unknown) { return 1 }
+  // Both narrowed to time here
+  if (t1 ?= t2) {
     print("equal at minute precision")
   }
   return 0

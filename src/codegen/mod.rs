@@ -467,25 +467,45 @@ impl CodeGenerator {
                 }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
-                    if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
-                        if let Some(return_type) = self.functions.get(func_name) {
-                            match return_type {
-                                Type::Object(_) => {
-                                    self.track_heap_owner(&let_decl.name, HeapType::Object);
+                    let return_type = if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
+                        // Direct function call
+                        self.functions.get(func_name).cloned()
+                    } else if let Expression::MemberAccess(member_access) = call_expr.callee.as_ref() {
+                        // Member function call - check for time builtins
+                        if let Expression::Ident { name, .. } = member_access.object.as_ref() {
+                            if name == "time" {
+                                match member_access.member.as_str() {
+                                    "now" => Some(Type::Time), // time.now() -> time (value type, no heap)
+                                    "parse" => Some(Type::Optional(Box::new(Type::Time))), // time.parse() -> time? (heap)
+                                    _ => None
                                 }
-                                Type::Function(_, _) => {
-                                    self.track_heap_owner(&let_decl.name, HeapType::Function);
-                                }
-                                Type::Optional(_) => {
-                                    // Optional types need conditional cleanup based on runtime value
-                                    self.track_heap_owner(&let_decl.name, HeapType::Optional);
-                                }
-                                Type::UnknownType => {
-                                    // Direct unknown values also need cleanup
-                                    self.track_heap_owner(&let_decl.name, HeapType::Unknown);
-                                }
-                                _ => {} // Non-heap return types
+                            } else {
+                                None
                             }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    if let Some(return_type) = return_type {
+                        match return_type {
+                            Type::Object(_) => {
+                                self.track_heap_owner(&let_decl.name, HeapType::Object);
+                            }
+                            Type::Function(_, _) => {
+                                self.track_heap_owner(&let_decl.name, HeapType::Function);
+                            }
+                            Type::Optional(_) => {
+                                // Optional types need conditional cleanup based on runtime value
+                                self.track_heap_owner(&let_decl.name, HeapType::Optional);
+                            }
+                            Type::UnknownType => {
+                                // Direct unknown values also need cleanup
+                                self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                            }
+                            _ => {} // Non-heap return types (like Type::Time)
                         }
                     }
                 }
@@ -2309,6 +2329,18 @@ impl CodeGenerator {
                                         self.generate_expression(expr, type_checker)?;
                                         self.output.push_str(")); ");
                                     }
+                                    Type::Time => {
+                                        // Use print_time functionality for time formatting
+                                        self.output.push_str("{ HiLowTime __time_tmp = hl_optional_unwrap_time(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str("); char __tmp_buf[64]; struct tm *tm = gmtime(&(time_t){__time_tmp.nanos_since_epoch / 1000000000}); strftime(__tmp_buf, 64, \"%Y-%m-%dT%H:%M:%S\", tm); strcat(__fstring_buf, __tmp_buf); }");
+                                    }
+                                    Type::Duration => {
+                                        // Use print_duration functionality for duration formatting
+                                        self.output.push_str("{ HiLowDuration __dur_tmp = hl_optional_unwrap_duration(");
+                                        self.generate_expression(expr, type_checker)?;
+                                        self.output.push_str("); char __tmp_buf[64]; int64_t nanos = __dur_tmp.nanos; if (nanos == 0) { strcat(__fstring_buf, \"0s\"); } else { sprintf(__tmp_buf, \"%lldns\", nanos); strcat(__fstring_buf, __tmp_buf); } }");
+                                    }
                                     _ => {
                                         return Err(CodegenError::UnsupportedFeature {
                                             feature: format!("f-string interpolation for optional type {}", inner_type),
@@ -3493,6 +3525,12 @@ impl CodeGenerator {
                         }
                         Type::String => {
                             self.output.push_str(&format!("hl_optional_unwrap_string({})", c_var_name));
+                        }
+                        Type::Time => {
+                            self.output.push_str(&format!("hl_optional_unwrap_time({})", c_var_name));
+                        }
+                        Type::Duration => {
+                            self.output.push_str(&format!("hl_optional_unwrap_duration({})", c_var_name));
                         }
                         _ => {
                             // For other types, use the raw variable for now

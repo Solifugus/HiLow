@@ -153,6 +153,24 @@ HiLowOptional* hl_optional_new_unknown(HiLowUnknown* u) {
     return opt;
 }
 
+HiLowOptional* hl_optional_new_time(HiLowTime t) {
+    HiLowOptional* opt = malloc(sizeof(HiLowOptional));
+    hl_alloc_count++;
+    opt->refcount = 1;
+    opt->kind = HL_OPT_TIME;
+    opt->payload.time_val = t;  // Copy the time struct
+    return opt;
+}
+
+HiLowOptional* hl_optional_new_duration(HiLowDuration d) {
+    HiLowOptional* opt = malloc(sizeof(HiLowOptional));
+    hl_alloc_count++;
+    opt->refcount = 1;
+    opt->kind = HL_OPT_DURATION;
+    opt->payload.duration_val = d;  // Copy the duration struct
+    return opt;
+}
+
 void hl_optional_retain(HiLowOptional* opt) {
     if (opt) {
         opt->refcount++;
@@ -992,6 +1010,16 @@ bool hl_optional_unwrap_bool(HiLowOptional* opt) {
     return false;
 }
 
+HiLowTime hl_optional_unwrap_time(HiLowOptional* opt) {
+    // Safe implementation: read from the wrapper struct's payload
+    return opt ? opt->payload.time_val : (HiLowTime){0, HL_TIME_PREC_SECOND};
+}
+
+HiLowDuration hl_optional_unwrap_duration(HiLowOptional* opt) {
+    // Safe implementation: read from the wrapper struct's payload
+    return opt ? opt->payload.duration_val : (HiLowDuration){0};
+}
+
 // Print functions for optional types
 void print_optional_i32(HiLowOptional* opt) {
     if (hl_is_unknown(opt)) {
@@ -1155,10 +1183,8 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
                              (int64_t)micros * 1000LL +
                              (int64_t)nanos;
 
-    // For now, return a successful time as an i64 (we'll need to extend the optional system for time)
-    // This is a simplification for Phase 9c - we'll represent time as nanoseconds
-    // TODO: Need to add HiLowOptional time support
-    return hl_optional_new_i32((int32_t)(time.nanos_since_epoch / 1000000000)); // Simplified: return seconds
+    // Return a successful time using the proper time optional constructor
+    return hl_optional_new_time(time);
 }
 
 // Time arithmetic

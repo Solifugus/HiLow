@@ -53,12 +53,37 @@ int hl_unknown_get_options_count(HiLowUnknown* unknown);
 // Unknown print support
 void print_unknown(HiLowUnknown* unknown);
 
+// Time and duration type support (Phase 9c)
+// Time precision levels for precision-aware comparison
+typedef enum {
+    HL_TIME_PREC_DAY,
+    HL_TIME_PREC_HOUR,
+    HL_TIME_PREC_MINUTE,
+    HL_TIME_PREC_SECOND,
+    HL_TIME_PREC_MILLI,
+    HL_TIME_PREC_MICRO,
+    HL_TIME_PREC_NANO,
+} HiLowTimePrecision;
+
+// Time type: nanoseconds since epoch + precision tag
+typedef struct {
+    int64_t nanos_since_epoch;
+    HiLowTimePrecision precision;
+} HiLowTime;
+
+// Duration type: just nanoseconds (no precision tag)
+typedef struct {
+    int64_t nanos;
+} HiLowDuration;
+
 // Optional type support (Phase 9b fix 3a)
 // Proper wrapper struct for T? values to replace broken bit-packing approach
 typedef enum {
     HL_OPT_I32,
     HL_OPT_STRING,
     HL_OPT_UNKNOWN,
+    HL_OPT_TIME,
+    HL_OPT_DURATION,
     // Add others as needed by tests; for Phase 9b just these three
 } HiLowOptionalKind;
 
@@ -69,6 +94,8 @@ typedef struct HiLowOptional {
         int32_t i32_val;
         const char* str_val;
         HiLowUnknown* unk_val;
+        HiLowTime time_val;
+        HiLowDuration duration_val;
     } payload;
 } HiLowOptional;
 
@@ -79,6 +106,8 @@ bool hl_is_unknown(HiLowOptional* opt);
 HiLowOptional* hl_optional_new_i32(int32_t v);
 HiLowOptional* hl_optional_new_string(const char* s);
 HiLowOptional* hl_optional_new_unknown(HiLowUnknown* u);
+HiLowOptional* hl_optional_new_time(HiLowTime t);
+HiLowOptional* hl_optional_new_duration(HiLowDuration d);
 
 // Optional memory management
 void hl_optional_retain(HiLowOptional* opt);
@@ -241,6 +270,8 @@ double hl_optional_unwrap_f64(HiLowOptional* opt);
 bool hl_optional_unwrap_bool(HiLowOptional* opt);
 const char* hl_optional_unwrap_string(HiLowOptional* opt);
 HiLowUnknown* hl_optional_unwrap_unknown(HiLowOptional* opt);
+HiLowTime hl_optional_unwrap_time(HiLowOptional* opt);
+HiLowDuration hl_optional_unwrap_duration(HiLowOptional* opt);
 
 // Print functions for optional types (Phase 9b)
 // These check the tag and call either print_unknown or print_T
@@ -252,29 +283,6 @@ void print_optional_f32(HiLowOptional* opt);
 void print_optional_f64(HiLowOptional* opt);
 void print_optional_bool(HiLowOptional* opt);
 void print_optional_string(HiLowOptional* opt);
-
-// Time and duration type support (Phase 9c)
-// Time precision levels for precision-aware comparison
-typedef enum {
-    HL_TIME_PREC_DAY,
-    HL_TIME_PREC_HOUR,
-    HL_TIME_PREC_MINUTE,
-    HL_TIME_PREC_SECOND,
-    HL_TIME_PREC_MILLI,
-    HL_TIME_PREC_MICRO,
-    HL_TIME_PREC_NANO,
-} HiLowTimePrecision;
-
-// Time type: nanoseconds since epoch + precision tag
-typedef struct {
-    int64_t nanos_since_epoch;
-    HiLowTimePrecision precision;
-} HiLowTime;
-
-// Duration type: just nanoseconds (no precision tag)
-typedef struct {
-    int64_t nanos;
-} HiLowDuration;
 
 // Time constructor functions
 HiLowTime hl_time_now(void);
