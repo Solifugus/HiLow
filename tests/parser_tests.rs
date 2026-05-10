@@ -366,8 +366,13 @@ fn test_simple_let_statement() {
 
             match &body.items[0] {
                 BlockItem::Statement(Statement::Let(let_decl)) => {
-                    assert_eq!(let_decl.name, "x");
-                    assert_eq!(let_decl.ty, None);
+                    match &let_decl.pattern {
+                        LetPattern::Identifier(name, ty) => {
+                            assert_eq!(name, "x");
+                            assert_eq!(ty, &None);
+                        }
+                        _ => panic!("Expected identifier pattern"),
+                    }
                     assert!(let_decl.initializer.is_some());
 
                     match let_decl.initializer.as_ref().unwrap() {
@@ -843,7 +848,10 @@ fn test_function_expression_no_params() {
 
             // Check the let statement contains a function expression
             if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
-                assert_eq!(let_stmt.name, "f");
+                match &let_stmt.pattern {
+                    LetPattern::Identifier(name, _) => assert_eq!(name, "f"),
+                    _ => panic!("Expected identifier pattern"),
+                }
                 if let Some(Expression::FunctionExpr(func_expr)) = &let_stmt.initializer {
                     assert!(func_expr.params.is_empty());
                     assert_eq!(func_expr.return_type, Type::Primitive(PrimitiveType::I32));
@@ -960,10 +968,11 @@ fn test_function_type_in_variable_declaration() {
         TopLevel::Program(program) => {
             let body = program.body.expect("Program should have body");
             if let BlockItem::Statement(Statement::Let(let_stmt)) = &body.items[0] {
-                if let Some(declared_type) = &let_stmt.ty {
-                    assert_eq!(*declared_type, Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))));
-                } else {
-                    panic!("Expected type annotation");
+                match &let_stmt.pattern {
+                    LetPattern::Identifier(_, Some(declared_type)) => {
+                        assert_eq!(*declared_type, Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))));
+                    }
+                    _ => panic!("Expected identifier pattern with type annotation"),
                 }
             } else {
                 panic!("Expected let statement");

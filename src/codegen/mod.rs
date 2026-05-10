@@ -93,6 +93,10 @@ pub struct CodeGenerator {
     function_expr_context: FunctionExprContext,
     /// Current function's return type for optional wrapping (Phase 9b)
     current_function_return_type: Option<Type>,
+    /// Phase 9e: Generated tuple struct definitions
+    tuple_struct_definitions: String,
+    /// Phase 9e: Track which tuple types have been generated (to avoid duplicates)
+    generated_tuple_types: HashSet<Vec<Type>>,
 }
 
 impl CodeGenerator {
@@ -117,6 +121,8 @@ impl CodeGenerator {
             function_expr_context: FunctionExprContext::Normal,
             current_function_return_type: None,
             main_program_optionals: Vec::new(),
+            tuple_struct_definitions: String::new(),
+            generated_tuple_types: HashSet::new(),
         }
     }
 
@@ -147,6 +153,9 @@ impl CodeGenerator {
 
         // Add environment struct definitions (Phase 7c-δ)
         final_output.push_str(&self.environment_structs);
+
+        // Add tuple struct definitions (Phase 9e)
+        final_output.push_str(&self.tuple_struct_definitions);
 
         // Add generated functions (from function expressions)
         final_output.push_str(&self.generated_functions);
@@ -390,10 +399,21 @@ impl CodeGenerator {
     }
 
     fn generate_let_statement(&mut self, let_decl: &LetDecl, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        match &let_decl.pattern {
+            LetPattern::Identifier(name, ty) => {
+                self.generate_identifier_let_statement(name, ty.as_ref(), &let_decl.initializer, type_checker)
+            },
+            LetPattern::Tuple(names) => {
+                self.generate_tuple_let_statement(names, &let_decl.initializer, type_checker)
+            }
+        }
+    }
+
+    fn generate_identifier_let_statement(&mut self, name: &str, ty: Option<&crate::ast::Type>, initializer: &Option<Expression>, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Determine the type
-        let var_type = if let Some(ref ty) = let_decl.ty {
+        let var_type = if let Some(ty) = ty {
             Type::from_ast_type(ty)
-        } else if let Some(ref initializer) = let_decl.initializer {
+        } else if let Some(ref initializer) = initializer {
             // Type inference - need to handle object literals properly
             match initializer {
                 Expression::IntLit(value, _) => Type::default_integer_type(*value),
@@ -422,12 +442,12 @@ impl CodeGenerator {
         };
 
         // Check if this variable is hoisted to an environment
-        if let Some((env_var, _env_struct)) = self.hoisted_variables.get(&let_decl.name) {
+        if let Some((env_var, _env_struct)) = self.hoisted_variables.get(name) {
             // Variable is hoisted - generate environment field assignment
             self.output.push_str(&format!("  {}->", env_var));
-            self.output.push_str(&let_decl.name);
+            self.output.push_str(name);
 
-            if let Some(ref initializer) = let_decl.initializer {
+            if let Some(ref initializer) = initializer {
                 self.output.push_str(" = ");
                 // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
@@ -443,10 +463,10 @@ impl CodeGenerator {
         } else {
             // Normal variable declaration
             let c_type = self.hilow_type_to_c(&var_type);
-            let c_var_name = self.mangle_variable_name(&let_decl.name);
+            let c_var_name = self.mangle_variable_name(name);
             self.output.push_str(&format!("  {} {}", c_type, c_var_name));
 
-            if let Some(ref initializer) = let_decl.initializer {
+            if let Some(ref initializer) = initializer {
                 self.output.push_str(" = ");
                 // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
@@ -462,22 +482,22 @@ impl CodeGenerator {
         }
 
         // Track the variable type for later reference
-        self.variable_types.insert(let_decl.name.clone(), var_type.clone());
+        self.variable_types.insert(name.to_string(), var_type.clone());
 
         // Phase 8a: Track heap ownership if initializer creates heap allocation
-        if let Some(ref initializer) = let_decl.initializer {
+        if let Some(ref initializer) = initializer {
             match initializer {
                 Expression::ObjectLiteral(_) => {
-                    self.track_heap_owner(&let_decl.name, HeapType::Object);
+                    self.track_heap_owner(name, HeapType::Object);
                 }
                 Expression::FunctionExpr(_) => {
-                    self.track_heap_owner(&let_decl.name, HeapType::Function);
+                    self.track_heap_owner(name, HeapType::Function);
                 }
                 Expression::FString(_) => {
-                    self.track_heap_owner(&let_decl.name, HeapType::FStringBuffer);
+                    self.track_heap_owner(name, HeapType::FStringBuffer);
                 }
                 Expression::Unknown(_) => {
-                    self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                    self.track_heap_owner(name, HeapType::Unknown);
                 }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
@@ -506,22 +526,22 @@ impl CodeGenerator {
                     if let Some(return_type) = return_type {
                         match return_type {
                             Type::Object(_) => {
-                                self.track_heap_owner(&let_decl.name, HeapType::Object);
+                                self.track_heap_owner(name, HeapType::Object);
                             }
                             Type::Function(_, _) => {
-                                self.track_heap_owner(&let_decl.name, HeapType::Function);
+                                self.track_heap_owner(name, HeapType::Function);
                             }
                             Type::Optional(_) => {
                                 // Optional types need conditional cleanup based on runtime value
-                                self.track_heap_owner(&let_decl.name, HeapType::Optional);
+                                self.track_heap_owner(name, HeapType::Optional);
                                 // Track Optional variables in main program for backup cleanup
                                 if self.in_main_program {
-                                    self.main_program_optionals.push(let_decl.name.clone());
+                                    self.main_program_optionals.push(name.to_string());
                                 }
                             }
                             Type::UnknownType => {
                                 // Direct unknown values also need cleanup
-                                self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                                self.track_heap_owner(name, HeapType::Unknown);
                             }
                             _ => {} // Non-heap return types (like Type::Time)
                         }
@@ -533,28 +553,81 @@ impl CodeGenerator {
                         // Generate retain call after the assignment
                         match heap_type {
                             HeapType::Object => {
-                                let c_var_name = self.mangle_variable_name(&let_decl.name);
+                                let c_var_name = self.mangle_variable_name(name);
                                 self.output.push_str(&format!(";\n  hl_object_retain({});", c_var_name));
                             }
                             HeapType::Function => {
-                                let c_var_name = self.mangle_variable_name(&let_decl.name);
+                                let c_var_name = self.mangle_variable_name(name);
                                 self.output.push_str(&format!(";\n  hl_function_retain({});", c_var_name));
                             }
                             HeapType::Unknown => {
-                                let c_var_name = self.mangle_variable_name(&let_decl.name);
+                                let c_var_name = self.mangle_variable_name(name);
                                 self.output.push_str(&format!(";\n  hl_unknown_retain({});", c_var_name));
                             }
                             _ => {} // Other heap types don't have specific retain functions yet
                         }
 
                         // Track the new variable as a heap owner
-                        self.track_heap_owner(&let_decl.name, heap_type);
+                        self.track_heap_owner(name, heap_type);
                     }
                 }
                 _ => {} // Non-heap-allocating expressions
             }
         }
 
+        Ok(())
+    }
+
+    fn generate_tuple_let_statement(&mut self, names: &[String], initializer: &Option<Expression>, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        if let Some(init) = initializer {
+            // Generate unique temporary variable for the tuple value
+            let temp_var = format!("__dest_{}", self.var_counter);
+            self.var_counter += 1;
+
+            // Infer the tuple type from the initializer
+            let tuple_type = self.infer_expression_type_for_codegen(init);
+            if let Type::Tuple(element_types) = tuple_type {
+                // Ensure the tuple struct exists
+                self.ensure_tuple_struct(&element_types);
+                let struct_name = self.get_tuple_type_name(&element_types);
+
+                // Generate temporary variable assignment
+                self.output.push_str(&format!("  {} {} = ", struct_name, temp_var));
+                self.generate_expression(init, type_checker)?;
+                self.output.push_str(";\n");
+
+                // Extract each component into the destructured variables
+                for (i, name) in names.iter().enumerate() {
+                    if i < element_types.len() {
+                        let element_type = &element_types[i];
+                        let c_var_name = self.mangle_variable_name(name);
+                        let c_type = self.hilow_type_to_c(element_type);
+
+                        self.output.push_str(&format!("  {} {} = {}._{};\n",
+                            c_type, c_var_name, temp_var, i));
+
+                        // Track the variable type
+                        self.variable_types.insert(name.clone(), element_type.clone());
+                    } else {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("Tuple arity mismatch: {} variables for {}-element tuple",
+                                names.len(), element_types.len()),
+                            phase: "Phase 9e".to_string(),
+                        });
+                    }
+                }
+            } else {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "Tuple destructuring of non-tuple type".to_string(),
+                    phase: "Phase 9e".to_string(),
+                });
+            }
+        } else {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: "Tuple destructuring without initializer".to_string(),
+                phase: "Phase 9e".to_string(),
+            });
+        }
         Ok(())
     }
 
@@ -1106,6 +1179,33 @@ impl CodeGenerator {
             }
             Expression::Unknown(unknown_construction) => {
                 self.generate_unknown_constructor(unknown_construction, type_checker)?;
+            }
+            Expression::TupleLit(elements, _) => {
+                // Infer element types and generate struct initializer
+                let mut element_types = Vec::new();
+                for element in elements {
+                    let element_type = self.infer_expression_type_for_codegen(element);
+                    element_types.push(element_type);
+                }
+
+                // Ensure the tuple struct exists
+                self.ensure_tuple_struct(&element_types);
+                let struct_name = self.get_tuple_type_name(&element_types);
+
+                // Generate struct initializer
+                self.output.push_str(&format!("(({}) {{ ", struct_name));
+                for (i, element) in elements.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.generate_expression(element, type_checker)?;
+                }
+                self.output.push_str(" })");
+            }
+            Expression::TupleAccess(tuple_expr, index, _) => {
+                // Generate struct field access
+                self.generate_expression(tuple_expr, type_checker)?;
+                self.output.push_str(&format!("._{}", index));
             }
         }
         Ok(())
@@ -1664,6 +1764,16 @@ impl CodeGenerator {
                 self.output.push_str(")");
                 return Ok(());
             }
+            Type::Tuple(element_types) => {
+                // Generate per-tuple-type print function call
+                self.ensure_tuple_print_function(&element_types);
+                let print_func_name = self.get_tuple_print_function_name(&element_types);
+                self.output.push_str(&print_func_name);
+                self.output.push_str("(");
+                self.generate_expression(arg, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
             Type::ObjectIterValue => {
                 // Runtime dispatch based on type tag
                 return self.generate_print_call_for_iter_value(arg, type_checker);
@@ -1844,11 +1954,148 @@ impl CodeGenerator {
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
             Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
+            Type::Tuple(element_types) => self.get_tuple_type_name(element_types),
             Type::ObjectIterValue => "void*".to_string(), // Runtime-dispatched iteration value
             Type::Unknown => "void".to_string(),
             Type::UnknownType => "HiLowUnknown*".to_string(), // Unknown type with reason and options
             Type::Optional(_) => "HiLowOptional*".to_string(), // T? types with wrapper struct (Phase 9b fix 3a)
         }
+    }
+
+    /// Generate the C type name for a tuple type (e.g., "HiLowTuple_i32_string")
+    fn get_tuple_type_name(&self, element_types: &[Type]) -> String {
+        let mut name = "HiLowTuple".to_string();
+        for element_type in element_types {
+            name.push_str("_");
+            name.push_str(&self.mangle_type_name(element_type));
+        }
+        name
+    }
+
+    /// Mangle a type name for use in C identifiers
+    fn mangle_type_name(&self, ty: &Type) -> String {
+        match ty {
+            Type::I8 => "i8".to_string(),
+            Type::I16 => "i16".to_string(),
+            Type::I32 => "i32".to_string(),
+            Type::I64 => "i64".to_string(),
+            Type::I128 => "i128".to_string(),
+            Type::U8 => "u8".to_string(),
+            Type::U16 => "u16".to_string(),
+            Type::U32 => "u32".to_string(),
+            Type::U64 => "u64".to_string(),
+            Type::U128 => "u128".to_string(),
+            Type::F32 => "f32".to_string(),
+            Type::F64 => "f64".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::String => "string".to_string(),
+            Type::Usize => "usize".to_string(),
+            Type::Isize => "isize".to_string(),
+            Type::Nothing => "nothing".to_string(),
+            Type::Time => "time".to_string(),
+            Type::Duration => "duration".to_string(),
+            Type::Money => "money".to_string(),
+            Type::MoneyOf(currency) => format!("money_{}", currency),
+            Type::Object(_) => "object".to_string(),
+            Type::Function(_, _) => "function".to_string(),
+            Type::Tuple(element_types) => self.get_tuple_type_name(element_types),
+            Type::Optional(inner) => format!("opt_{}", self.mangle_type_name(inner)),
+            _ => "unknown".to_string(),
+        }
+    }
+
+    /// Ensure a tuple struct definition exists for the given element types
+    fn ensure_tuple_struct(&mut self, element_types: &[Type]) {
+        // Check if we've already generated this tuple type
+        if self.generated_tuple_types.contains(element_types) {
+            return;
+        }
+
+        // Generate the struct definition
+        let struct_name = self.get_tuple_type_name(element_types);
+        self.tuple_struct_definitions.push_str(&format!("typedef struct {} {{\n", struct_name));
+
+        for (i, element_type) in element_types.iter().enumerate() {
+            let c_type = self.hilow_type_to_c(element_type);
+            self.tuple_struct_definitions.push_str(&format!("    {} _{};\n", c_type, i));
+        }
+
+        self.tuple_struct_definitions.push_str(&format!("}} {};\n\n", struct_name));
+
+        // Mark this tuple type as generated
+        self.generated_tuple_types.insert(element_types.to_vec());
+    }
+
+    /// Get the print function name for a tuple type
+    fn get_tuple_print_function_name(&self, element_types: &[Type]) -> String {
+        format!("print_tuple_{}", self.mangle_tuple_type_for_func_name(element_types))
+    }
+
+    /// Mangle tuple type for function name (simpler than struct name)
+    fn mangle_tuple_type_for_func_name(&self, element_types: &[Type]) -> String {
+        element_types.iter()
+            .map(|t| self.mangle_type_name(t))
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+
+    /// Ensure a print function exists for the given tuple type
+    fn ensure_tuple_print_function(&mut self, element_types: &[Type]) {
+        let func_name = self.get_tuple_print_function_name(element_types);
+
+        // Check if we've already generated this print function
+        if self.generated_functions.contains(&func_name) {
+            return;
+        }
+
+        // Ensure the struct exists first
+        self.ensure_tuple_struct(element_types);
+        let struct_name = self.get_tuple_type_name(element_types);
+
+        // Generate the print function
+        self.generated_functions.push_str(&format!("void {}({} t) {{\n", func_name, struct_name));
+        self.generated_functions.push_str("    printf(\"(\");\n");
+
+        for (i, element_type) in element_types.iter().enumerate() {
+            if i > 0 {
+                self.generated_functions.push_str("    printf(\", \");\n");
+            }
+
+            // Generate element-specific print call
+            match element_type {
+                Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
+                    self.generated_functions.push_str(&format!("    printf(\"%d\", t._{});\n", i));
+                }
+                Type::I64 => {
+                    self.generated_functions.push_str(&format!("    printf(\"%ld\", t._{});\n", i));
+                }
+                Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
+                    self.generated_functions.push_str(&format!("    printf(\"%u\", t._{});\n", i));
+                }
+                Type::U64 => {
+                    self.generated_functions.push_str(&format!("    printf(\"%lu\", t._{});\n", i));
+                }
+                Type::F32 => {
+                    self.generated_functions.push_str(&format!("    printf(\"%g\", t._{});\n", i));
+                }
+                Type::F64 => {
+                    self.generated_functions.push_str(&format!("    printf(\"%g\", t._{});\n", i));
+                }
+                Type::Bool => {
+                    self.generated_functions.push_str(&format!("    printf(t._{}? \"true\" : \"false\");\n", i));
+                }
+                Type::String => {
+                    self.generated_functions.push_str(&format!("    printf(\"%s\", t._{});\n", i));
+                }
+                _ => {
+                    // For other types, use a placeholder
+                    self.generated_functions.push_str(&format!("    printf(\"<{}>\");\n", element_type));
+                }
+            }
+        }
+
+        self.generated_functions.push_str("    printf(\")\\n\");\n");
+        self.generated_functions.push_str("}\n\n");
     }
 
     fn generate_is_check(&mut self, is_check: &IsCheck, type_checker: &TypeChecker) -> Result<(), CodegenError> {
@@ -2320,6 +2567,24 @@ impl CodeGenerator {
             }
             Expression::Nothing(_) => Type::Nothing,
             Expression::Unknown(_) => Type::UnknownType,
+            Expression::TupleLit(elements, _) => {
+                // Infer element types for tuple literal
+                let mut element_types = Vec::new();
+                for element in elements {
+                    let element_type = self.infer_expression_type_for_codegen(element);
+                    element_types.push(element_type);
+                }
+                Type::Tuple(element_types)
+            }
+            Expression::TupleAccess(tuple_expr, index, _) => {
+                // Infer type from tuple access
+                let tuple_type = self.infer_expression_type_for_codegen(tuple_expr);
+                if let Type::Tuple(element_types) = tuple_type {
+                    element_types.get(*index).cloned().unwrap_or(Type::Unknown)
+                } else {
+                    Type::Unknown
+                }
+            }
             _ => Type::Unknown
         }
     }
@@ -2629,6 +2894,65 @@ impl CodeGenerator {
                                 }
 
                                 self.output.push_str("} } ");
+                            }
+                            Type::Tuple(element_types) => {
+                                // Use tuple print function to format the tuple
+                                self.ensure_tuple_print_function(&element_types);
+                                // Generate inline tuple formatting like: (1, 2, 3)
+                                self.output.push_str("{ strcat(__fstring_buf, \"(\"); ");
+                                for (i, element_type) in element_types.iter().enumerate() {
+                                    if i > 0 {
+                                        self.output.push_str("strcat(__fstring_buf, \", \"); ");
+                                    }
+
+                                    // Generate element-specific formatting
+                                    match element_type {
+                                        Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
+                                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                        }
+                                        Type::I64 => {
+                                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%ld\", ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                        }
+                                        Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
+                                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                        }
+                                        Type::U64 => {
+                                            self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lu\", ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                        }
+                                        Type::F32 => {
+                                            self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                        }
+                                        Type::F64 => {
+                                            self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                        }
+                                        Type::Bool => {
+                                            self.output.push_str("strcat(__fstring_buf, ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{} ? \"true\" : \"false\"); ", i));
+                                        }
+                                        Type::String => {
+                                            self.output.push_str("strcat(__fstring_buf, ");
+                                            self.generate_expression(expr, type_checker)?;
+                                            self.output.push_str(&format!("._{}); ", i));
+                                        }
+                                        _ => {
+                                            self.output.push_str("strcat(__fstring_buf, \"<unknown>\"); ");
+                                        }
+                                    }
+                                }
+                                self.output.push_str("strcat(__fstring_buf, \")\"); } ");
                             }
                             Type::ObjectIterValue => {
                                 // Runtime dispatch for iteration value

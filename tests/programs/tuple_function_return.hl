@@ -1,0 +1,9 @@
+high program(): i32 {
+  function divmod(a: i32, b: i32): (i32, i32) {
+    return (a / b, a % b)
+  }
+  let (quotient, remainder) = divmod(10, 3)
+  print(quotient)
+  print(remainder)
+  return 0
+}

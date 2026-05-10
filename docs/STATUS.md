@@ -6,20 +6,52 @@
 
 ## Current state
 
-**Phase:** Phase 9d — `money` Type  
-**Status:** Phase 9c completed with multi-variable narrowing fix - ready to begin Phase 9d
+**Phase:** Phase 10 — Arrays and Slicing  
+**Status:** Phase 9 complete, Phase 10 next
 **Branch:** main
-**Last commit:** Phase 9c fix: multi-variable narrowing across sequential if-blocks; Phase 9c complete
+**Last commit:** Phase 9e: tuples with destructuring, field access, function returns; Phase 9 complete
 
 ---
 
 ## Open questions
 
-*(none currently)*
+**Phase 10 implementation**: The next phase is Phase 10 (Arrays and Slicing), which implements array types, literals, indexing, and slice operations. Reference the development plan for Phase 10 scope and verification requirements.
 
 ---
 
 ## Recent sessions
+
+### 2026-05-10 — Phase 9e: Tuples with destructuring, field access, function returns; Phase 9 complete
+- **Context**: Phase 9e (tuples) foundation was implemented in previous session but C code generation was placeholder-only; this session completed tuple codegen and all required integration tests; Phase 9 (a through e) is now complete
+- **Tuple codegen implementation**: Complete rewrite of tuple support in codegen - added `generated_tuple_types` tracking and `tuple_struct_definitions` to generate per-tuple-type C structs like `HiLowTuple_i32_string`; implemented `get_tuple_type_name`, `mangle_type_name`, and `ensure_tuple_struct` functions for automatic struct generation
+- **Tuple operations codegen**: Replaced `hilow_type_to_c` placeholder `void*` with real struct names; implemented tuple literal generation as struct initializers `((HiLowTuple_i32_string){ 1, "hello" })`; tuple field access generates `._{index}` struct field access; tuple destructuring generates temporary variable with individual field extraction to destructured variables
+- **Print and f-string support**: Added tuple print functionality with per-tuple-type print functions `print_tuple_i32_string` that format as `(1, hello)`; implemented f-string interpolation for tuples with inline element formatting; added `ensure_tuple_print_function` and `get_tuple_print_function_name` helpers
+- **Type system integration**: Added `Type::Tuple(_)` to printable types in `check_print_call` and interpolable types in f-string validation; tuple types now pass type checker validation for both print() calls and f-string interpolation expressions
+- **Expression type inference**: Extended `infer_expression_type_for_codegen` with cases for `TupleLit` (infers element types) and `TupleAccess` (extracts element type at index); proper type inference enables print dispatch and variable type tracking
+- **Integration tests**: Created all 6 required test programs: `tuple_basic` (field access), `tuple_destructuring` (let destructuring), `tuple_function_return` (function return with destructuring), `tuple_print` (print and f-string), `tuple_heterogeneous` (mixed types), `reject_tuple_arity_mismatch` (compile error); all tests pass with expected outputs
+- **Verification results**: All 118 integration tests + unit tests pass with 0 failures, 1 ignored (expected); manual verification confirms all 6 tuple tests behave correctly - 5 compile and run with exact expected outputs, 1 fails compilation with correct arity mismatch error message
+- **Phase 9 completion**: Tuples complete the final sub-phase of Phase 9; full implementation includes tuple types, literals, field access, destructuring, function returns, print support, and f-string interpolation; Phase 10 (arrays and slicing) is next
+- Commit: "Phase 9e: tuples with destructuring, field access, function returns; Phase 9 complete"
+
+### 2026-05-10 — Phase 9e: Tuple foundation implementation; structural changes complete
+- **Context**: Starting Phase 9e (tuples) implementation; requires adding tuple types, literals, field access, and destructuring to the language; significant AST and infrastructure changes needed throughout parser, type checker, and codegen
+- **AST additions**: Added `Type::Tuple(Vec<Type>)` to type system; added `Expression::TupleLit(Vec<Expression>, Position)` for tuple literals `(expr1, expr2, ...)` and `Expression::TupleAccess(Box<Expression>, usize, Position)` for field access `tuple.0`; modified `LetDecl` structure from simple `name`/`ty` fields to pattern-based approach with `LetPattern::Identifier(String, Option<Type>)` and `LetPattern::Tuple(Vec<String>)` for tuple destructuring support
+- **Parser implementation**: Added tuple type parsing `(T1, T2, ...)` with disambiguation from parenthesized types `(T)`; implemented tuple literal parsing with arity validation (minimum 2 elements); added tuple field access parsing `expr.0`, `expr.1` with disambiguation from member access; added tuple destructuring parsing `let (a, b) = expr` with arity validation; updated `parse_let_statement` to handle both identifier and tuple patterns
+- **Type checker enhancements**: Complete rewrite of `check_let_statement` to handle both identifier patterns and tuple destructuring; added type checking for `TupleLit` expressions (infers `Type::Tuple(element_types)`); added type checking for `TupleAccess` with bounds checking and type extraction; added tuple type conversion support in `from_ast_type`/`to_ast_type` functions; added missing pattern match arms throughout type checker for tuple expressions
+- **Codegen foundation**: Added placeholder support for tuple types in `hilow_type_to_c` (maps to `void*` temporarily); added placeholder code generation for tuple literals and field access; modified `generate_let_statement` to dispatch between identifier and tuple destructuring (tuple destructuring currently generates placeholder code); extensive refactoring to work with new `LetPattern` structure
+- **Compilation fixes**: Fixed numerous compilation errors from AST structure changes; updated parser test cases to work with new `LetPattern` structure; resolved borrowing issues in parser; added missing pattern match arms for tuple expressions in all expression-handling methods
+- **Verification results**: All tests passing with 0 failures (112 passed across all test modules); clean verification ritual output; basic tuple parsing and type checking structure functional, though C code generation is placeholder-only
+- **Current state**: Foundation for Phase 9e tuples is complete with full AST, parser, and type checker support; remaining work is implementing proper C code generation for tuple operations and the required integration tests; no regression in existing functionality
+
+### 2026-05-10 — Phase 9d fix: Type inference and currency mismatch detection; Phase 9d complete
+- **Context**: Phase 9d was substantially implemented but had two critical bugs causing money binary operation tests to fail; type inference for binary expressions returned wrong type (int32_t instead of HiLowMoney) and currency mismatch detection wasn't working due to symbol table storing generic money types instead of specific currencies
+- **Bug 1 - Money binary expressions infer wrong type**: Generated C for `let total = price + 5.00 USD` was `int32_t total = hl_money_add(...)` instead of `HiLowMoney total = hl_money_add(...)`; root cause was `infer_expression_type_for_codegen` lacked money cases for BinaryOp expressions
+- **Bug 2 - Currency mismatch should fail at type checker**: `reject_money_mismatch.hl` with `usd + eur` was passing type checker and failing at C compile; should have been caught as HiLow type error with "Cannot mix money<USD> and money<EUR>" message
+- **Codegen fix**: Added comprehensive money cases to `infer_expression_type_for_codegen` in BinaryOp matching - Add/Sub: `MoneyOf + MoneyOf = MoneyOf`, `Money + MoneyOf = MoneyOf`; Mul: `Money * Numeric = Money`; Div: `Money / Money = F64`, `Money / Numeric = Money`; handles both generic `Money` and specific `MoneyOf(currency)` types
+- **Type checker fix**: Modified `check_let_statement` to preserve specific currency information when assigning `MoneyOf("USD")` literals to variables declared as generic `money` type; symbol table now stores `MoneyOf("USD")` instead of generic `Money`, enabling currency mismatch detection in binary operations
+- **Verification results**: All 6 money tests now behave correctly - `money_arithmetic` prints "$24.99", `money_multiplication` prints "$30.00", `money_comparison` prints "b is greater", `money_basic` and `money_currencies` still pass, `reject_money_mismatch` correctly fails with "Cannot mix money<USD> and money<EUR> in arithmetic; explicit conversion required"
+- **Phase 9d completion**: Money type with currency tags and same-currency arithmetic fully implemented; type inference correctly handles money binary operations; currency mismatch detection works as designed; all 112 tests passing, 0 failed, 1 ignored
+- Commit: "Phase 9d fix: Type inference for money binary operations and currency mismatch detection."
 
 ### 2026-05-10 — Phase 9c: Multi-variable narrowing fix; Phase 9c complete
 - **Context**: Phase 9c (`time` type) was functionally complete but had a critical bug in post-block narrowing for multi-variable scenarios; sequential `is unknown` checks on different variables would only preserve the most recent narrowing

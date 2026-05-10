@@ -222,6 +222,9 @@ impl Parser {
     fn parse_type(&mut self) -> Result<Type, ParseError> {
         let base_type = if self.check(&TokenKind::LeftBracket) {
             self.parse_array_type()?
+        } else if self.check(&TokenKind::LeftParen) {
+            // Could be tuple type (T1, T2, ...) or parenthesized type (T)
+            self.parse_tuple_or_parenthesized_type()?
         } else if self.check(&TokenKind::Star) {
             // Pointer types not supported in Phase 2a
             let pos = self.peek()?.position.clone();
@@ -272,6 +275,39 @@ impl Parser {
             Ok(Type::Optional(Box::new(base_type)))
         } else {
             Ok(base_type)
+        }
+    }
+
+    fn parse_tuple_or_parenthesized_type(&mut self) -> Result<Type, ParseError> {
+        self.advance()?; // consume '('
+
+        // Parse first type
+        let first_type = self.parse_type()?;
+
+        if self.check(&TokenKind::Comma) {
+            // This is a tuple type: (T1, T2, ...)
+            let mut types = vec![first_type];
+
+            while self.check(&TokenKind::Comma) {
+                self.advance()?; // consume ','
+                types.push(self.parse_type()?);
+            }
+
+            self.expect_token(TokenKind::RightParen, "Expected ')' after tuple type")?;
+
+            if types.len() < 2 {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "at least 2 elements in tuple type".to_string(),
+                    found: TokenKind::RightParen,
+                    position: self.current_position(),
+                });
+            }
+
+            Ok(Type::Tuple(types))
+        } else {
+            // This is a parenthesized type: (T)
+            self.expect_token(TokenKind::RightParen, "Expected ')' after parenthesized type")?;
+            Ok(first_type)
         }
     }
 
@@ -485,15 +521,49 @@ impl Parser {
     fn parse_let_statement(&mut self) -> Result<Statement, ParseError> {
         let start_pos = self.advance()?.position; // consume 'let'
 
-        let name_token = self.expect_identifier("Expected variable name after 'let'")?;
-        let name = name_token.lexeme;
+        // Parse the pattern - either identifier or tuple destructuring
+        let pattern = if self.check(&TokenKind::LeftParen) {
+            // Tuple destructuring: let (a, b, c) = ...
+            self.advance()?; // consume '('
 
-        // Optional type annotation
-        let ty = if self.check(&TokenKind::Colon) {
-            self.advance()?; // consume ':'
-            Some(self.parse_type()?)
+            let mut names = Vec::new();
+
+            // Parse first identifier
+            let first_name = self.expect_identifier("Expected variable name in tuple pattern")?;
+            names.push(first_name.lexeme);
+
+            // Parse remaining identifiers
+            while self.check(&TokenKind::Comma) {
+                self.advance()?; // consume ','
+                let name = self.expect_identifier("Expected variable name in tuple pattern")?;
+                names.push(name.lexeme);
+            }
+
+            self.expect_token(TokenKind::RightParen, "Expected ')' after tuple pattern")?;
+
+            if names.len() < 2 {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "at least 2 elements in tuple pattern".to_string(),
+                    found: TokenKind::RightParen,
+                    position: start_pos,
+                });
+            }
+
+            LetPattern::Tuple(names)
         } else {
-            None
+            // Regular identifier: let name = ...
+            let name_token = self.expect_identifier("Expected variable name after 'let'")?;
+            let name = name_token.lexeme;
+
+            // Optional type annotation
+            let ty = if self.check(&TokenKind::Colon) {
+                self.advance()?; // consume ':'
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+
+            LetPattern::Identifier(name, ty)
         };
 
         // Optional initializer
@@ -504,11 +574,8 @@ impl Parser {
             None
         };
 
-        // Phase 9a: allow uninitialized let bindings (they have type nothing)
-
         Ok(Statement::Let(LetDecl {
-            name,
-            ty,
+            pattern,
             initializer,
             position: start_pos,
         }))
@@ -986,15 +1053,46 @@ impl Parser {
                     }
                 }
                 TokenKind::Dot => {
-                    // Member access
+                    // Member access or tuple field access
                     let position = self.advance()?.position; // consume '.'
-                    let member_token = self.expect_identifier("Expected member name after '.'")?;
 
-                    expr = Expression::MemberAccess(MemberAccess {
-                        object: Box::new(expr),
-                        member: member_token.lexeme,
-                        position,
-                    });
+                    // Check if the next token is an integer (tuple field access) or identifier (member access)
+                    let next_token = self.peek()?;
+                    match &next_token.kind {
+                        TokenKind::Integer(index) => {
+                            // Tuple field access: expr.0, expr.1, etc.
+                            let index_val = *index;
+                            let index_pos = next_token.position.clone();
+                            self.advance()?; // consume the integer
+
+                            if index_val < 0 {
+                                return Err(ParseError::UnexpectedToken {
+                                    expected: "non-negative integer".to_string(),
+                                    found: TokenKind::Integer(index_val),
+                                    position: index_pos,
+                                });
+                            }
+
+                            expr = Expression::TupleAccess(Box::new(expr), index_val as usize, position);
+                        }
+                        TokenKind::Identifier => {
+                            // Regular member access
+                            let member_token = self.expect_identifier("Expected member name after '.'")?;
+
+                            expr = Expression::MemberAccess(MemberAccess {
+                                object: Box::new(expr),
+                                member: member_token.lexeme,
+                                position,
+                            });
+                        }
+                        _ => {
+                            return Err(ParseError::UnexpectedToken {
+                                expected: "member name or numeric index".to_string(),
+                                found: next_token.kind.clone(),
+                                position: next_token.position.clone(),
+                            });
+                        }
+                    }
                 }
                 TokenKind::LeftBracket => {
                     // Index access
@@ -1035,10 +1133,8 @@ impl Parser {
                 Ok(Expression::This(token.position))
             }
             TokenKind::LeftParen => {
-                // Parenthesized expression
-                let expr = self.parse_expression()?;
-                self.expect_token(TokenKind::RightParen, "Expected ')' after expression")?;
-                Ok(expr)
+                // Could be parenthesized expression (expr) or tuple literal (expr1, expr2, ...)
+                self.parse_tuple_or_parenthesized_expression(token.position)
             }
             TokenKind::LeftBrace => {
                 // Object literal (in expression position)
@@ -1066,6 +1162,37 @@ impl Parser {
                 found: token.kind,
                 position: token.position,
             }),
+        }
+    }
+
+    fn parse_tuple_or_parenthesized_expression(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        // Parse the first expression
+        let first_expr = self.parse_expression()?;
+
+        if self.check(&TokenKind::Comma) {
+            // This is a tuple literal: (expr1, expr2, ...)
+            let mut expressions = vec![first_expr];
+
+            while self.check(&TokenKind::Comma) {
+                self.advance()?; // consume ','
+                expressions.push(self.parse_expression()?);
+            }
+
+            self.expect_token(TokenKind::RightParen, "Expected ')' after tuple literal")?;
+
+            if expressions.len() < 2 {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "at least 2 elements in tuple literal".to_string(),
+                    found: TokenKind::RightParen,
+                    position: start_pos,
+                });
+            }
+
+            Ok(Expression::TupleLit(expressions, start_pos))
+        } else {
+            // This is a parenthesized expression: (expr)
+            self.expect_token(TokenKind::RightParen, "Expected ')' after expression")?;
+            Ok(first_expr)
         }
     }
 

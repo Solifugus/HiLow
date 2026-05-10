@@ -1,0 +1,6 @@
+high program(): i32 {
+  let pair = (1, "hello")
+  print(pair.0)
+  print(pair.1)
+  return 0
+}

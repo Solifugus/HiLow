@@ -1,0 +1,6 @@
+high program(): i32 {
+  let p = (1, 2, 3)
+  print(p)
+  print(f"tuple = {p}")
+  return 0
+}

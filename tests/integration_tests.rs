@@ -2213,3 +2213,119 @@ fn test_reject_money_mismatch_integration() {
     assert!(error_message.contains("USD") && error_message.contains("EUR"),
             "Error should mention both USD and EUR: {}", error_message);
 }
+
+// Phase 9e: Tuple tests
+
+#[test]
+fn test_tuple_basic_integration() {
+    let executable = compile_program("tests/programs/tuple_basic.hl")
+        .expect("Failed to compile tuple_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run tuple_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/tuple_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_tuple_destructuring_integration() {
+    let executable = compile_program("tests/programs/tuple_destructuring.hl")
+        .expect("Failed to compile tuple_destructuring.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run tuple_destructuring");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/tuple_destructuring.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_tuple_function_return_integration() {
+    let executable = compile_program("tests/programs/tuple_function_return.hl")
+        .expect("Failed to compile tuple_function_return.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run tuple_function_return");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/tuple_function_return.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_tuple_print_integration() {
+    let executable = compile_program("tests/programs/tuple_print.hl")
+        .expect("Failed to compile tuple_print.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run tuple_print");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/tuple_print.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_tuple_heterogeneous_integration() {
+    let executable = compile_program("tests/programs/tuple_heterogeneous.hl")
+        .expect("Failed to compile tuple_heterogeneous.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run tuple_heterogeneous");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/tuple_heterogeneous.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_reject_tuple_arity_mismatch_integration() {
+    // This test should fail compilation with an arity mismatch error
+    let result = compile_program("tests/programs/reject_tuple_arity_mismatch.hl");
+
+    assert!(result.is_err(), "reject_tuple_arity_mismatch.hl should fail to compile");
+
+    let error_message = result.unwrap_err();
+    // The error should mention tuple arity mismatch or similar
+    assert!(error_message.contains("arity") || error_message.contains("mismatch") ||
+            error_message.contains("variables") || error_message.contains("element"),
+            "Error should mention arity/mismatch issue: {}", error_message);
+}

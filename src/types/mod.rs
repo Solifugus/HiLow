@@ -2,7 +2,7 @@ use crate::ast;
 use crate::lexer::Position;
 
 /// Type representation for the HiLow type system
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     /// Integer types
     I8, I16, I32, I64, I128,
@@ -36,6 +36,9 @@ pub enum Type {
 
     /// Function type
     Function(Vec<Type>, Box<Type>), // parameter types, return type
+
+    /// Tuple type
+    Tuple(Vec<Type>), // element types
 
     /// Special type for for-in iteration values (polymorphic, runtime-dispatched)
     ObjectIterValue,
@@ -150,6 +153,9 @@ impl Type {
                     Box::new(Type::from_ast_type(return_type))
                 )
             },
+            ast::Type::Tuple(element_types) => {
+                Type::Tuple(element_types.iter().map(|t| Type::from_ast_type(t)).collect())
+            },
             ast::Type::MoneyOf(currency) => Type::MoneyOf(currency.clone()),
             ast::Type::Unknown => Type::Unknown,
         }
@@ -196,6 +202,9 @@ impl Type {
             Type::Function(param_types, return_type) => {
                 let ast_param_types = param_types.iter().map(|t| t.to_ast_type()).collect();
                 ast::Type::Function(ast_param_types, Box::new(return_type.to_ast_type()))
+            },
+            Type::Tuple(element_types) => {
+                ast::Type::Tuple(element_types.iter().map(|t| t.to_ast_type()).collect())
             },
             Type::Money => ast::Type::Primitive(ast::PrimitiveType::Money),
             Type::MoneyOf(currency) => ast::Type::MoneyOf(currency.clone()),
@@ -252,6 +261,16 @@ impl std::fmt::Display for Type {
                     write!(f, "{}", param_type)?;
                 }
                 write!(f, "): {}", return_type)
+            },
+            Type::Tuple(element_types) => {
+                write!(f, "(")?;
+                for (i, elem_type) in element_types.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", elem_type)?;
+                }
+                write!(f, ")")
             },
             Type::ObjectIterValue => write!(f, "iteration value"),
             Type::Unknown => write!(f, "<unknown>"),

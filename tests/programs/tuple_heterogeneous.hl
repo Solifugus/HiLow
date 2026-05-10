@@ -1,0 +1,7 @@
+high program(): i32 {
+  let mix = (42, "answer", true)
+  print(mix.0)
+  print(mix.1)
+  print(mix.2)
+  return 0
+}

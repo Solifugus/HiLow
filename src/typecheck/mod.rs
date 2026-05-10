@@ -222,60 +222,111 @@ impl TypeChecker {
     }
 
     fn check_let_statement(&mut self, let_decl: &LetDecl) {
-        let declared_type = let_decl.ty.as_ref().map(|ty| Type::from_ast_type(ty));
-        let initializer_type = let_decl.initializer.as_ref().map(|expr| {
-            // Special handling for literals when there's a declared type
-            if let Some(ref declared) = declared_type {
-                self.check_expression_with_expected_type(expr, declared)
-            } else {
-                self.check_expression(expr)
-            }
-        });
+        match &let_decl.pattern {
+            LetPattern::Identifier(name, declared_type_ast) => {
+                let declared_type = declared_type_ast.as_ref().map(|ty| Type::from_ast_type(ty));
+                let initializer_type = let_decl.initializer.as_ref().map(|expr| {
+                    // Special handling for literals when there's a declared type
+                    if let Some(ref declared) = declared_type {
+                        self.check_expression_with_expected_type(expr, declared)
+                    } else {
+                        self.check_expression(expr)
+                    }
+                });
 
-        let final_type = match (declared_type, initializer_type) {
-            (Some(declared), Some(inferred)) => {
-                // Check that initializer matches declared type
-                // Special handling for money types: money<USD> is assignable to money
-                let types_compatible = if declared == inferred {
-                    true
-                } else if matches!(&declared, Type::Money) && matches!(&inferred, Type::MoneyOf(_)) {
-                    true // money<X> can be assigned to money
-                } else {
-                    false
+                let final_type = match (declared_type, initializer_type) {
+                    (Some(declared), Some(inferred)) => {
+                        // Check that initializer matches declared type
+                        // Special handling for money types: money<USD> is assignable to money
+                        let types_compatible = if declared == inferred {
+                            true
+                        } else if matches!(&declared, Type::Money) && matches!(&inferred, Type::MoneyOf(_)) {
+                            true // money<X> can be assigned to money
+                        } else {
+                            false
+                        };
+
+                        if !types_compatible {
+                            self.add_error(
+                                format!("Type mismatch: declared {} but initializer has type {}",
+                                        declared, inferred),
+                                let_decl.position.clone()
+                            );
+                            declared // Use declared type for symbol table
+                        } else {
+                            // For compatible money assignments, preserve the specific currency
+                            if matches!(&declared, Type::Money) && matches!(&inferred, Type::MoneyOf(_)) {
+                                inferred // Use specific currency type (money<USD>) instead of generic money
+                            } else {
+                                declared
+                            }
+                        }
+                    },
+                    (Some(declared), None) => {
+                        // Just a type declaration, no initializer
+                        declared
+                    },
+                    (None, Some(inferred)) => {
+                        // Type inference from initializer
+                        inferred
+                    },
+                    (None, None) => {
+                        // Uninitialized let binding has type nothing
+                        Type::Nothing
+                    }
                 };
 
-                if !types_compatible {
+                // Add to symbol table
+                self.declare_variable(name, final_type, let_decl.position.clone());
+            },
+            LetPattern::Tuple(names) => {
+                // Tuple destructuring: let (a, b, c) = tuple_expr
+                if let Some(initializer) = &let_decl.initializer {
+                    let initializer_type = self.check_expression(initializer);
+
+                    match &initializer_type {
+                        Type::Tuple(element_types) => {
+                            if element_types.len() != names.len() {
+                                self.add_error(
+                                    format!("Tuple destructuring arity mismatch: expected {} elements, got {}",
+                                            names.len(), element_types.len()),
+                                    let_decl.position.clone()
+                                );
+                                // Declare variables with unknown types as fallback
+                                for name in names {
+                                    self.declare_variable(name, Type::Unknown, let_decl.position.clone());
+                                }
+                            } else {
+                                // Declare each variable with its corresponding tuple element type
+                                for (name, element_type) in names.iter().zip(element_types.iter()) {
+                                    self.declare_variable(name, element_type.clone(), let_decl.position.clone());
+                                }
+                            }
+                        },
+                        _ => {
+                            self.add_error(
+                                format!("Cannot destructure non-tuple type {} in tuple pattern",
+                                        initializer_type),
+                                let_decl.position.clone()
+                            );
+                            // Declare variables with unknown types as fallback
+                            for name in names {
+                                self.declare_variable(name, Type::Unknown, let_decl.position.clone());
+                            }
+                        }
+                    }
+                } else {
                     self.add_error(
-                        format!("Type mismatch: declared {} but initializer has type {}",
-                                declared, inferred),
+                        "Tuple destructuring requires an initializer".to_string(),
                         let_decl.position.clone()
                     );
-                    declared // Use declared type for symbol table
-                } else {
-                    // For compatible money assignments, preserve the specific currency
-                    if matches!(&declared, Type::Money) && matches!(&inferred, Type::MoneyOf(_)) {
-                        inferred // Use specific currency type (money<USD>) instead of generic money
-                    } else {
-                        declared
+                    // Declare variables with unknown types as fallback
+                    for name in names {
+                        self.declare_variable(name, Type::Unknown, let_decl.position.clone());
                     }
                 }
-            },
-            (Some(declared), None) => {
-                // Just a type declaration, no initializer
-                declared
-            },
-            (None, Some(inferred)) => {
-                // Type inference from initializer
-                inferred
-            },
-            (None, None) => {
-                // Uninitialized let binding has type nothing
-                Type::Nothing
             }
-        };
-
-        // Add to symbol table
-        self.declare_variable(&let_decl.name, final_type, let_decl.position.clone());
+        }
     }
 
     fn check_return_statement(&mut self, return_stmt: &ReturnStmt) {
@@ -587,6 +638,41 @@ impl TypeChecker {
                 }
             },
             Expression::Unknown(unknown_construction) => self.check_unknown_construction(unknown_construction),
+            Expression::TupleLit(elements, _) => {
+                // Type check each element and create tuple type
+                let element_types: Vec<Type> = elements.iter()
+                    .map(|element| self.check_expression(element))
+                    .collect();
+                Type::Tuple(element_types)
+            },
+            Expression::TupleAccess(tuple_expr, index, pos) => {
+                // Type check the tuple expression
+                let tuple_type = self.check_expression(tuple_expr);
+
+                match &tuple_type {
+                    Type::Tuple(element_types) => {
+                        // Check bounds
+                        if *index >= element_types.len() {
+                            self.add_error(
+                                format!("Tuple index {} is out of bounds (tuple has {} elements)",
+                                        index, element_types.len()),
+                                pos.clone()
+                            );
+                            Type::Unknown
+                        } else {
+                            element_types[*index].clone()
+                        }
+                    },
+                    _ => {
+                        self.add_error(
+                            format!("Cannot index non-tuple type {} with .{}",
+                                    tuple_type, index),
+                            pos.clone()
+                        );
+                        Type::Unknown
+                    }
+                }
+            },
         }
     }
 
@@ -1118,7 +1204,7 @@ impl TypeChecker {
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
             Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String |
             Type::Time | Type::Duration | Type::Money | Type::MoneyOf(_) |
-            Type::Nothing | Type::UnknownType => {
+            Type::Nothing | Type::UnknownType | Type::Tuple(_) => {
                 // These types are printable
             }
             _ => {
@@ -1359,6 +1445,14 @@ impl TypeChecker {
                         self.write_refinements_to_expression(expr);
                     }
                 }
+            }
+            Expression::TupleLit(elements, _) => {
+                for element in elements {
+                    self.write_refinements_to_expression(element);
+                }
+            }
+            Expression::TupleAccess(tuple_expr, _, _) => {
+                self.write_refinements_to_expression(tuple_expr);
             }
             // Literals don't contain variables to refine
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
@@ -1617,7 +1711,8 @@ impl TypeChecker {
                         Type::Nothing |
                         Type::UnknownType |
                         Type::Optional(_) |
-                        Type::ObjectIterValue => {
+                        Type::ObjectIterValue |
+                        Type::Tuple(_) => {
                             // These types can be interpolated
                             // ObjectIterValue gets runtime dispatch like print()
                         }
@@ -2104,6 +2199,14 @@ impl TypeChecker {
                     self.check_for_captures_in_expression(options, outer_scope_depth);
                 }
             }
+            Expression::TupleLit(elements, _) => {
+                for element in elements {
+                    self.check_for_captures_in_expression(element, outer_scope_depth);
+                }
+            }
+            Expression::TupleAccess(tuple_expr, _, _) => {
+                self.check_for_captures_in_expression(tuple_expr, outer_scope_depth);
+            }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
             Expression::MoneyLit(_, _, _) | Expression::StringLit(_, _) |
@@ -2272,6 +2375,14 @@ impl TypeChecker {
                 if let Some(ref options) = unknown_construction.options {
                     self.collect_captures_in_expression(options, outer_scope_depth, captures);
                 }
+            }
+            Expression::TupleLit(elements, _) => {
+                for element in elements {
+                    self.collect_captures_in_expression(element, outer_scope_depth, captures);
+                }
+            }
+            Expression::TupleAccess(tuple_expr, _, _) => {
+                self.collect_captures_in_expression(tuple_expr, outer_scope_depth, captures);
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
@@ -2448,6 +2559,8 @@ impl HasPosition for Expression {
             Expression::WeakRef(_, pos) => pos.clone(),
             Expression::Nothing(pos) => pos.clone(),
             Expression::Unknown(unknown_construction) => unknown_construction.position.clone(),
+            Expression::TupleLit(_, pos) => pos.clone(),
+            Expression::TupleAccess(_, _, pos) => pos.clone(),
         }
     }
 

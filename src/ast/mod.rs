@@ -42,6 +42,7 @@ pub enum Type {
     Unknown, // placeholder for unknown types
     Optional(Box<Type>), // T? syntax for "T or unknown"
     MoneyOf(String), // parameterized money type: money<USD>, money<EUR>, etc.
+    Tuple(Vec<Type>), // tuple types: (T, U), (T, U, V), etc.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -289,6 +290,8 @@ pub enum Expression {
     WeakRef(Box<Expression>, Position),
     Nothing(Position),
     Unknown(UnknownConstruction),
+    TupleLit(Vec<Expression>, Position), // tuple literal: (expr1, expr2, ...)
+    TupleAccess(Box<Expression>, usize, Position), // tuple.0, tuple.1, etc.
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -310,9 +313,14 @@ pub struct ProgramBody {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum LetPattern {
+    Identifier(String, Option<Type>), // name, optional type annotation
+    Tuple(Vec<String>), // tuple destructuring: (name1, name2, ...)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct LetDecl {
-    pub name: String,
-    pub ty: Option<Type>,
+    pub pattern: LetPattern,
     pub initializer: Option<Expression>,
     pub position: Position,
 }
