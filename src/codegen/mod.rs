@@ -1330,9 +1330,13 @@ impl CodeGenerator {
         if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
             let object_type = self.infer_expression_type_for_codegen(&member_access.object);
             if let Type::Object(_) = object_type {
-                // Try to determine if this property access returns a function
-                // For now, assume it could be a function and handle it accordingly
+                // Object method calls
                 return self.generate_member_function_call(call, member_access, type_checker);
+            } else if let Expression::Ident { name, .. } = member_access.object.as_ref() {
+                if name == "time" {
+                    // Built-in time method calls
+                    return self.generate_member_function_call(call, member_access, type_checker);
+                }
             }
         }
 
@@ -1868,8 +1872,47 @@ impl CodeGenerator {
             }
             Expression::BinaryOp(op) => {
                 match op.op {
-                    BinaryOpKind::Add | BinaryOpKind::Sub | BinaryOpKind::Mul |
-                    BinaryOpKind::Div | BinaryOpKind::Mod => {
+                    BinaryOpKind::Add => {
+                        let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
+                        let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
+
+                        // Handle time/duration arithmetic first
+                        match (&lhs_type, &rhs_type) {
+                            (Type::Time, Type::Duration) => Type::Time,        // time + duration → time
+                            (Type::Duration, Type::Time) => Type::Time,        // duration + time → time
+                            (Type::Duration, Type::Duration) => Type::Duration, // duration + duration → duration
+                            _ => {
+                                // Regular numeric addition
+                                if matches!(lhs_type, Type::F32 | Type::F64) ||
+                                   matches!(rhs_type, Type::F32 | Type::F64) {
+                                    Type::F64
+                                } else {
+                                    Type::I32
+                                }
+                            }
+                        }
+                    }
+                    BinaryOpKind::Sub => {
+                        let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
+                        let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
+
+                        // Handle time/duration arithmetic first
+                        match (&lhs_type, &rhs_type) {
+                            (Type::Time, Type::Duration) => Type::Time,         // time - duration → time
+                            (Type::Time, Type::Time) => Type::Duration,        // time - time → duration
+                            (Type::Duration, Type::Duration) => Type::Duration, // duration - duration → duration
+                            _ => {
+                                // Regular numeric subtraction
+                                if matches!(lhs_type, Type::F32 | Type::F64) ||
+                                   matches!(rhs_type, Type::F32 | Type::F64) {
+                                    Type::F64
+                                } else {
+                                    Type::I32
+                                }
+                            }
+                        }
+                    }
+                    BinaryOpKind::Mul | BinaryOpKind::Div | BinaryOpKind::Mod => {
                         let lhs_type = self.infer_expression_type_for_codegen(&op.lhs);
                         let rhs_type = self.infer_expression_type_for_codegen(&op.rhs);
                         if matches!(lhs_type, Type::F32 | Type::F64) ||
@@ -1916,6 +1959,21 @@ impl CodeGenerator {
                         } else {
                             // For other variable types, return the variable type
                             var_type.clone()
+                        }
+                    } else {
+                        Type::I32
+                    }
+                } else if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
+                    // Handle member function calls like time.parse()
+                    if let Expression::Ident { name, .. } = member_access.object.as_ref() {
+                        if name == "time" {
+                            match member_access.member.as_str() {
+                                "parse" => Type::Optional(Box::new(Type::Time)),
+                                "now" => Type::Time,
+                                _ => Type::I32
+                            }
+                        } else {
+                            Type::I32
                         }
                     } else {
                         Type::I32
@@ -2183,6 +2241,18 @@ impl CodeGenerator {
                                 self.output.push_str("{ strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(");
                                 self.generate_expression(expr, type_checker)?;
                                 self.output.push_str(")); } ");
+                            }
+                            Type::Time => {
+                                // Time: format using hl_time_format helper
+                                self.output.push_str("{ const char* __tmp_str = hl_time_format(");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_str); free((char*)__tmp_str); } ");
+                            }
+                            Type::Duration => {
+                                // Duration: format using hl_duration_format helper
+                                self.output.push_str("{ const char* __tmp_str = hl_duration_format(");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("); strcat(__fstring_buf, __tmp_str); free((char*)__tmp_str); } ");
                             }
                             Type::Unknown => {
                                 // Route through normal expression codegen for property access, etc.

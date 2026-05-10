@@ -1,5 +1,10 @@
 high program(): i32 {
   let t = time.now()
-  print(t > time.parse("2020-01-01"))
+  let epoch = time.parse("2020-01-01")
+  if (epoch is unknown) {
+    print("parse failed")
+    return 1
+  }
+  print(t > epoch)
   return 0
 }

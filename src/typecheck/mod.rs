@@ -679,9 +679,13 @@ impl TypeChecker {
             BinaryOpKind::Less | BinaryOpKind::Greater |
             BinaryOpKind::LessEq | BinaryOpKind::GreaterEq |
             BinaryOpKind::NotLess | BinaryOpKind::NotGreater => {
-                // Allow time-time comparisons and duration-duration comparisons
+                // Allow time-time, duration-duration, and optional time/duration comparisons
                 if (lhs_type == Type::Time && rhs_type == Type::Time) ||
-                   (lhs_type == Type::Duration && rhs_type == Type::Duration) {
+                   (lhs_type == Type::Duration && rhs_type == Type::Duration) ||
+                   (matches!(&lhs_type, Type::Optional(inner) if **inner == Type::Time) &&
+                    matches!(&rhs_type, Type::Optional(inner) if **inner == Type::Time)) ||
+                   (matches!(&lhs_type, Type::Optional(inner) if **inner == Type::Duration) &&
+                    matches!(&rhs_type, Type::Optional(inner) if **inner == Type::Duration)) {
                     Type::Bool
                 } else if lhs_type.is_numeric() && rhs_type.is_numeric() {
                     if lhs_type != rhs_type {
