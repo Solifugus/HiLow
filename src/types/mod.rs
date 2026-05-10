@@ -18,6 +18,10 @@ pub enum Type {
 
     /// Special types
     Nothing,
+    UnknownType, // The unknown primitive type
+
+    /// Optional types (T? syntax)
+    Optional(Box<Type>), // T or unknown
 
     /// Array types
     FixedArray(Box<Type>, usize),
@@ -114,6 +118,10 @@ impl Type {
                 ast::PrimitiveType::Usize => Type::Usize,
                 ast::PrimitiveType::Isize => Type::Isize,
                 ast::PrimitiveType::Nothing => Type::Nothing,
+                ast::PrimitiveType::Unknown => Type::UnknownType,
+            },
+            ast::Type::Optional(inner_type) => {
+                Type::Optional(Box::new(Type::from_ast_type(inner_type)))
             },
             ast::Type::FixedArray(element_type, size) => {
                 Type::FixedArray(Box::new(Type::from_ast_type(element_type)), *size)
@@ -159,6 +167,10 @@ impl Type {
             Type::Usize => ast::Type::Primitive(ast::PrimitiveType::Usize),
             Type::Isize => ast::Type::Primitive(ast::PrimitiveType::Isize),
             Type::Nothing => ast::Type::Primitive(ast::PrimitiveType::Nothing),
+            Type::UnknownType => ast::Type::Primitive(ast::PrimitiveType::Unknown),
+            Type::Optional(inner_type) => {
+                ast::Type::Optional(Box::new(inner_type.to_ast_type()))
+            },
             Type::FixedArray(elem_type, size) => {
                 ast::Type::FixedArray(Box::new(elem_type.to_ast_type()), *size)
             },
@@ -201,6 +213,8 @@ impl std::fmt::Display for Type {
             Type::Usize => write!(f, "usize"),
             Type::Isize => write!(f, "isize"),
             Type::Nothing => write!(f, "nothing"),
+            Type::UnknownType => write!(f, "unknown"),
+            Type::Optional(inner_type) => write!(f, "{}?", inner_type),
             Type::FixedArray(elem, size) => write!(f, "[{}; {}]", elem, size),
             Type::DynamicArray(elem) => write!(f, "[{}]", elem),
             Type::Object(properties) => {

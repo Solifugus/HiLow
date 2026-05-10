@@ -11,6 +11,7 @@ pub enum HeapType {
     Function,       // HiLowFunction*
     Environment,    // hilow_env_N*
     FStringBuffer,  // char* from f-string
+    Unknown,        // HiLowUnknown*
 }
 
 /// Context for function expression generation to detect escaping closures (Phase 8a)
@@ -311,6 +312,7 @@ impl CodeGenerator {
     }
 
     fn generate_statement(&mut self, statement: &Statement, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+
         match statement {
             Statement::Let(let_decl) => {
                 self.generate_let_statement(let_decl, type_checker)?;
@@ -450,7 +452,7 @@ impl CodeGenerator {
                 }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
-                    if let Expression::Ident(func_name, _) = call_expr.callee.as_ref() {
+                    if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
                         if let Some(return_type) = self.functions.get(func_name) {
                             match return_type {
                                 Type::Object(_) => {
@@ -459,12 +461,20 @@ impl CodeGenerator {
                                 Type::Function(_, _) => {
                                     self.track_heap_owner(&let_decl.name, HeapType::Function);
                                 }
+                                Type::Optional(_) => {
+                                    // Optional types can contain unknown values which need cleanup
+                                    self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                                }
+                                Type::UnknownType => {
+                                    // Direct unknown values also need cleanup
+                                    self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                                }
                                 _ => {} // Non-heap return types
                             }
                         }
                     }
                 }
-                Expression::Ident(var_name, _) => {
+                Expression::Ident { name: var_name, .. } => {
                     // Phase 8b: Handle heap value aliasing with refcounting
                     if let Some((heap_type, _)) = self.heap_owners.get(var_name).cloned() {
                         // Generate retain call after the assignment
@@ -476,6 +486,10 @@ impl CodeGenerator {
                             HeapType::Function => {
                                 let c_var_name = self.mangle_variable_name(&let_decl.name);
                                 self.output.push_str(&format!(";\n  hl_function_retain({});", c_var_name));
+                            }
+                            HeapType::Unknown => {
+                                let c_var_name = self.mangle_variable_name(&let_decl.name);
+                                self.output.push_str(&format!(";\n  hl_unknown_retain({});", c_var_name));
                             }
                             _ => {} // Other heap types don't have specific retain functions yet
                         }
@@ -495,7 +509,7 @@ impl CodeGenerator {
         // Phase 8a: Handle ownership transfer for returned heap values
         if let Some(ref value) = return_stmt.value {
             // Check if we're returning a variable that owns a heap value
-            if let Expression::Ident(var_name, _) = value {
+            if let Expression::Ident { name: var_name, .. } = value {
                 if self.heap_owners.contains_key(var_name) {
                     // Transfer ownership - don't free this variable
                     self.transfer_ownership(var_name);
@@ -504,7 +518,7 @@ impl CodeGenerator {
         }
 
         if self.in_main_program {
-            // In main program: set return_value and let normal cleanup happen
+            // In main program: set return_value, emit cleanup, leak check, and actual return
             self.output.push_str("  return_value = ");
             if let Some(ref value) = return_stmt.value {
                 // Phase 8a: Set context for escaping closure detection
@@ -516,7 +530,14 @@ impl CodeGenerator {
                 self.output.push_str("0");
             }
             self.output.push_str(";\n");
-            // Note: cleanup will happen at end of main program scope
+
+            // Phase 9b fix: Emit cleanup for all scopes before returning
+            for scope in (1..=self.scope_depth).rev() {
+                self.emit_scope_cleanup(scope);
+            }
+
+            // Phase 9b fix: Emit memory leak check and actual return
+            self.emit_leak_check_and_return();
         } else {
             // In regular function: emit cleanup and return immediately
             // Phase 8a: Emit cleanup for all scopes before returning
@@ -904,16 +925,28 @@ impl CodeGenerator {
             Expression::BoolLit(value, _) => {
                 self.output.push_str(if *value { "true" } else { "false" });
             }
-            Expression::Ident(name, _) => {
+            Expression::Ident { name, refined_type, .. } => {
                 // Check if this variable is hoisted to an environment
                 if let Some((env_var, _env_struct)) = self.hoisted_variables.get(name) {
                     // Variable is hoisted - use environment access
                     self.output.push_str(&format!("{}->", env_var));
-                    self.output.push_str(name);
+                    if let Some(ref refined) = refined_type {
+                        // If the variable is narrowed, emit unwrap for the refined type
+                        let types_refined = Type::from_ast_type(refined);
+                        self.emit_refined_variable_access(name, &types_refined);
+                    } else {
+                        self.output.push_str(name);
+                    }
                 } else {
                     // Normal variable reference
-                    let c_var_name = self.mangle_variable_name(name);
-                    self.output.push_str(&c_var_name);
+                    if let Some(ref refined) = refined_type {
+                        // If the variable is narrowed, emit unwrap for the refined type
+                        let types_refined = Type::from_ast_type(refined);
+                        self.emit_refined_variable_access(name, &types_refined);
+                    } else {
+                        let c_var_name = self.mangle_variable_name(name);
+                        self.output.push_str(&c_var_name);
+                    }
                 }
             }
             Expression::This(_) => {
@@ -965,6 +998,9 @@ impl CodeGenerator {
             Expression::Nothing(_) => {
                 // Emit reference to the global nothing singleton
                 self.output.push_str("&the_nothing");
+            }
+            Expression::Unknown(unknown_construction) => {
+                self.generate_unknown_constructor(unknown_construction, type_checker)?;
             }
         }
         Ok(())
@@ -1037,14 +1073,14 @@ impl CodeGenerator {
 
     fn generate_call(&mut self, call: &Call, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Check if this is the special print() function
-        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+        if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
             if func_name == "print" {
                 return self.generate_print_call(call, type_checker);
             }
         }
 
         // Check if callee is a function value (stored in a variable)
-        if let Expression::Ident(var_name, _) = call.callee.as_ref() {
+        if let Expression::Ident { name: var_name, .. } = call.callee.as_ref() {
             if let Some(var_type) = self.variable_types.get(var_name).cloned() {
                 if let Type::Function(param_types, return_type) = var_type {
                     // This is a function value call - emit function pointer dispatch
@@ -1064,7 +1100,7 @@ impl CodeGenerator {
         }
 
         // Regular function call - handle nested function name mangling
-        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+        if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
             // Use mangled name for nested functions
             let c_func_name = self.mangle_function_name(func_name);
             self.output.push_str(&c_func_name);
@@ -1116,6 +1152,7 @@ impl CodeGenerator {
                 self.output.push_str("print_nothing()");
                 return Ok(());
             }
+            Type::UnknownType => "print_unknown",
             Type::ObjectIterValue => {
                 // Runtime dispatch based on type tag
                 return self.generate_print_call_for_iter_value(arg, type_checker);
@@ -1150,7 +1187,7 @@ impl CodeGenerator {
     /// Generate print call for iteration value with runtime type dispatch
     fn generate_print_call_for_iter_value(&mut self, arg: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // For iteration values, generate runtime dispatch based on __v_type
-        if let Expression::Ident(var_name, _) = arg {
+        if let Expression::Ident { name: var_name, .. } = arg {
             if Some(var_name.clone()) == self.current_iter_value_name {
                 // This is the iteration value - generate runtime dispatch
                 self.output.push_str("{\n");
@@ -1198,7 +1235,7 @@ impl CodeGenerator {
     /// Generate f-string interpolation for iteration value with runtime type dispatch
     fn generate_fstring_interpolation_for_iter_value(&mut self, arg: &Expression, _type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // For iteration values, generate runtime dispatch based on __v_type
-        if let Expression::Ident(var_name, _) = arg {
+        if let Expression::Ident { name: var_name, .. } = arg {
             if Some(var_name.clone()) == self.current_iter_value_name {
                 // This is the iteration value - generate runtime dispatch
                 self.output.push_str("{ switch (__v_type) {\n");
@@ -1294,6 +1331,8 @@ impl CodeGenerator {
             Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
             Type::ObjectIterValue => "void*".to_string(), // Runtime-dispatched iteration value
             Type::Unknown => "void".to_string(),
+            Type::UnknownType => "HiLowUnknown*".to_string(), // Unknown type with reason and options
+            Type::Optional(_) => "void*".to_string(), // T? types - placeholder for Phase 9b
         }
     }
 
@@ -1312,6 +1351,24 @@ impl CodeGenerator {
                 self.output.push_str(" == &the_nothing)");
             }
             return Ok(());
+        }
+
+        // Special case: is unknown on optional types should be a runtime check
+        if matches!(target_type, Type::UnknownType) {
+            let expr_type = self.infer_expression_type_for_codegen(&is_check.expression);
+            if matches!(expr_type, Type::Optional(_)) {
+                // Runtime check: is the value an unknown value?
+                if is_check.negated {
+                    self.output.push_str("(!hl_is_unknown(");
+                    self.generate_expression_without_refinements(&is_check.expression, type_checker)?;
+                    self.output.push_str("))");
+                } else {
+                    self.output.push_str("(hl_is_unknown(");
+                    self.generate_expression_without_refinements(&is_check.expression, type_checker)?;
+                    self.output.push_str("))");
+                }
+                return Ok(());
+            }
         }
 
         // For other primitive types, is checks are done at compile time
@@ -1402,7 +1459,7 @@ impl CodeGenerator {
             Expression::StringLit(_, _) => Type::String,
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
-            Expression::Ident(name, _) => {
+            Expression::Ident { name, .. } => {
                 // Look up the variable type from our tracking
                 self.variable_types.get(name).cloned().unwrap_or(Type::I32)
             }
@@ -1491,7 +1548,7 @@ impl CodeGenerator {
             Expression::StringLit(_, _) => Type::String,
             Expression::FString(_) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
-            Expression::Ident(name, _) => {
+            Expression::Ident { name, .. } => {
                 // Look up the variable type from our tracking
                 self.variable_types.get(name).cloned().unwrap_or(Type::Unknown)
             }
@@ -1514,6 +1571,14 @@ impl CodeGenerator {
                         // Use prototype chain lookup (Phase 7b)
                         self.find_property_type_in_chain(&object_type, &member_access.member, 0)
                             .unwrap_or(Type::Unknown)
+                    }
+                    Type::UnknownType => {
+                        // Unknown types have known properties: reason and options
+                        match member_access.member.as_str() {
+                            "reason" => Type::String,
+                            "options" => Type::DynamicArray(Box::new(Type::String)),
+                            _ => Type::Nothing, // Unknown properties return nothing
+                        }
                     }
                     _ => Type::Unknown
                 }
@@ -1553,7 +1618,7 @@ impl CodeGenerator {
             }
             Expression::Call(call) => {
                 // For function calls, try to look up the return type
-                if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+                if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
                     if func_name == "print" {
                         return Type::I32; // print() returns i32
                     }
@@ -1614,6 +1679,7 @@ impl CodeGenerator {
                 self.infer_expression_type_for_codegen(expr)
             }
             Expression::Nothing(_) => Type::Nothing,
+            Expression::Unknown(_) => Type::UnknownType,
             _ => Type::Unknown
         }
     }
@@ -2727,6 +2793,24 @@ impl CodeGenerator {
         result
     }
 
+    fn generate_unknown_constructor(&mut self, unknown_construction: &UnknownConstruction, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // For now, we'll only support the simple case: unknown("reason")
+        // Options support is deferred for simplicity
+        if unknown_construction.options.is_some() {
+            return Err(CodegenError::UnsupportedFeature {
+                feature: "unknown constructor with options".to_string(),
+                phase: "Phase 9b - options support deferred".to_string(),
+            });
+        }
+
+        // Generate: hl_unknown_new("reason")
+        self.output.push_str("hl_unknown_new(");
+        self.generate_expression(&unknown_construction.reason, type_checker)?;
+        self.output.push(')');
+
+        Ok(())
+    }
+
     // Phase 8a: Ownership tracking methods
 
     /// Record that a variable owns a heap allocation
@@ -2778,6 +2862,9 @@ impl CodeGenerator {
                     HeapType::FStringBuffer => {
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
                     }
+                    HeapType::Unknown => {
+                        self.output.push_str(&format!("    hl_unknown_release({});\n", c_var_name));
+                    }
                 }
             }
         }
@@ -2786,6 +2873,17 @@ impl CodeGenerator {
         for var_name in &vars_to_release {
             self.heap_owners.remove(var_name);
         }
+    }
+
+    fn emit_leak_check_and_return(&mut self) {
+        // Phase 9b: Helper for early returns in main - emit leak check and return
+        self.output.push_str("    // Memory leak check (Phase 8a)\n");
+        self.output.push_str("    if (hl_alloc_count != hl_free_count) {\n");
+        self.output.push_str("        fprintf(stderr, \"MEMORY LEAK: allocated %d, freed %d (diff=%d)\\n\",\n");
+        self.output.push_str("                hl_alloc_count, hl_free_count, hl_alloc_count - hl_free_count);\n");
+        self.output.push_str("        return 1;\n");
+        self.output.push_str("    }\n");
+        self.output.push_str("    return return_value;\n");
     }
 
 
@@ -2797,7 +2895,7 @@ impl CodeGenerator {
             Expression::FString(_) => true,
             Expression::Call(call_expr) => {
                 // Check if this is a function call that returns a heap value
-                if let Expression::Ident(func_name, _) = call_expr.callee.as_ref() {
+                if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
                     if let Some(return_type) = self.functions.get(func_name) {
                         matches!(return_type, Type::Object(_) | Type::Function(_, _))
                     } else {
@@ -2808,6 +2906,61 @@ impl CodeGenerator {
                 }
             }
             _ => false,
+        }
+    }
+
+    /// Generate an expression without applying type refinements
+    /// Used for contexts like 'is unknown' checks where we need the original variable
+    fn generate_expression_without_refinements(&mut self, expression: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        match expression {
+            Expression::Ident { name, .. } => {
+                // Generate the identifier without applying any refinements
+                let c_var_name = self.mangle_variable_name(name);
+                self.output.push_str(&c_var_name);
+            }
+            _ => {
+                // For non-identifier expressions, use normal generation
+                self.generate_expression(expression, type_checker)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Emit code to access a variable that has been narrowed through type refinement
+    fn emit_refined_variable_access(&mut self, var_name: &str, refined_type: &Type) {
+        let c_var_name = self.mangle_variable_name(var_name);
+
+        // Get the variable's declared type to determine how to unwrap
+        if let Some(declared_type) = self.variable_types.get(var_name) {
+            match (declared_type, refined_type) {
+                // T? narrowed to T - emit unwrap helper
+                (Type::Optional(inner_declared), refined) if **inner_declared == *refined => {
+                    match refined {
+                        Type::I32 => {
+                            self.output.push_str(&format!("hl_optional_unwrap_i32({})", c_var_name));
+                        }
+                        Type::String => {
+                            self.output.push_str(&format!("hl_optional_unwrap_string({})", c_var_name));
+                        }
+                        _ => {
+                            // For other types, use the raw variable for now
+                            self.output.push_str(&c_var_name);
+                        }
+                    }
+                }
+                // T? narrowed to unknown - emit unknown access
+                (Type::Optional(_), Type::Unknown) => {
+                    // The variable is known to be unknown, so it's safe to cast
+                    self.output.push_str(&format!("((HiLowUnknown*){})", c_var_name));
+                }
+                _ => {
+                    // No unwrapping needed - use the variable directly
+                    self.output.push_str(&c_var_name);
+                }
+            }
+        } else {
+            // Fallback: use the variable name directly
+            self.output.push_str(&c_var_name);
         }
     }
 }

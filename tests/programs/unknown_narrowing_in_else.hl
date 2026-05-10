@@ -1,0 +1,14 @@
+high program(): i32 {
+  function tryParse(s: string): i32? {
+    return unknown("not implemented")
+  }
+
+  let result = tryParse("hello")
+  if (result is unknown) {
+    print("error")
+    return 1
+  }
+  // result is narrowed to i32 here
+  print(result + 1)
+  return 0
+}

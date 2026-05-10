@@ -28,6 +28,34 @@ typedef struct HiLowNothing {
 extern HiLowNothing the_nothing;
 void print_nothing(void);
 
+// Unknown type support (Phase 9b)
+// Runtime representation of unknown values with reason and optional suggestions
+typedef struct HiLowUnknown {
+    int refcount;             // Reference count for memory management
+    const char* reason;       // Why the operation failed (required)
+    const char** options;     // Null-terminated array of suggested fixes (optional)
+    int options_count;        // Number of options (0 if none)
+} HiLowUnknown;
+
+// Unknown constructor functions
+HiLowUnknown* hl_unknown_new(const char* reason);
+HiLowUnknown* hl_unknown_new_with_options(const char* reason, const char** options, int options_count);
+
+// Unknown memory management
+void hl_unknown_retain(HiLowUnknown* unknown);
+void hl_unknown_release(HiLowUnknown* unknown);
+
+// Unknown property access
+const char* hl_unknown_get_reason(HiLowUnknown* unknown);
+const char** hl_unknown_get_options(HiLowUnknown* unknown);
+int hl_unknown_get_options_count(HiLowUnknown* unknown);
+
+// Unknown print support
+void print_unknown(HiLowUnknown* unknown);
+
+// Unknown type checking
+bool hl_is_unknown(void* value);
+
 // F-string format helpers
 char* hl_format_binary(unsigned long long value);
 char* hl_format_center(const char* value, int width);
@@ -172,5 +200,11 @@ void hl_function_release(HiLowFunction* fn);
 void hl_object_weak_register(HiLowObject* target, HiLowObject** location);
 void hl_object_weak_unregister(HiLowObject* target, HiLowObject** location);
 HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key);
+
+// Optional unwrap helpers for narrowed types (Phase 9b)
+// These extract the underlying T value from a T? that is known to hold T (not unknown)
+// Calling these on an unknown-state optional is undefined behavior
+int32_t hl_optional_unwrap_i32(void* optional);
+const char* hl_optional_unwrap_string(void* optional);
 
 #endif // HILOW_RUNTIME_H

@@ -125,7 +125,7 @@ fn test_property_access_parsing() {
             if let BlockItem::Statement(Statement::Let(let_decl)) = &items[0] {
                 if let Some(Expression::MemberAccess(member_access)) = &let_decl.initializer {
                     assert_eq!(member_access.member, "x");
-                    if let Expression::Ident(name, _) = &*member_access.object {
+                    if let Expression::Ident { name, .. } = &*member_access.object {
                         assert_eq!(name, "point");
                     } else {
                         panic!("Expected identifier in member access object");
@@ -156,7 +156,7 @@ fn test_property_assignment_parsing() {
             if let BlockItem::Statement(Statement::Assign(assign_stmt)) = &items[0] {
                 if let Expression::MemberAccess(member_access) = &assign_stmt.target {
                     assert_eq!(member_access.member, "x");
-                    if let Expression::Ident(name, _) = &*member_access.object {
+                    if let Expression::Ident { name, .. } = &*member_access.object {
                         assert_eq!(name, "point");
                     } else {
                         panic!("Expected identifier in member access object");

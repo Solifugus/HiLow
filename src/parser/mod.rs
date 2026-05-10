@@ -220,12 +220,12 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
-        if self.check(&TokenKind::LeftBracket) {
-            self.parse_array_type()
+        let base_type = if self.check(&TokenKind::LeftBracket) {
+            self.parse_array_type()?
         } else if self.check(&TokenKind::Star) {
             // Pointer types not supported in Phase 2a
             let pos = self.peek()?.position.clone();
-            Err(ParseError::UnsupportedFeature {
+            return Err(ParseError::UnsupportedFeature {
                 feature: "pointer types".to_string(),
                 position: pos,
                 suggestion: "pointers not yet supported (Phase 12)".to_string(),
@@ -257,13 +257,21 @@ impl Parser {
 
                 let return_type = Box::new(self.parse_type()?);
 
-                Ok(Type::Function(param_types, return_type))
+                Type::Function(param_types, return_type)
             } else {
                 // Placeholder function type for backward compatibility
-                Ok(Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing))))
+                Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing)))
             }
         } else {
-            self.parse_primitive_type()
+            self.parse_primitive_type()?
+        };
+
+        // Check for optional syntax: T?
+        if self.check(&TokenKind::Question) {
+            self.advance()?; // consume '?'
+            Ok(Type::Optional(Box::new(base_type)))
+        } else {
+            Ok(base_type)
         }
     }
 
@@ -326,6 +334,7 @@ impl Parser {
                     "string" => PrimitiveType::String,
                     "usize" => PrimitiveType::Usize,
                     "isize" => PrimitiveType::Isize,
+                    "unknown" => PrimitiveType::Unknown,
                     _ => {
                         return Err(ParseError::UnexpectedToken {
                             expected: "primitive type name".to_string(),
@@ -336,6 +345,7 @@ impl Parser {
                 }
             }
             TokenKind::Nothing => PrimitiveType::Nothing,
+            TokenKind::Unknown => PrimitiveType::Unknown,
             _ => {
                 return Err(ParseError::UnexpectedToken {
                     expected: "primitive type name".to_string(),
@@ -784,14 +794,14 @@ impl Parser {
                     // Peek at next token to decide between primitive type check vs object prototype check
                     if !self.is_at_end() {
                         let token = self.peek()?;
-                        if matches!(token.kind, TokenKind::Identifier) {
+                        if matches!(token.kind, TokenKind::Identifier | TokenKind::Nothing | TokenKind::Unknown) {
                             let type_name = token.lexeme.clone(); // Clone to avoid borrow conflict
                             // Check if it's a primitive type name
                             let is_primitive_type = matches!(type_name.as_str(),
                                 "i8" | "i16" | "i32" | "i64" | "i128" |
                                 "u8" | "u16" | "u32" | "u64" | "u128" |
                                 "f32" | "f64" | "bool" | "string" |
-                                "usize" | "isize" | "nothing"
+                                "usize" | "isize" | "nothing" | "unknown"
                             );
 
                             if is_primitive_type {
@@ -815,6 +825,7 @@ impl Parser {
                                     "usize" => Type::Primitive(PrimitiveType::Usize),
                                     "isize" => Type::Primitive(PrimitiveType::Isize),
                                     "nothing" => Type::Primitive(PrimitiveType::Nothing),
+                                    "unknown" => Type::Primitive(PrimitiveType::Unknown),
                                     _ => unreachable!(),
                                 };
 
@@ -980,7 +991,7 @@ impl Parser {
             TokenKind::False => Ok(Expression::BoolLit(false, token.position)),
             TokenKind::Nothing => Ok(Expression::Nothing(token.position)),
             TokenKind::Identifier => {
-                Ok(Expression::Ident(token.lexeme, token.position))
+                Ok(Expression::Ident { name: token.lexeme, refined_type: None, position: token.position })
             }
             TokenKind::This => {
                 Ok(Expression::This(token.position))
@@ -1007,6 +1018,10 @@ impl Parser {
                 // Weak reference expression
                 let expr = self.parse_unary_expression()?;
                 Ok(Expression::WeakRef(Box::new(expr), token.position))
+            }
+            TokenKind::Unknown => {
+                // Unknown constructor: unknown(reason, options: [...])
+                self.parse_unknown_constructor(token.position)
             }
             _ => Err(ParseError::UnexpectedToken {
                 expected: "expression".to_string(),
@@ -1669,5 +1684,51 @@ impl Parser {
             let expr = self.parse_expression()?;
             Ok(MatchBody::Expression(expr))
         }
+    }
+
+    fn parse_unknown_constructor(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        // Parse unknown(reason, options: [...])
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'unknown'")?;
+
+        // Parse reason (required)
+        let reason = self.parse_expression()?;
+
+        // Check for options argument
+        let options = if self.check(&TokenKind::Comma) {
+            self.advance()?; // consume ','
+
+            // Expect 'options:'
+            let ident_token = self.advance()?;
+            if let TokenKind::Identifier = ident_token.kind {
+                if ident_token.lexeme != "options" {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "options".to_string(),
+                        found: ident_token.kind,
+                        position: ident_token.position,
+                    });
+                }
+            } else {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "options".to_string(),
+                    found: ident_token.kind,
+                    position: ident_token.position,
+                });
+            }
+
+            self.expect_token(TokenKind::Colon, "Expected ':' after 'options'")?;
+
+            // Parse array expression
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.expect_token(TokenKind::RightParen, "Expected ')' after unknown constructor arguments")?;
+
+        Ok(Expression::Unknown(UnknownConstruction {
+            reason: Box::new(reason),
+            options: options.map(Box::new),
+            position: start_pos,
+        }))
     }
 }

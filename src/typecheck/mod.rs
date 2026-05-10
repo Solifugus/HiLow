@@ -33,9 +33,41 @@ impl Scope {
     }
 }
 
+/// Type refinement for flow-sensitive typing
+#[derive(Debug, Clone)]
+struct TypeRefinement {
+    variable_name: String,
+    refined_type: Type,
+}
+
+/// Refinement scope for tracking type narrowing
+#[derive(Debug)]
+struct RefinementScope {
+    refinements: HashMap<String, Type>,
+}
+
+impl RefinementScope {
+    fn new() -> Self {
+        Self {
+            refinements: HashMap::new(),
+        }
+    }
+
+    fn refine(&mut self, name: String, ty: Type) {
+        self.refinements.insert(name, ty);
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Type> {
+        self.refinements.get(name)
+    }
+}
+
 /// The type checker for HiLow programs
 pub struct TypeChecker {
     scopes: Vec<Scope>,
+    refinement_scopes: Vec<RefinementScope>, // Stack of type refinement scopes for narrowing
+    persistent_refinements: HashMap<String, Type>, // Post-block refinements that persist until scope exit
+    final_refinements: HashMap<String, Type>, // Saved refinements from the final program scope for codegen
     errors: Vec<TypeError>,
     loop_depth: usize, // Track nested loop depth for break/continue validation
     switch_depth: usize, // Track nested switch depth for break validation
@@ -47,6 +79,9 @@ impl TypeChecker {
     pub fn new() -> Self {
         Self {
             scopes: vec![Scope::new()], // Start with global scope
+            refinement_scopes: Vec::new(), // Start with no refinements
+            persistent_refinements: HashMap::new(), // Start with no persistent refinements
+            final_refinements: HashMap::new(), // Start with no final refinements
             errors: Vec::new(),
             loop_depth: 0,
             switch_depth: 0,
@@ -146,6 +181,9 @@ impl TypeChecker {
             }
         }
 
+        // Save persistent refinements before exiting program body scope (for codegen)
+        self.final_refinements = self.persistent_refinements.clone();
+
         // Exit program body scope
         self.exit_scope();
     }
@@ -244,12 +282,46 @@ impl TypeChecker {
             );
         }
 
-        // Check then block
-        self.check_block(&if_stmt.then_block);
+        // Phase 9b: Check for type narrowing opportunities
+        let is_unknown_check = self.extract_is_unknown_check(&if_stmt.condition);
 
-        // Check else block if present
-        if let Some(else_block) = &if_stmt.else_block {
-            self.check_block(else_block);
+        match is_unknown_check {
+            Some((var_name, original_type)) => {
+                // This is a "variable is unknown" check - apply scope-local narrowing
+
+                // Check the then block with refinement: variable is narrowed to UnknownType
+                self.enter_refinement_scope();
+                self.refine_variable_type(&var_name, Type::UnknownType);
+                self.check_block(&if_stmt.then_block);
+                let then_block_exits = self.block_always_exits(&if_stmt.then_block);
+                self.exit_refinement_scope();
+
+                // Check else block if present with refinement: variable is narrowed to underlying type
+                if let Some(else_block) = &if_stmt.else_block {
+                    self.enter_refinement_scope();
+                    // Extract the underlying type from Optional(T) -> T
+                    if let Type::Optional(underlying_type) = original_type.clone() {
+                        self.refine_variable_type(&var_name, *underlying_type);
+                    }
+                    self.check_block(else_block);
+                    self.exit_refinement_scope();
+                }
+
+                // Post-block narrowing: if then block always exits, variable is narrowed to underlying type
+                if then_block_exits {
+                    if let Type::Optional(underlying_type) = original_type {
+                        self.add_persistent_refinement(&var_name, *underlying_type);
+                    }
+                }
+            }
+            None => {
+                // No type narrowing - check blocks normally
+                self.check_block(&if_stmt.then_block);
+
+                if let Some(else_block) = &if_stmt.else_block {
+                    self.check_block(else_block);
+                }
+            }
         }
     }
 
@@ -432,9 +504,15 @@ impl TypeChecker {
             Expression::FString(fstring) => self.check_fstring(fstring),
             Expression::BoolLit(_, _) => Type::Bool,
             Expression::Nothing(_) => Type::Nothing,
-            Expression::Ident(name, pos) => {
-                // Look up variable in symbol table
-                self.lookup_variable(name, pos.clone())
+            Expression::Ident { name, position, .. } => {
+                // Look up variable in symbol table with refinement support
+                let declared_type = self.lookup_variable(name, position.clone());
+
+                // Check for refinements (scope-local or persistent)
+                let refined = self.get_variable_refinement(name);
+
+                // Return the refined type for type checking
+                refined.unwrap_or(declared_type)
             },
             Expression::This(pos) => {
                 // this is only valid inside methods
@@ -488,6 +566,7 @@ impl TypeChecker {
                     expr_type
                 }
             },
+            Expression::Unknown(unknown_construction) => self.check_unknown_construction(unknown_construction),
         }
     }
 
@@ -651,7 +730,7 @@ impl TypeChecker {
 
     fn check_call(&mut self, call: &Call) -> Type {
         // Check if this is the special print() function
-        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+        if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
             if func_name == "print" {
                 return self.check_print_call(call);
             }
@@ -684,7 +763,7 @@ impl TypeChecker {
         // Phase 6a-fixup: For nested functions, return the function's return type
         // For now, we use a simple approach: if callee is a function identifier,
         // return the type we stored (which is the return type)
-        if let Expression::Ident(func_name, _) = call.callee.as_ref() {
+        if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
             // Look up the function in symbol table
             let func_type = self.lookup_variable(func_name, call.position.clone());
             if func_type != Type::Unknown {
@@ -720,7 +799,7 @@ impl TypeChecker {
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
             Type::F32 | Type::F64 | Type::Bool | Type::Usize | Type::Isize | Type::String |
-            Type::Nothing => {
+            Type::Nothing | Type::UnknownType => {
                 // These types are printable
             }
             _ => {
@@ -743,6 +822,228 @@ impl TypeChecker {
 
     fn exit_scope(&mut self) {
         self.scopes.pop();
+        // Clear persistent refinements when exiting a scope
+        self.clear_persistent_refinements();
+    }
+
+    // Refinement scope management for type narrowing
+    fn enter_refinement_scope(&mut self) {
+        self.refinement_scopes.push(RefinementScope::new());
+    }
+
+    fn exit_refinement_scope(&mut self) {
+        self.refinement_scopes.pop();
+    }
+
+    fn refine_variable_type(&mut self, name: &str, ty: Type) {
+        if let Some(current_refinement_scope) = self.refinement_scopes.last_mut() {
+            current_refinement_scope.refine(name.to_string(), ty);
+        }
+    }
+
+    fn add_persistent_refinement(&mut self, name: &str, ty: Type) {
+        self.persistent_refinements.insert(name.to_string(), ty);
+    }
+
+    fn clear_persistent_refinements(&mut self) {
+        self.persistent_refinements.clear();
+    }
+
+    fn get_variable_refinement(&self, name: &str) -> Option<Type> {
+        // First check current refinement scope (scope-local narrowing)
+        if let Some(current_scope) = self.refinement_scopes.last() {
+            if let Some(refined_type) = current_scope.lookup(name) {
+                return Some(refined_type.clone());
+            }
+        }
+
+        // Then check persistent refinements (post-block narrowing)
+        if let Some(refined_type) = self.persistent_refinements.get(name) {
+            return Some(refined_type.clone());
+        }
+
+        // Finally check final refinements (saved from program scope for codegen)
+        self.final_refinements.get(name).cloned()
+    }
+
+    /// Write refinements to the AST after type checking is complete
+    /// This allows codegen to read the refined types from the AST
+    pub fn write_refinements_to_ast(&self, top_level: &mut TopLevel) {
+        match top_level {
+            TopLevel::Program(program) => {
+                if let Some(ref mut body) = program.body {
+                    for item in &mut body.items {
+                        match item {
+                            BlockItem::Statement(stmt) => {
+                                self.write_refinements_to_statement(stmt);
+                            }
+                            BlockItem::Function(func) => {
+                                if let Some(ref mut func_body) = func.body {
+                                    self.write_refinements_to_block(func_body);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            TopLevel::Module(_) => {
+                // Module refinement writing not implemented yet
+            }
+        }
+    }
+
+    fn write_refinements_to_block(&self, block: &mut Block) {
+        for stmt in &mut block.statements {
+            self.write_refinements_to_statement(stmt);
+        }
+    }
+
+    fn write_refinements_to_statement(&self, stmt: &mut Statement) {
+        match stmt {
+            Statement::Let(let_decl) => {
+                if let Some(ref mut init) = let_decl.initializer {
+                    self.write_refinements_to_expression(init);
+                }
+            }
+            Statement::Return(return_stmt) => {
+                if let Some(ref mut value) = return_stmt.value {
+                    self.write_refinements_to_expression(value);
+                }
+            }
+            Statement::If(if_stmt) => {
+                self.write_refinements_to_expression(&mut if_stmt.condition);
+                self.write_refinements_to_block(&mut if_stmt.then_block);
+                if let Some(ref mut else_block) = if_stmt.else_block {
+                    self.write_refinements_to_block(else_block);
+                }
+            }
+            Statement::While(while_stmt) => {
+                self.write_refinements_to_expression(&mut while_stmt.condition);
+                self.write_refinements_to_block(&mut while_stmt.body);
+            }
+            Statement::Loop(loop_stmt) => {
+                self.write_refinements_to_block(&mut loop_stmt.body);
+            }
+            Statement::ForIn(for_in_stmt) => {
+                self.write_refinements_to_expression(&mut for_in_stmt.iterable);
+                self.write_refinements_to_block(&mut for_in_stmt.body);
+            }
+            Statement::Switch(switch_stmt) => {
+                self.write_refinements_to_expression(&mut switch_stmt.value);
+                for case in &mut switch_stmt.cases {
+                    for case_stmt in &mut case.body {
+                        self.write_refinements_to_statement(case_stmt);
+                    }
+                }
+                if let Some(ref mut default_stmts) = switch_stmt.default {
+                    for default_stmt in default_stmts {
+                        self.write_refinements_to_statement(default_stmt);
+                    }
+                }
+            }
+            Statement::Assign(assign_stmt) => {
+                self.write_refinements_to_expression(&mut assign_stmt.target);
+                self.write_refinements_to_expression(&mut assign_stmt.value);
+            }
+            Statement::QualifiedOp(qualified_op) => {
+                self.write_refinements_to_expression(&mut qualified_op.lhs);
+                self.write_refinements_to_expression(&mut qualified_op.rhs);
+            }
+            Statement::ExprStatement(expr) => {
+                self.write_refinements_to_expression(expr);
+            }
+            Statement::Break(_) | Statement::Continue(_) => {
+                // No expressions to refine
+            }
+        }
+    }
+
+    fn write_refinements_to_expression(&self, expr: &mut Expression) {
+        match expr {
+            Expression::Ident { name, refined_type, .. } => {
+                // Check if this variable has a current refinement
+                if let Some(refined_ty) = self.get_variable_refinement(name) {
+                    let declared_type = self.lookup_variable_without_error(name);
+                    if refined_ty != declared_type {
+                        *refined_type = Some(refined_ty.to_ast_type());
+                    }
+                }
+            }
+            Expression::BinaryOp(binary_op) => {
+                self.write_refinements_to_expression(&mut binary_op.lhs);
+                self.write_refinements_to_expression(&mut binary_op.rhs);
+            }
+            Expression::UnaryOp(unary_op) => {
+                self.write_refinements_to_expression(&mut unary_op.operand);
+            }
+            Expression::Call(call) => {
+                self.write_refinements_to_expression(&mut call.callee);
+                for arg in &mut call.args {
+                    self.write_refinements_to_expression(arg);
+                }
+            }
+            Expression::MemberAccess(member) => {
+                self.write_refinements_to_expression(&mut member.object);
+            }
+            Expression::IndexAccess(index) => {
+                self.write_refinements_to_expression(&mut index.object);
+                self.write_refinements_to_expression(&mut index.index);
+            }
+            Expression::IsCheck(is_check) => {
+                self.write_refinements_to_expression(&mut is_check.expression);
+            }
+            Expression::ObjectIsCheck(obj_check) => {
+                self.write_refinements_to_expression(&mut obj_check.lhs);
+                self.write_refinements_to_expression(&mut obj_check.rhs);
+            }
+            Expression::QualifiedOp(qualified_op) => {
+                self.write_refinements_to_expression(&mut qualified_op.lhs);
+                self.write_refinements_to_expression(&mut qualified_op.rhs);
+            }
+            Expression::ObjectLiteral(obj_lit) => {
+                for (_, prop_expr) in &mut obj_lit.properties {
+                    self.write_refinements_to_expression(prop_expr);
+                }
+            }
+            Expression::FunctionExpr(func_expr) => {
+                self.write_refinements_to_block(&mut func_expr.body);
+            }
+            Expression::Match(match_expr) => {
+                self.write_refinements_to_expression(&mut match_expr.value);
+                for arm in &mut match_expr.arms {
+                    match &mut arm.body {
+                        MatchBody::Expression(expr) => {
+                            self.write_refinements_to_expression(expr);
+                        }
+                        MatchBody::Block(block) => {
+                            self.write_refinements_to_block(block);
+                        }
+                    }
+                }
+            }
+            Expression::WeakRef(inner, _) => {
+                self.write_refinements_to_expression(inner);
+            }
+            Expression::Unknown(unknown) => {
+                self.write_refinements_to_expression(&mut unknown.reason);
+                if let Some(ref mut options) = unknown.options {
+                    self.write_refinements_to_expression(options);
+                }
+            }
+            Expression::FString(fstring) => {
+                for part in &mut fstring.parts {
+                    if let FStringPart::Expression(expr, _) = part {
+                        self.write_refinements_to_expression(expr);
+                    }
+                }
+            }
+            // Literals don't contain variables to refine
+            Expression::IntLit(_, _) | Expression::FloatLit(_, _) |
+            Expression::StringLit(_, _) | Expression::BoolLit(_, _) |
+            Expression::This(_) | Expression::Nothing(_) => {
+                // No variables to refine
+            }
+        }
     }
 
     fn declare_variable(&mut self, name: &str, ty: Type, position: Position) {
@@ -752,7 +1053,19 @@ impl TypeChecker {
     }
 
     fn lookup_variable(&mut self, name: &str, position: Position) -> Type {
-        // Search scopes from innermost to outermost
+        // First, check for type refinements from innermost to outermost
+        for refinement_scope in self.refinement_scopes.iter().rev() {
+            if let Some(refined_type) = refinement_scope.lookup(name) {
+                return refined_type.clone();
+            }
+        }
+
+        // Second, check for persistent refinements
+        if let Some(refined_type) = self.persistent_refinements.get(name) {
+            return refined_type.clone();
+        }
+
+        // Then search regular scopes from innermost to outermost
         for scope in self.scopes.iter().rev() {
             if let Some(symbol) = scope.lookup(name) {
                 return symbol.ty.clone();
@@ -782,6 +1095,59 @@ impl TypeChecker {
             Type::Nothing => true,
             // Other types not yet implemented for truthy/falsy
             _ => false,
+        }
+    }
+
+    /// Check if an expression is an "is unknown" check and return the variable name and original type if so
+    fn extract_is_unknown_check(&mut self, expr: &Expression) -> Option<(String, Type)> {
+        if let Expression::IsCheck(is_check) = expr {
+            if !is_check.negated && matches!(is_check.ty, ast::Type::Primitive(ast::PrimitiveType::Unknown)) {
+                // This is a "variable is unknown" check
+                if let Expression::Ident { name: var_name, .. } = is_check.expression.as_ref() {
+                    // Get the original type of the variable
+                    let original_type = self.lookup_variable_without_error(var_name);
+                    return Some((var_name.clone(), original_type));
+                }
+            }
+        }
+        None
+    }
+
+    /// Helper to look up a variable without generating an error
+    fn lookup_variable_without_error(&self, name: &str) -> Type {
+        // First, check for type refinements from innermost to outermost
+        for refinement_scope in self.refinement_scopes.iter().rev() {
+            if let Some(refined_type) = refinement_scope.lookup(name) {
+                return refined_type.clone();
+            }
+        }
+
+        // Second, check for persistent refinements
+        if let Some(refined_type) = self.persistent_refinements.get(name) {
+            return refined_type.clone();
+        }
+
+        // Then search regular scopes from innermost to outermost
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.lookup(name) {
+                return symbol.ty.clone();
+            }
+        }
+
+        // Variable not found - return Unknown without error
+        Type::Unknown
+    }
+
+    /// Check if a block always exits (ends with return, break, or continue)
+    fn block_always_exits(&self, block: &Block) -> bool {
+        if let Some(last_stmt) = block.statements.last() {
+            matches!(last_stmt,
+                Statement::Return(_) |
+                Statement::Break(_) |
+                Statement::Continue(_)
+            )
+        } else {
+            false
         }
     }
 
@@ -1140,6 +1506,14 @@ impl TypeChecker {
                 }
             },
             Type::Unknown => Type::Unknown, // Error recovery
+            Type::UnknownType => {
+                // Unknown types have known properties: reason and options
+                match member_access.member.as_str() {
+                    "reason" => Type::String,
+                    "options" => Type::DynamicArray(Box::new(Type::String)),
+                    _ => Type::Nothing, // Unknown properties return nothing (Phase 9a behavior)
+                }
+            },
             _ => {
                 self.add_error(
                     format!("Cannot access property '{}' on non-object type {}", member_access.member, object_type),
@@ -1159,7 +1533,7 @@ impl TypeChecker {
             Expression::FloatLit(_, _) => Type::default_float_type(),
             Expression::StringLit(_, _) => Type::String,
             Expression::BoolLit(_, _) => Type::Bool,
-            Expression::Ident(name, _) => {
+            Expression::Ident { name, .. } => {
                 // Look up in symbol table
                 for scope in self.scopes.iter().rev() {
                     if let Some(symbol) = scope.lookup(name) {
@@ -1310,12 +1684,12 @@ impl TypeChecker {
 
     fn check_for_captures_in_expression(&mut self, expression: &Expression, outer_scope_depth: usize) {
         match expression {
-            Expression::Ident(name, pos) => {
+            Expression::Ident { name, position, .. } => {
                 // Check if this identifier refers to a variable from an outer scope
                 if self.is_variable_capture(name, outer_scope_depth) {
                     self.add_error(
                         "function expressions cannot capture variables (Phase 7c-γ will add capture detection, Phase 7c-δ will implement closures)".to_string(),
-                        pos.clone()
+                        position.clone()
                     );
                 }
             }
@@ -1377,6 +1751,13 @@ impl TypeChecker {
             Expression::WeakRef(expr, _) => {
                 // Check for captures in the inner expression
                 self.check_for_captures_in_expression(expr, outer_scope_depth);
+            }
+            Expression::Unknown(unknown_construction) => {
+                // Check for captures in reason and options expressions
+                self.check_for_captures_in_expression(&unknown_construction.reason, outer_scope_depth);
+                if let Some(ref options) = unknown_construction.options {
+                    self.check_for_captures_in_expression(options, outer_scope_depth);
+                }
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
@@ -1471,12 +1852,12 @@ impl TypeChecker {
 
     fn collect_captures_in_expression(&mut self, expression: &Expression, outer_scope_depth: usize, captures: &mut Vec<(String, Type, Position)>) {
         match expression {
-            Expression::Ident(name, pos) => {
+            Expression::Ident { name, position, .. } => {
                 // Check if this identifier refers to a variable from an outer scope
                 if let Some((var_type, _)) = self.find_variable_in_outer_scope(name, outer_scope_depth) {
                     // Check if we already recorded this capture (by name)
                     if !captures.iter().any(|(capture_name, _, _)| capture_name == name) {
-                        captures.push((name.clone(), var_type, pos.clone()));
+                        captures.push((name.clone(), var_type, position.clone()));
                     }
                 }
             }
@@ -1538,6 +1919,13 @@ impl TypeChecker {
             Expression::WeakRef(expr, _) => {
                 // Collect captures in the inner expression
                 self.collect_captures_in_expression(expr, outer_scope_depth, captures);
+            }
+            Expression::Unknown(unknown_construction) => {
+                // Collect captures from the reason and options expressions
+                self.collect_captures_in_expression(&unknown_construction.reason, outer_scope_depth, captures);
+                if let Some(ref options) = unknown_construction.options {
+                    self.collect_captures_in_expression(options, outer_scope_depth, captures);
+                }
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::StringLit(_, _) |
@@ -1644,6 +2032,42 @@ impl TypeChecker {
             Literal::Bool(_) => Type::Bool,
         }
     }
+
+    fn check_unknown_construction(&mut self, unknown_construction: &UnknownConstruction) -> Type {
+        // Check that reason is a string expression
+        let reason_type = self.check_expression(&unknown_construction.reason);
+        if reason_type != Type::String {
+            self.add_error(
+                format!("unknown reason must be a string, found {}", reason_type),
+                unknown_construction.reason.position()
+            );
+        }
+
+        // Check options argument if present
+        if let Some(ref options_expr) = unknown_construction.options {
+            let options_type = self.check_expression(options_expr);
+            // For now, just check that it's an array - we'll be more specific about [string] in the future
+            match options_type {
+                Type::DynamicArray(element_type) => {
+                    if *element_type != Type::String {
+                        self.add_error(
+                            format!("unknown options must be an array of strings, found [{}]", element_type),
+                            options_expr.position()
+                        );
+                    }
+                },
+                _ => {
+                    self.add_error(
+                        format!("unknown options must be an array of strings, found {}", options_type),
+                        options_expr.position()
+                    );
+                }
+            }
+        }
+
+        // Return unknown type
+        Type::UnknownType
+    }
 }
 
 // Helper trait to get position from expressions
@@ -1659,7 +2083,7 @@ impl HasPosition for Expression {
             Expression::StringLit(_, pos) => pos.clone(),
             Expression::FString(fstring) => fstring.position.clone(),
             Expression::BoolLit(_, pos) => pos.clone(),
-            Expression::Ident(_, pos) => pos.clone(),
+            Expression::Ident { position, .. } => position.clone(),
             Expression::This(pos) => pos.clone(),
             Expression::BinaryOp(op) => op.position.clone(),
             Expression::UnaryOp(op) => op.position.clone(),
@@ -1674,6 +2098,7 @@ impl HasPosition for Expression {
             Expression::Match(match_expr) => match_expr.position.clone(),
             Expression::WeakRef(_, pos) => pos.clone(),
             Expression::Nothing(pos) => pos.clone(),
+            Expression::Unknown(unknown_construction) => unknown_construction.position.clone(),
         }
     }
 

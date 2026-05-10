@@ -1,0 +1,6 @@
+high program(): i32 {
+  let err = unknown("boom")
+  print(err)
+  print(f"Got: {err}")
+  return 0
+}

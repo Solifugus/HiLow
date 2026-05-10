@@ -1,0 +1,7 @@
+high program(): i32 {
+  let err = unknown("something went wrong")
+  if (err is unknown) {
+    print(err.reason)
+  }
+  return 0
+}

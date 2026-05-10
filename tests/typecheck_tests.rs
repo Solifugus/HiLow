@@ -577,3 +577,60 @@ fn test_function_type_precise_catches_arity_error() {
     let result = type_check_program(input);
     assert!(result.is_err(), "Calling function with wrong arity should error");
 }
+
+// Type narrowing tests for Phase 9b
+
+#[test]
+fn test_narrowing_inside_if_branch_access_unknown_properties() {
+    let input = "high program(): i32 {
+        function tryParse(s: string): i32? {
+            return unknown(\"test\")
+        }
+        let result = tryParse(\"hello\")
+        if (result is unknown) {
+            print(result.reason)  // Should work - result is narrowed to unknown
+        }
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Property access on unknown should work inside is-unknown branch; got: {:?}", result);
+}
+
+#[test]
+fn test_narrowing_post_block_when_if_returns() {
+    let input = "high program(): i32 {
+        function tryParse(s: string): i32? {
+            return unknown(\"test\")
+        }
+        let result = tryParse(\"hello\")
+        if (result is unknown) {
+            return 1
+        }
+        print(result + 1)  // Should work - result is narrowed to i32 after if-block
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Arithmetic on narrowed variable should work after if-block exits; got: {:?}", result);
+}
+
+#[test]
+fn test_no_narrowing_when_if_doesnt_return() {
+    let input = "high program(): i32 {
+        function tryParse(s: string): i32? {
+            return unknown(\"test\")
+        }
+        let result = tryParse(\"hello\")
+        if (result is unknown) {
+            print(\"error\")  // No return - so no post-block narrowing
+        }
+        print(result + 1)  // Should fail - result is still i32?
+        return 0
+    }";
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Arithmetic on non-narrowed optional should fail");
+
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("arithmetic") || errors[0].message.contains("non-numeric"));
+    }
+}

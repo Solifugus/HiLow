@@ -647,7 +647,7 @@ fn test_function_call_vs_qualified_operator_disambiguation() {
                 match &body.items[0] {
                     BlockItem::Statement(Statement::ExprStatement(Expression::Call(call))) => {
                         match call.callee.as_ref() {
-                            Expression::Ident(name, _) => {
+                            Expression::Ident { name, .. } => {
                                 assert_eq!(name, "x");
                             }
                             _ => panic!("Expected identifier 'x'")
@@ -678,7 +678,7 @@ fn test_function_call_with_arg() {
                 match &body.items[0] {
                     BlockItem::Statement(Statement::ExprStatement(Expression::Call(call))) => {
                         match call.callee.as_ref() {
-                            Expression::Ident(name, _) => {
+                            Expression::Ident { name, .. } => {
                                 assert_eq!(name, "foo");
                             }
                             _ => panic!("Expected identifier 'foo'")

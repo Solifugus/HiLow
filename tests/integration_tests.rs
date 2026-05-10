@@ -1873,3 +1873,105 @@ fn test_nothing_print_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 9b: Unknown type integration tests
+
+#[test]
+fn test_unknown_basic_integration() {
+    let executable = compile_program("tests/programs/unknown_basic.hl")
+        .expect("Failed to compile unknown_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run unknown_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/unknown_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_unknown_optional_return_integration() {
+    let executable = compile_program("tests/programs/unknown_optional_return.hl")
+        .expect("Failed to compile unknown_optional_return.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run unknown_optional_return");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/unknown_optional_return.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_unknown_with_options_integration() {
+    let executable = compile_program("tests/programs/unknown_with_options.hl")
+        .expect("Failed to compile unknown_with_options.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run unknown_with_options");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/unknown_with_options.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_unknown_narrowing_in_else_integration() {
+    let executable = compile_program("tests/programs/unknown_narrowing_in_else.hl")
+        .expect("Failed to compile unknown_narrowing_in_else.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run unknown_narrowing_in_else");
+
+    assert_eq!(exit_code, 1, "Program should exit with code 1");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/unknown_narrowing_in_else.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_unknown_print_integration() {
+    let executable = compile_program("tests/programs/unknown_print.hl")
+        .expect("Failed to compile unknown_print.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run unknown_print");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected_output = fs::read_to_string("tests/expected/unknown_print.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

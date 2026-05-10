@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 9 — Special Types (nothing, unknown, etc.)
-**Status:** Phase 8c completed - Phase 8 (memory model) is complete with weak references for cycle breaking
+**Phase:** Phase 9b — The `unknown` Type
+**Status:** Phase 9a completed - `nothing` type and value implemented with missing property behavior
 **Branch:** main
-**Last commit:** Phase 8c: Weak references for cycle breaking; Phase 8 complete
+**Last commit:** Phase 9a: nothing type and value; missing properties return nothing
 
 ---
 
@@ -20,6 +20,19 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-09 — Phase 9a: The `nothing` Type and Value complete
+- **Context**: Phase 8 (memory model) was complete; Phase 9a implements explicit absence type `nothing` as first-class concept for "no value"
+- **AST and parser updates**: Added `Expression::Nothing(Position)` to AST; parser recognizes `nothing` keyword as expression and allows uninitialized `let x` syntax (removed requirement for type annotation or initializer)
+- **Type system enhancements**: Added `Type::Nothing` support; `let x` without initializer assigns type and value nothing; property access on missing properties returns `Type::Nothing` instead of error; enhanced condition type checking and unary operator support for nothing
+- **Runtime nothing singleton**: Added `HiLowNothing` struct and global `the_nothing` singleton; `nothing` expressions emit `&the_nothing`; `is nothing` checks use pointer comparison; print support with `print_nothing()` function
+- **Codegen implementation**: Missing property access emits `&the_nothing` return; uninitialized let statements emit `&the_nothing` as initial value; special handling for `is nothing` as runtime pointer comparison; unary `not` operator on nothing generates `true` (since nothing is falsy)
+- **Behavioral changes**: Property access to missing properties no longer errors but returns nothing (breaking change from Phase 7a strict mode); uninitialized let bindings now valid (was previously parser error); nothing is falsy in all boolean contexts
+- **Type checking updates**: Allowed nothing in print calls and f-string interpolation; allowed unary `not` operator on nothing type; updated condition type checking to accept nothing as valid falsy type
+- **Integration tests**: Added 5 comprehensive tests covering basic nothing usage, explicit assignment, missing property access, falsy behavior, and print/f-string interpolation; all tests pass with expected outputs
+- **Test updates**: Modified existing property access tests to expect nothing return instead of errors; updated let statement test to allow uninitialized bindings; fixed assignment error messages to reflect new type system behavior
+- **Phase completion**: Complete nothing type implementation with singleton runtime representation, first-class type status, and integration with all existing language features; all 334+ tests passing
+- Commit: "Phase 9a: nothing type and value; missing properties return nothing"
 
 ### 2026-05-09 — Phase 8b: Refcounting for escaped values complete
 - **Context**: Phase 8a established scope-based ownership for single-owner heap values with compile-time rejection of multi-owner cases; Phase 8b adds refcounting to handle previously-rejected multi-owner scenarios

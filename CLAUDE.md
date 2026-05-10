@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 9 — Special Types (nothing, unknown, etc.)**
+**Current phase: Phase 9b — The `unknown` Type**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

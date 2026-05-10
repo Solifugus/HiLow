@@ -40,6 +40,111 @@ void print_nothing(void) {
     printf("nothing\n");
 }
 
+// Unknown type support (Phase 9b)
+
+HiLowUnknown* hl_unknown_new(const char* reason) {
+    HiLowUnknown* unknown = malloc(sizeof(HiLowUnknown));
+    hl_alloc_count++;
+
+    unknown->refcount = 1;
+    unknown->reason = malloc(strlen(reason) + 1);
+    strcpy((char*)unknown->reason, reason);
+    unknown->options = NULL;
+    unknown->options_count = 0;
+
+    return unknown;
+}
+
+HiLowUnknown* hl_unknown_new_with_options(const char* reason, const char** options, int options_count) {
+    HiLowUnknown* unknown = hl_unknown_new(reason);  // This sets refcount to 1
+
+    if (options_count > 0) {
+        unknown->options = malloc(sizeof(char*) * (options_count + 1));  // +1 for null terminator
+        unknown->options_count = options_count;
+
+        for (int i = 0; i < options_count; i++) {
+            unknown->options[i] = malloc(strlen(options[i]) + 1);
+            strcpy((char*)unknown->options[i], options[i]);
+        }
+        unknown->options[options_count] = NULL;  // Null-terminate the array
+    }
+
+    return unknown;
+}
+
+void hl_unknown_retain(HiLowUnknown* unknown) {
+    if (unknown) {
+        unknown->refcount++;
+    }
+}
+
+void hl_unknown_release(HiLowUnknown* unknown) {
+    if (unknown) {
+        unknown->refcount--;
+        if (unknown->refcount <= 0) {
+            // Free the reason string
+            free((void*)unknown->reason);
+
+            // Free the options array if it exists
+            if (unknown->options) {
+                for (int i = 0; i < unknown->options_count; i++) {
+                    free((void*)unknown->options[i]);
+                }
+                free(unknown->options);
+            }
+
+            free(unknown);
+            hl_free_count++;
+        }
+    }
+}
+
+const char* hl_unknown_get_reason(HiLowUnknown* unknown) {
+    return unknown ? unknown->reason : "";
+}
+
+const char** hl_unknown_get_options(HiLowUnknown* unknown) {
+    return unknown ? unknown->options : NULL;
+}
+
+int hl_unknown_get_options_count(HiLowUnknown* unknown) {
+    return unknown ? unknown->options_count : 0;
+}
+
+void print_unknown(HiLowUnknown* unknown) {
+    if (unknown) {
+        printf("unknown: %s\n", unknown->reason);
+    } else {
+        printf("unknown: <null>\n");
+    }
+}
+
+bool hl_is_unknown(void* value) {
+    // In HiLow's type system, for optional types (T?), the runtime representation is:
+    // - Either a T value (for the known case)
+    // - Or a pointer to HiLowUnknown (for the unknown case)
+    //
+    // This function checks if the value is a HiLowUnknown by checking if it points
+    // to a valid HiLowUnknown struct. This is a simple heuristic - in practice,
+    // we could improve this by adding type tags or using more sophisticated checks.
+
+    if (value == NULL) {
+        return false; // NULL is not unknown, it's just null
+    }
+
+    // Try to interpret the value as a HiLowUnknown pointer
+    // This is a simplified check - in a more robust implementation, we might
+    // add magic numbers or other validation
+    HiLowUnknown* unknown = (HiLowUnknown*)value;
+
+    // Basic sanity check: refcount should be positive and reason should not be NULL
+    if (unknown->refcount > 0 && unknown->reason != NULL) {
+        return true;
+    }
+
+    return false;
+}
+
 char* hl_format_binary(unsigned long long value) {
     // Allocate enough space for 64 bits + null terminator
     char* result = malloc(65);
@@ -809,4 +914,19 @@ HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key) {
         }
     }
     return NULL;
+}
+
+// Optional unwrap helpers for narrowed types (Phase 9b)
+// These extract the underlying T value from a T? that is known to hold T (not unknown)
+
+int32_t hl_optional_unwrap_i32(void* optional) {
+    // For i32?, when it holds an i32 value, the value is stored directly in the void*
+    // This is safe because we only call this after narrowing confirms it's not unknown
+    return (int32_t)(intptr_t)optional;
+}
+
+const char* hl_optional_unwrap_string(void* optional) {
+    // For string?, when it holds a string value, the value is the char* cast to void*
+    // This is safe because we only call this after narrowing confirms it's not unknown
+    return (const char*)optional;
 }

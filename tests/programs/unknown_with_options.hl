@@ -1,0 +1,5 @@
+high program(): i32 {
+  let err = unknown("file not found", options: ["check spelling", "create the file"])
+  print(err.reason)
+  return 0
+}

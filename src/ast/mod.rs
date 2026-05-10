@@ -26,6 +26,7 @@ pub enum PrimitiveType {
     Usize,
     Isize,
     Nothing,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +37,7 @@ pub enum Type {
     Object(Vec<(String, Type)>), // structural object type: properties and their types
     Function(Vec<Type>, Box<Type>), // parameter types, return type
     Unknown, // placeholder for unknown types
+    Optional(Box<Type>), // T? syntax for "T or unknown"
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -252,13 +254,20 @@ pub enum Literal {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct UnknownConstruction {
+    pub reason: Box<Expression>,  // must be a string expression
+    pub options: Option<Box<Expression>>,  // must be an array of strings expression
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expression {
     IntLit(i64, Position),
     FloatLit(f64, Position),
     StringLit(String, Position),
     FString(FString),
     BoolLit(bool, Position),
-    Ident(String, Position),
+    Ident { name: String, refined_type: Option<Type>, position: Position },
     This(Position),
     BinaryOp(BinaryOp),
     UnaryOp(UnaryOp),
@@ -273,6 +282,7 @@ pub enum Expression {
     Match(MatchExpr),
     WeakRef(Box<Expression>, Position),
     Nothing(Position),
+    Unknown(UnknownConstruction),
 }
 
 #[derive(Debug, Clone, PartialEq)]

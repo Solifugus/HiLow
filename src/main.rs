@@ -33,7 +33,7 @@ fn compile_program(input_path: &str, output_path: &str) -> Result<(), Box<dyn st
     let mut parser = parser::Parser::new(&source)
         .map_err(|e| format!("Lexer error: {}", e))?;
 
-    let ast = parser.parse()
+    let mut ast = parser.parse()
         .map_err(|e| format!("Parse error: {}", e))?;
 
     // Type check the AST
@@ -46,6 +46,9 @@ fn compile_program(input_path: &str, output_path: &str) -> Result<(), Box<dyn st
             }
             error_msg
         })?;
+
+    // Write refinements to the AST for codegen to use
+    type_checker.write_refinements_to_ast(&mut ast);
 
     // Generate C code
     let mut codegen = codegen::CodeGenerator::new();
