@@ -1985,8 +1985,10 @@ impl CodeGenerator {
                                 self.output.push_str(")); } ");
                             }
                             Type::Unknown => {
-                                // Inference failure - treat as unknown type for now
-                                self.output.push_str("{ strcat(__fstring_buf, \"<unknown>\"); } ");
+                                // Route through normal expression codegen for property access, etc.
+                                self.output.push_str("{ const char* __tmp_str = ");
+                                self.generate_expression(expr, type_checker)?;
+                                self.output.push_str("; strcat(__fstring_buf, __tmp_str); } ");
                             }
                             Type::Optional(inner_type) => {
                                 // Optional: runtime dispatch between unknown and inner type
@@ -2334,21 +2336,56 @@ impl CodeGenerator {
                     _ => Type::Nothing, // Unknown properties return nothing
                 }
             }
+            Type::Optional(_) => {
+                // Check if this might be a narrowed unknown value accessing unknown properties
+                if matches!(member_access.member.as_str(), "reason" | "options") {
+                    // This is likely a narrowed optional accessing unknown properties
+                    match member_access.member.as_str() {
+                        "reason" => Type::String,
+                        "options" => Type::DynamicArray(Box::new(Type::String)),
+                        _ => Type::Nothing,
+                    }
+                } else {
+                    Type::Unknown
+                }
+            }
+            Type::Unknown => {
+                // General inference failure
+                Type::Unknown
+            }
             _ => Type::Unknown
         };
 
-        // Special case: property access on unknown types
-        if matches!(object_type, Type::UnknownType) {
+        // Special case: property access on unknown types or narrowed unknown values
+        let treat_as_unknown = matches!(object_type, Type::UnknownType) ||
+            (matches!(object_type, Type::Optional(_)) &&
+             matches!(member_access.member.as_str(), "reason" | "options"));
+
+        if treat_as_unknown {
             match member_access.member.as_str() {
                 "reason" => {
                     self.output.push_str("hl_unknown_get_reason(");
-                    self.generate_expression(&member_access.object, type_checker)?;
+                    // If this is a narrowed optional, unwrap the unknown first
+                    if matches!(object_type, Type::Optional(_)) {
+                        self.output.push_str("hl_optional_unwrap_unknown(");
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(")");
+                    } else {
+                        self.generate_expression(&member_access.object, type_checker)?;
+                    }
                     self.output.push_str(")");
                     return Ok(());
                 }
                 "options" => {
                     self.output.push_str("hl_unknown_get_options(");
-                    self.generate_expression(&member_access.object, type_checker)?;
+                    // If this is a narrowed optional, unwrap the unknown first
+                    if matches!(object_type, Type::Optional(_)) {
+                        self.output.push_str("hl_optional_unwrap_unknown(");
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(")");
+                    } else {
+                        self.generate_expression(&member_access.object, type_checker)?;
+                    }
                     self.output.push_str(")");
                     return Ok(());
                 }
