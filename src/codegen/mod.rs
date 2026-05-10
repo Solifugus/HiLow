@@ -461,6 +461,9 @@ impl CodeGenerator {
                 Expression::FString(_) => {
                     self.track_heap_owner(&let_decl.name, HeapType::FStringBuffer);
                 }
+                Expression::Unknown(_) => {
+                    self.track_heap_owner(&let_decl.name, HeapType::Unknown);
+                }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
                     if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
