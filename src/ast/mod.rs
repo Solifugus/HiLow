@@ -52,6 +52,13 @@ pub struct Parameter {
     pub position: Position,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportStatement {
+    pub names: Vec<String>,
+    pub path: String,
+    pub position: Position,
+}
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BinaryOpKind {
@@ -322,6 +329,7 @@ pub enum LetPattern {
 pub struct LetDecl {
     pub pattern: LetPattern,
     pub initializer: Option<Expression>,
+    pub is_export: bool,            // Phase 11a-α: export modifier in module body
     pub position: Position,
 }
 
@@ -417,6 +425,7 @@ pub struct Program {
     pub params: Vec<Parameter>,
     pub return_type: Type,
     pub body: Option<ProgramBody>, // Parsed body with nested functions support
+    pub imports: Vec<ImportStatement>,  // Phase 11a-α: top-of-file imports
     pub position: Position,
 }
 
@@ -424,6 +433,8 @@ pub struct Program {
 pub struct Module {
     pub mode: Mode,
     pub items: Vec<Function>,
+    pub lets: Vec<LetDecl>,             // Phase 11a-α: module-level let declarations
+    pub imports: Vec<ImportStatement>,  // Phase 11a-α: top-of-file imports
     pub position: Position,
 }
 

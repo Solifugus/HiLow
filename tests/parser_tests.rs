@@ -1002,3 +1002,166 @@ fn test_function_type_as_return_type() {
         _ => panic!("Expected Program"),
     }
 }
+
+// Phase 11a-α: Module syntax parsing tests
+
+#[test]
+fn test_parse_module_empty() {
+    let input = "high module { }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.mode, Mode::High);
+            assert!(module.items.is_empty());
+            assert!(module.lets.is_empty());
+            assert!(module.imports.is_empty());
+        }
+        _ => panic!("Expected Module, got Program"),
+    }
+}
+
+#[test]
+fn test_parse_module_with_export_function() {
+    let input = r#"high module {
+        export function pub_fn(): i32 {
+            return 1
+        }
+    }"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.items.len(), 1);
+            assert_eq!(module.items[0].name, "pub_fn");
+            assert_eq!(module.items[0].is_export, true);
+        }
+        _ => panic!("Expected Module, got Program"),
+    }
+}
+
+#[test]
+fn test_parse_module_with_private_function() {
+    let input = r#"high module {
+        function helper(): i32 {
+            return 42
+        }
+    }"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.items.len(), 1);
+            assert_eq!(module.items[0].is_export, false);
+        }
+        _ => panic!("Expected Module, got Program"),
+    }
+}
+
+#[test]
+fn test_parse_module_with_export_let() {
+    let input = r#"high module {
+        export let MAX: i32 = 5
+    }"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.lets.len(), 1);
+            assert_eq!(module.lets[0].is_export, true);
+        }
+        _ => panic!("Expected Module, got Program"),
+    }
+}
+
+#[test]
+fn test_parse_import_single_and_multiple() {
+    let input = r#"import { add } from "./math"
+import { greet, wave } from "./util"
+
+high program(): i32 {
+    return 0
+}"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            assert_eq!(program.imports.len(), 2);
+            assert_eq!(program.imports[0].names, vec!["add"]);
+            assert_eq!(program.imports[0].path, "./math");
+            assert_eq!(program.imports[1].names, vec!["greet", "wave"]);
+            assert_eq!(program.imports[1].path, "./util");
+        }
+        _ => panic!("Expected Program, got Module"),
+    }
+}
+
+#[test]
+fn test_parse_import_before_module() {
+    let input = r#"import { add } from "./math"
+
+high module {
+    export function double(x: i32): i32 {
+        return add(x, x)
+    }
+}"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.imports.len(), 1);
+            assert_eq!(module.items.len(), 1);
+            assert_eq!(module.items[0].is_export, true);
+        }
+        _ => panic!("Expected Module, got Program"),
+    }
+}
+
+#[test]
+fn test_parse_export_outside_module_fails() {
+    let input = r#"high program(): i32 {
+        export function bad(): i32 {
+            return 0
+        }
+        return 0
+    }"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let error_msg = format!("{}", error);
+    assert!(error_msg.contains("'export' is only valid inside a module body"));
+}
+
+#[test]
+fn test_parse_import_after_program_fails() {
+    let input = r#"high program(): i32 {
+        return 0
+    }
+
+import { add } from "./math""#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let error_msg = format!("{}", error);
+    assert!(error_msg.contains("'import' statements must appear before the program or module block"));
+}

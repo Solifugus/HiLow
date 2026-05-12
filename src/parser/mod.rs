@@ -61,7 +61,10 @@ impl Parser {
     }
 
     fn parse_top_level(&mut self) -> Result<TopLevel, ParseError> {
-        // Expect high/low keyword first
+        // Phase 11a-α: First parse any imports
+        let imports = self.parse_imports()?;
+
+        // Expect high/low keyword
         let mode_token = self.expect_mode_keyword()?;
         let mode = match mode_token.kind {
             TokenKind::High => Mode::High,
@@ -73,11 +76,13 @@ impl Parser {
         let kind_token = self.advance()?;
         match kind_token.kind {
             TokenKind::Program => {
-                let program = self.parse_program(mode, mode_token.position)?;
+                let mut program = self.parse_program(mode, mode_token.position)?;
+                program.imports = imports;  // Attach imports to program
                 Ok(TopLevel::Program(program))
             }
             TokenKind::Module => {
-                let module = self.parse_module(mode, mode_token.position)?;
+                let mut module = self.parse_module(mode, mode_token.position)?;
+                module.imports = imports;  // Attach imports to module
                 Ok(TopLevel::Module(module))
             }
             _ => Err(ParseError::UnexpectedToken {
@@ -86,6 +91,61 @@ impl Parser {
                 position: kind_token.position,
             }),
         }
+    }
+
+    fn parse_imports(&mut self) -> Result<Vec<ImportStatement>, ParseError> {
+        let mut imports = Vec::new();
+
+        // Parse zero or more import statements
+        while self.check(&TokenKind::Import) {
+            imports.push(self.parse_import_statement()?);
+        }
+
+        Ok(imports)
+    }
+
+    fn parse_import_statement(&mut self) -> Result<ImportStatement, ParseError> {
+        let import_pos = self.advance()?.position;  // consume 'import'
+
+        // Expect '{'
+        self.expect_token(TokenKind::LeftBrace, "Expected '{' after 'import'")?;
+
+        // Parse imported names
+        let mut names = Vec::new();
+
+        // Must have at least one name
+        let first_name = self.expect_identifier("Expected identifier after '{'")?;
+        names.push(first_name.lexeme);
+
+        // Parse additional names separated by commas
+        while self.check(&TokenKind::Comma) {
+            self.advance()?; // consume ','
+            let name = self.expect_identifier("Expected identifier after ','")?;
+            names.push(name.lexeme);
+        }
+
+        // Expect '}'
+        self.expect_token(TokenKind::RightBrace, "Expected '}' after import list")?;
+
+        // Expect 'from'
+        self.expect_token(TokenKind::From, "Expected 'from' after import list")?;
+
+        // Expect string literal path
+        let path_token = self.advance()?;
+        let path = match path_token.kind {
+            TokenKind::StringLit(s) => s,
+            _ => return Err(ParseError::UnexpectedToken {
+                expected: "string literal".to_string(),
+                found: path_token.kind,
+                position: path_token.position,
+            }),
+        };
+
+        Ok(ImportStatement {
+            names,
+            path,
+            position: import_pos,
+        })
     }
 
     fn parse_program(&mut self, mode: Mode, start_pos: Position) -> Result<Program, ParseError> {
@@ -101,7 +161,14 @@ impl Parser {
         // Parse body - Phase 6a-fixup: parse statements and nested functions
         let body = self.parse_program_body(mode.clone())?;
 
-        // Expect EOF
+        // Expect EOF - Phase 11a-α: check for imports after program block
+        if self.check(&TokenKind::Import) {
+            return Err(ParseError::UnsupportedFeature {
+                feature: "import after program block".to_string(),
+                position: self.peek()?.position.clone(),
+                suggestion: "'import' statements must appear before the program or module block".to_string(),
+            });
+        }
         self.expect_token(TokenKind::Eof, "Expected end of file")?;
 
         Ok(Program {
@@ -109,6 +176,7 @@ impl Parser {
             params,
             return_type,
             body: Some(body),
+            imports: vec![],  // Phase 11a-α: empty imports list (parser doesn't handle imports yet)
             position: start_pos,
         })
     }
@@ -118,21 +186,146 @@ impl Parser {
         self.expect_token(TokenKind::LeftBrace, "Expected '{' after 'module'")?;
 
         let mut items = Vec::new();
+        let mut lets = Vec::new();
 
-        // Parse functions until we hit the closing brace
+        // Parse declarations until we hit the closing brace
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
-            let function = self.parse_function_signature(mode.clone())?;
-            items.push(function);
+            // Check for export modifier
+            let is_export = if self.check(&TokenKind::Export) {
+                self.advance()?; // consume 'export'
+                true
+            } else {
+                false
+            };
+
+            // Determine what kind of declaration this is
+            if self.check(&TokenKind::Function) || self.check(&TokenKind::High) || self.check(&TokenKind::Low) {
+                // Function declaration (possibly with explicit mode)
+                let mut function = self.parse_function_signature(mode.clone())?;
+                function.is_export = is_export;
+                items.push(function);
+            } else if self.check(&TokenKind::Let) {
+                // Let declaration
+                if is_export {
+                    let let_decl = self.parse_module_let_declaration(true)?;
+                    lets.push(let_decl);
+                } else {
+                    let let_decl = self.parse_module_let_declaration(false)?;
+                    lets.push(let_decl);
+                }
+            } else {
+                // Invalid declaration in module body
+                let token = self.peek()?;
+                return Err(ParseError::UnsupportedFeature {
+                    feature: "non-declaration statement in module body".to_string(),
+                    position: token.position.clone(),
+                    suggestion: "module body may only contain declarations".to_string(),
+                });
+            }
         }
 
         self.expect_token(TokenKind::RightBrace, "Expected '}' after module body")?;
+
+        // Phase 11a-α: check for imports after module block
+        if self.check(&TokenKind::Import) {
+            return Err(ParseError::UnsupportedFeature {
+                feature: "import after module block".to_string(),
+                position: self.peek()?.position.clone(),
+                suggestion: "'import' statements must appear before the program or module block".to_string(),
+            });
+        }
         self.expect_token(TokenKind::Eof, "Expected end of file")?;
 
         Ok(Module {
             mode,
             items,
+            lets,
+            imports: vec![],  // Phase 11a-α: imports are attached from parse_top_level
             position: start_pos,
         })
+    }
+
+    fn parse_module_let_declaration(&mut self, is_export: bool) -> Result<LetDecl, ParseError> {
+        let start_pos = self.advance()?.position; // consume 'let'
+
+        // Parse the let pattern (identifier or destructuring)
+        let pattern = self.parse_let_pattern(&start_pos)?;
+
+        // Optional type annotation
+        let pattern = if self.check(&TokenKind::Colon) {
+            self.advance()?; // consume ':'
+            let ty = self.parse_type()?;
+            match pattern {
+                LetPattern::Identifier(name, _) => LetPattern::Identifier(name, Some(ty)),
+                LetPattern::Tuple(_) => {
+                    return Err(ParseError::UnsupportedFeature {
+                        feature: "type annotations on tuple destructuring".to_string(),
+                        position: start_pos,
+                        suggestion: "tuple destructuring with type annotations not yet supported".to_string(),
+                    });
+                }
+            }
+        } else {
+            pattern
+        };
+
+        // Required initializer for module-level lets
+        self.expect_token(TokenKind::Equal, "Expected '=' after let declaration in module")?;
+        let initializer = Some(self.parse_expression()?);
+
+        Ok(LetDecl {
+            pattern,
+            initializer,
+            is_export,
+            position: start_pos,
+        })
+    }
+
+    fn parse_let_pattern(&mut self, start_pos: &Position) -> Result<LetPattern, ParseError> {
+        // Parse the pattern - either identifier or tuple destructuring
+        if self.check(&TokenKind::LeftParen) {
+            // Tuple destructuring: let (a, b, c) = ...
+            self.advance()?; // consume '('
+
+            let mut names = Vec::new();
+
+            // Parse first identifier
+            let first_name = self.expect_identifier("Expected variable name in tuple pattern")?;
+            names.push(first_name.lexeme);
+
+            // Parse remaining identifiers
+            while self.check(&TokenKind::Comma) {
+                self.advance()?; // consume ','
+                let name = self.expect_identifier("Expected variable name in tuple pattern")?;
+                names.push(name.lexeme);
+            }
+
+            self.expect_token(TokenKind::RightParen, "Expected ')' after tuple pattern")?;
+
+            if names.len() < 2 {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "at least 2 elements in tuple pattern".to_string(),
+                    found: TokenKind::RightParen,
+                    position: start_pos.clone(),
+                });
+            }
+
+            Ok(LetPattern::Tuple(names))
+        } else {
+            // Regular identifier: let name = ...
+            let name_token = self.expect_identifier("Expected variable name after 'let'")?;
+            let name = name_token.lexeme;
+
+            // Optional type annotation
+            let ty = if self.check(&TokenKind::Colon) {
+                self.advance()?; // consume ':'
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+
+            Ok(LetPattern::Identifier(name, ty))
+        }
     }
 
     fn parse_function_signature(&mut self, default_mode: Mode) -> Result<Function, ParseError> {
@@ -485,6 +678,15 @@ impl Parser {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        // Phase 11a-α: Check for export modifier in program body (which is invalid)
+        if self.check(&TokenKind::Export) {
+            return Err(ParseError::UnsupportedFeature {
+                feature: "export in program body".to_string(),
+                position: self.peek()?.position.clone(),
+                suggestion: "'export' is only valid inside a module body".to_string(),
+            });
+        }
+
         match &self.peek()?.kind {
             TokenKind::Let => self.parse_let_statement(),
             TokenKind::Return => self.parse_return_statement(),
@@ -521,50 +723,8 @@ impl Parser {
     fn parse_let_statement(&mut self) -> Result<Statement, ParseError> {
         let start_pos = self.advance()?.position; // consume 'let'
 
-        // Parse the pattern - either identifier or tuple destructuring
-        let pattern = if self.check(&TokenKind::LeftParen) {
-            // Tuple destructuring: let (a, b, c) = ...
-            self.advance()?; // consume '('
-
-            let mut names = Vec::new();
-
-            // Parse first identifier
-            let first_name = self.expect_identifier("Expected variable name in tuple pattern")?;
-            names.push(first_name.lexeme);
-
-            // Parse remaining identifiers
-            while self.check(&TokenKind::Comma) {
-                self.advance()?; // consume ','
-                let name = self.expect_identifier("Expected variable name in tuple pattern")?;
-                names.push(name.lexeme);
-            }
-
-            self.expect_token(TokenKind::RightParen, "Expected ')' after tuple pattern")?;
-
-            if names.len() < 2 {
-                return Err(ParseError::UnexpectedToken {
-                    expected: "at least 2 elements in tuple pattern".to_string(),
-                    found: TokenKind::RightParen,
-                    position: start_pos,
-                });
-            }
-
-            LetPattern::Tuple(names)
-        } else {
-            // Regular identifier: let name = ...
-            let name_token = self.expect_identifier("Expected variable name after 'let'")?;
-            let name = name_token.lexeme;
-
-            // Optional type annotation
-            let ty = if self.check(&TokenKind::Colon) {
-                self.advance()?; // consume ':'
-                Some(self.parse_type()?)
-            } else {
-                None
-            };
-
-            LetPattern::Identifier(name, ty)
-        };
+        // Parse the let pattern using the shared method
+        let pattern = self.parse_let_pattern(&start_pos)?;
 
         // Optional initializer
         let initializer = if self.check(&TokenKind::Equal) {
@@ -577,6 +737,7 @@ impl Parser {
         Ok(Statement::Let(LetDecl {
             pattern,
             initializer,
+            is_export: false,  // Phase 11a-α: let statements in program body are never exported
             position: start_pos,
         }))
     }

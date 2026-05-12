@@ -144,10 +144,21 @@ impl CodeGenerator {
 
         match top_level {
             TopLevel::Program(program) => {
+                // Phase 11a-α: defensive guard for imports
+                if !program.imports.is_empty() {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: "imports".to_string(),
+                        phase: "not yet implemented in Phase 11a-α".to_string(),
+                    });
+                }
                 self.generate_program(program, type_checker)?;
             }
-            TopLevel::Module(module) => {
-                self.generate_module(module, type_checker)?;
+            TopLevel::Module(_module) => {
+                // Phase 11a-α: defensive guard for modules
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "modules".to_string(),
+                    phase: "not yet implemented in Phase 11a-α".to_string(),
+                });
             }
         }
 

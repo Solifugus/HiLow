@@ -93,10 +93,31 @@ impl TypeChecker {
     /// Type check a top-level program or module
     pub fn check(&mut self, top_level: &TopLevel) -> Result<(), Vec<TypeError>> {
         match top_level {
-            TopLevel::Program(program) => self.check_program(program),
-            TopLevel::Module(module) => self.check_module(module),
+            TopLevel::Program(program) => {
+                // Phase 11a-α: defensive guard for imports
+                if !program.imports.is_empty() {
+                    self.errors.push(TypeError::new(
+                        "imports not yet implemented in Phase 11a-α",
+                        program.imports[0].position.clone(),
+                    ));
+                    return self.finish_check();
+                }
+                self.check_program(program)
+            }
+            TopLevel::Module(_module) => {
+                // Phase 11a-α: defensive guard for modules
+                self.errors.push(TypeError::new(
+                    "modules not yet implemented in Phase 11a-α",
+                    _module.position.clone(),
+                ));
+                return self.finish_check();
+            }
         }
 
+        self.finish_check()
+    }
+
+    fn finish_check(&mut self) -> Result<(), Vec<TypeError>> {
         if self.errors.is_empty() {
             Ok(())
         } else {
