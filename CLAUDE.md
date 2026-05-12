@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 11a-α — Module Syntax Parsing (Complete)**
+**Current phase: Phase 11a-β — Module Resolver**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
