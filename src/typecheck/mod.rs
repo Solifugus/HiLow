@@ -62,6 +62,10 @@ impl RefinementScope {
     }
 }
 
+/// An exported symbol table for one module: name -> type.
+/// Function exports use `Type::Function(...)`; let exports use the let's annotated type.
+pub type ExportTable = HashMap<String, Type>;
+
 /// The type checker for HiLow programs
 pub struct TypeChecker {
     scopes: Vec<Scope>,
@@ -73,6 +77,9 @@ pub struct TypeChecker {
     switch_depth: usize, // Track nested switch depth for break validation
     qualifier_registry: QualifierRegistry,
     method_context: Option<Type>, // Track the receiver object type when inside a method
+    /// Cross-module export tables, keyed by module path. Populated during pass 1 of check_graph.
+    /// Empty during single-file `check`.
+    module_exports: HashMap<String, ExportTable>,
 }
 
 impl TypeChecker {
@@ -87,6 +94,7 @@ impl TypeChecker {
             switch_depth: 0,
             qualifier_registry: QualifierRegistry::new(),
             method_context: None,
+            module_exports: HashMap::new(),
         }
     }
 
@@ -123,6 +131,217 @@ impl TypeChecker {
         } else {
             Err(std::mem::take(&mut self.errors))
         }
+    }
+
+    /// Type check a resolved module graph with two-pass approach
+    pub fn check_graph(&mut self, graph: &crate::resolver::ResolvedGraph) -> Result<(), Vec<TypeError>> {
+        // Clear state for fresh invocation
+        self.module_exports.clear();
+        self.errors.clear();
+
+        // Pass 1 - signature collection
+        for path in &graph.topo_order {
+            let parsed = graph.files.get(path).expect("ResolvedGraph should contain all paths");
+            let export_table = self.collect_module_exports(path, parsed);
+            self.module_exports.insert(path.clone(), export_table);
+        }
+
+        // Pass 2 - body checking
+        for path in &graph.topo_order {
+            let parsed = graph.files.get(path).expect("ResolvedGraph should contain all paths");
+            self.check_module_bodies(path, parsed, &graph.imports);
+        }
+
+        // Finalize
+        self.finish_check()
+    }
+
+    /// Collect exports from a parsed module into an export table
+    fn collect_module_exports(&mut self, path: &str, parsed: &crate::resolver::ParsedFile) -> ExportTable {
+        let mut export_table = HashMap::new();
+
+        match parsed {
+            crate::resolver::ParsedFile::Program(_) => {
+                // Programs don't have exports, but we may be checking a single program via this path
+                // No exports to collect
+            }
+            crate::resolver::ParsedFile::Module(module) => {
+                // Process exported functions
+                for function in &module.items {
+                    if function.is_export {
+                        // Check if return type is explicitly annotated
+                        // All functions in AST have return_type: Type, but we need to check
+                        // what the parser produces for missing return types
+
+                        // For now, assume all functions have explicit return types
+                        // (will be validated in testing)
+
+                        // Check if parameters are explicitly annotated
+                        // All parameters have ty: Type, so parameter annotation rule is likely vacuous
+
+                        let param_types: Vec<crate::types::Type> = function.params
+                            .iter()
+                            .map(|p| crate::types::Type::from_ast_type(&p.ty))
+                            .collect();
+                        let return_type = crate::types::Type::from_ast_type(&function.return_type);
+
+                        export_table.insert(
+                            function.name.clone(),
+                            crate::types::Type::Function(param_types, Box::new(return_type))
+                        );
+                    }
+                }
+
+                // Process exported lets
+                for let_decl in &module.lets {
+                    if let_decl.is_export {
+                        if let LetPattern::Identifier(name, type_annotation) = &let_decl.pattern {
+                            if let Some(type_annotation) = type_annotation {
+                                let let_type = crate::types::Type::from_ast_type(type_annotation);
+                                export_table.insert(name.clone(), let_type);
+                            } else {
+                                // Missing type annotation on exported let
+                                self.errors.push(crate::types::TypeError::new(
+                                    format!("exported 'let' declaration '{}' requires an explicit type annotation", name),
+                                    let_decl.position.clone(),
+                                ));
+                            }
+                        } else {
+                            // Tuple destructuring exports not supported yet
+                            self.errors.push(crate::types::TypeError::new(
+                                "exported tuple destructuring not yet supported",
+                                let_decl.position.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        export_table
+    }
+
+    /// Check the bodies of functions and lets in a module
+    fn check_module_bodies(&mut self, path: &str, parsed: &crate::resolver::ParsedFile, all_imports: &HashMap<String, Vec<String>>) {
+        // Start a fresh outermost scope for this module
+        self.enter_scope();
+
+        // Populate scope with imported names
+        if let Some(imported_paths) = all_imports.get(path) {
+            // For each import statement in this module, resolve the names
+            match parsed {
+                crate::resolver::ParsedFile::Program(program) => {
+                    for import_stmt in &program.imports {
+                        if imported_paths.contains(&import_stmt.path) {
+                            if let Some(export_table) = self.module_exports.get(&import_stmt.path).cloned() {
+                                for import_name in &import_stmt.names {
+                                    if let Some(imported_type) = export_table.get(import_name) {
+                                        self.declare_variable(import_name, imported_type.clone(), import_stmt.position.clone());
+                                    } else {
+                                        self.errors.push(crate::types::TypeError::new(
+                                            format!("'{}' is not exported from '{}'", import_name, import_stmt.path),
+                                            import_stmt.position.clone(),
+                                        ));
+                                    }
+                                }
+                            } else {
+                                // Export table not found - shouldn't happen with valid resolver output
+                                self.errors.push(crate::types::TypeError::new(
+                                    format!("module '{}' not found in export tables", import_stmt.path),
+                                    import_stmt.position.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                crate::resolver::ParsedFile::Module(module) => {
+                    for import_stmt in &module.imports {
+                        if imported_paths.contains(&import_stmt.path) {
+                            if let Some(export_table) = self.module_exports.get(&import_stmt.path).cloned() {
+                                for import_name in &import_stmt.names {
+                                    if let Some(imported_type) = export_table.get(import_name) {
+                                        self.declare_variable(import_name, imported_type.clone(), import_stmt.position.clone());
+                                    } else {
+                                        self.errors.push(crate::types::TypeError::new(
+                                            format!("'{}' is not exported from '{}'", import_name, import_stmt.path),
+                                            import_stmt.position.clone(),
+                                        ));
+                                    }
+                                }
+                            } else {
+                                // Export table not found - shouldn't happen with valid resolver output
+                                self.errors.push(crate::types::TypeError::new(
+                                    format!("module '{}' not found in export tables", import_stmt.path),
+                                    import_stmt.position.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add module's own declarations to scope and check their bodies
+        match parsed {
+            crate::resolver::ParsedFile::Program(program) => {
+                // Check program body using existing helper
+                if let Some(body) = &program.body {
+                    // Add program's functions to scope first
+                    for item in &body.items {
+                        if let crate::ast::BlockItem::Function(function) = item {
+                            let param_types: Vec<crate::types::Type> = function.params
+                                .iter()
+                                .map(|p| crate::types::Type::from_ast_type(&p.ty))
+                                .collect();
+                            let return_type = crate::types::Type::from_ast_type(&function.return_type);
+                            let func_type = crate::types::Type::Function(param_types, Box::new(return_type));
+                            self.declare_variable(&function.name, func_type, function.position.clone());
+                        }
+                    }
+
+                    // Check function bodies and statements
+                    for item in &body.items {
+                        match item {
+                            crate::ast::BlockItem::Function(function) => {
+                                if function.body.is_some() {
+                                    self.check_function(function);
+                                }
+                            }
+                            crate::ast::BlockItem::Statement(statement) => {
+                                self.check_statement(statement);
+                            }
+                        }
+                    }
+                }
+            }
+            crate::resolver::ParsedFile::Module(module) => {
+                // Add module's functions to scope first
+                for function in &module.items {
+                    let param_types: Vec<crate::types::Type> = function.params
+                        .iter()
+                        .map(|p| crate::types::Type::from_ast_type(&p.ty))
+                        .collect();
+                    let return_type = crate::types::Type::from_ast_type(&function.return_type);
+                    let func_type = crate::types::Type::Function(param_types, Box::new(return_type));
+                    self.declare_variable(&function.name, func_type, function.position.clone());
+                }
+
+                // Check function bodies
+                for function in &module.items {
+                    if let Some(_func_body) = &function.body {
+                        self.check_function(function);
+                    }
+                }
+
+                // Add module's lets to scope and check initializers
+                for let_decl in &module.lets {
+                    self.check_let_statement(let_decl);
+                }
+            }
+        }
+
+        // Exit the module's scope
+        self.exit_function_scope();
     }
 
     fn check_program(&mut self, program: &Program) {

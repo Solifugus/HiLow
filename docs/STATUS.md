@@ -6,20 +6,31 @@
 
 ## Current state
 
-**Phase:** Phase 10 — Arrays and Slicing  
-**Status:** Phase 9 complete, Phase 10 next
+**Phase:** Phase 11a-β — Module Resolver  
+**Status:** Phase 11a-β complete, Phase 11a-γ next
 **Branch:** main
-**Last commit:** Phase 9e: tuples with destructuring, field access, function returns; Phase 9 complete
+**Last commit:** Phase 11a-β: module resolver (pure functional, in-memory, with cycle detection)
 
 ---
 
 ## Open questions
 
-**Phase 10 implementation**: The next phase is Phase 10 (Arrays and Slicing), which implements array types, literals, indexing, and slice operations. Reference the development plan for Phase 10 scope and verification requirements.
+**Phase 11a-γ integration**: How should the resolver be wired into the actual compile pipeline? Should `ParsedFile` remain separate from `TopLevel` or unify? How should path resolution (adding `.hl`, canonicalization, relative-to-importing-file) work in the actual filesystem integration?
 
 ---
 
 ## Recent sessions
+
+### 2026-05-11 — Phase 11a-β: Module Resolver complete
+- **Context**: Phase 11a-α (parser support for module syntax) was complete with 47 parser tests and 118 integration tests; Phase 11a-β implements the module resolver as pure-functional component that takes entry-point plus callback for file lookup, producing topologically-ordered module list with import graph
+- **Resolver implementation**: Created `src/resolver/mod.rs` with prescribed types (`ParsedFile`, `ResolverError`, `ResolvedGraph`); implemented DFS for dependency loading plus Kahn's algorithm for topological sorting; self-import detection during file processing, cycle detection with proper error positioning
+- **Pure functional design**: Resolver takes `FnMut(&str) -> Result<ParsedFile, ResolverError>` callback for file lookup, never reads filesystem directly; enables unit testing without filesystem state; `ParsedFile` enum abstracts over `Program`/`Module` for resolver's needs
+- **Error handling**: Three error types - `SelfImport` (file imports itself), `Cycle` (non-trivial import cycle with path), `ModuleNotFound` (callback returns error for missing module); all errors include source position information
+- **Test coverage**: 8 comprehensive resolver tests in `tests/resolver_tests.rs` covering single file, linear chain, diamond, self-import error, two-cycle error, three-cycle error, missing module error, deep chain; all tests use in-memory `HashMap` for file storage
+- **Algorithm choice**: Kahn's algorithm for topological sort - build in-degree counts and adjacency list, process zero-in-degree nodes, detect cycles if not all nodes processed; chose Kahn's for clarity over Tarjan's SCC
+- **Additive implementation**: Zero changes to existing files (verified with `git diff --stat`); only added `pub mod resolver;` to `src/lib.rs`; no filesystem dependencies in resolver module (verified with grep)
+- **Verification results**: All tests passing - 118 integration (unchanged), 47 parser (unchanged), 8 resolver (new), 1 ignored (unchanged); clean verification ritual with 0 failures; resolver operates as pure library component, not wired into compilation pipeline yet
+- Commit: "Phase 11a-β: module resolver (pure functional, in-memory, with cycle detection)"
 
 ### 2026-05-10 — Phase 9e: Tuples with destructuring, field access, function returns; Phase 9 complete
 - **Context**: Phase 9e (tuples) foundation was implemented in previous session but C code generation was placeholder-only; this session completed tuple codegen and all required integration tests; Phase 9 (a through e) is now complete
@@ -592,6 +603,9 @@
 
 ### Vestigial AST fields
 - ~~`body_placeholder` field on Function AST nodes is dead code after Phase 2b moved body parsing inline.~~ *(Cleaned up in Phase 3.)*
+
+### Module system architecture
+- **ParsedFile/TopLevel duplication** (Phase 11a-β): The resolver uses `ParsedFile` enum while the parser produces `TopLevel` enum, both abstracting over `Program`/`Module`. This duplication enables pure resolver design but requires conversion at integration boundaries. Phase 11a-γ should decide whether to unify these types or maintain the separation for architectural clarity.
 
 ### Error message polish
 - **Assignment-in-condition error is generic.** Currently `if (x = 5) { }` produces "Expected ')' after if condition, found Equal token." A more helpful message would be: "assignment is not allowed in expression position; did you mean `?=` for equality?" The behavior is correctly rejected (Phase 2b), but the error wording is a parser-level error rather than a domain-aware suggestion. Owned by Phase 2b; revisit when polishing error messages.
