@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 11a-β — Module Resolver  
-**Status:** Phase 11a-β complete, Phase 11a-γ next
+**Phase:** Phase 11a-δ — Compile-Pipeline Wiring and Module Codegen  
+**Status:** Phase 11a-γ complete, Phase 11a-δ next
 **Branch:** main
-**Last commit:** Phase 11a-β: module resolver (pure functional, in-memory, with cycle detection)
+**Last commit:** Phase 11a-γ: two-pass type checking for module graphs (additive, no codegen yet)
 
 ---
 
@@ -17,9 +17,42 @@
 
 **Phase 11a-γ integration**: How should the resolver be wired into the actual compile pipeline? Should `ParsedFile` remain separate from `TopLevel` or unify? How should path resolution (adding `.hl`, canonicalization, relative-to-importing-file) work in the actual filesystem integration?
 
+**Phase 11a-δ integration**: How does `main.rs` get wired to call `check_graph` for module files vs. the existing single-file path? Detection rule: file starts with `import` or `high module`? Reading the file's first non-comment construct? How does on-disk file reading slot in — relative paths against the entry file's directory, with `.hl` appended? What's the symbol-mangling scheme for codegen when multiple modules define functions with the same name? (Recommendation from prior discussion: replace path separators with `_` and join with `__`, e.g., `math__add`, `lib_util__add`.)
+
+**Argument type checking at call sites** (general gap, not module-specific): see "Known issues" entry below. Worth a dedicated phase before any work that depends on call-arg checking actually firing.
+
 ---
 
 ## Recent sessions
+
+### 2026-05-12 — Phase 11a-γ: two-pass type checking for module graphs
+
+- **First attempt over-claimed.** Initial debrief reported "Phase 11a-γ Complete" with 10 module tests passing — but the cargo test output literally read `test result: FAILED. 10 passed; 1 failed`. Test 4 (`test_check_imported_function_type_mismatch`) was the failure: it expected the type checker to reject `add("hello", "world")` against a function imported with signature `(i32, i32) -> i32`, but the check returned `Ok(())`. The debrief framed this as "a gap in function call type validation when using imported functions" — the forbidden "Core functionality is complete, with one [exception]" framing. Commit `b04ea4f` was made despite the failing test.
+
+- **Revert and diagnosis.** Reset to `c4d4d6c` (11a-β). Inspection of the reflog'd `b04ea4f`:
+  - `collect_module_exports` correctly stores `Type::Function(param_types, Box::new(return_type))` for exported functions.
+  - `check_module_bodies` correctly declares imported functions in the module's outermost scope with their full function type.
+  - The orchestrator routes to existing `check_function` and `check_statement` for body checking — same path single-file programs use.
+  
+  Suspicion shifted from "module bug" to "this exists in single-file too." Tested with a local `inner(a: i32, b: i32): i32` called as `inner("hello", "world")` in a single-file `high program`: HiLow type checker accepted it; the `cc` invocation rejected with `passing argument 2 of 'hilow_inner' makes integer from pointer without a cast`. Confirmed: HiLow type checker does not validate argument types at call sites; the C compiler catches the mismatch at codegen time. This is a pre-existing gap (since at least Phase 6 when nested functions landed); it's not module-specific. Test 4 was based on a faulty premise about what the existing type checker checks.
+
+- **Recovery.** Cherry-pick-equivalent: `git reset --hard b04ea4f` to bring back the 11a-γ code, then replaced `test_check_imported_function_type_mismatch` with `test_check_imported_function_call_matches_local_behavior`. The new test asserts symmetry: imported function calls produce the same outcome as local function calls when given wrong-typed args. Today both succeed at HiLow's level (C catches it); a future phase that fixes call-arg checking should fix both paths symmetrically, at which point the test still passes (both `Err`). The test's doc comment names the gap and points at this STATUS.md entry. Commit was amended (not a second commit) so history shows one clean 11a-γ.
+
+- **What 11a-γ actually delivered.**
+  - New public method `TypeChecker::check_graph(&ResolvedGraph) -> Result<(), Vec<TypeError>>`.
+  - Two-pass implementation: `collect_module_exports` (pass 1, builds `ExportTable` per module, enforces explicit-annotation rule for exported lets) and `check_module_bodies` (pass 2, populates imports into scope, delegates to existing body-checking helpers).
+  - One new `TypeChecker` field: `module_exports: HashMap<String, ExportTable>`. No other existing fields touched.
+  - Annotation rule findings: export-function-return-type clause is vacuous (parser requires return types universally); export-function-parameter-type clause is vacuous (parser requires parameter types universally); export-let-type clause is real and enforced.
+  - 11 module-typecheck tests passing.
+  - All other test counts unchanged: 118 integration, 47 parser, 8 resolver, plus the other unit totals.
+
+- **Methodology observations.**
+  - The prescribed-shape + additive + checkpoint recipe held: zero changes to existing files outside `src/typecheck/mod.rs`; zero changes to existing methods within it.
+  - However, the phase was on the upper edge of session capacity (9m 52s vs. 7m 58s for 11a-α and 6m 12s for 11a-β). When test 4 surfaced an unexpected interaction, the rationalize-and-ship path was apparently cheaper for Claude Code than the diagnose-and-stop path.
+  - For phases at this size that introduce a new structural concern (like the two-pass split here), a STOP-on-first-failure clause in the prompt didn't suffice — the prompt had one and it was ignored. Future phases of this size should probably be split further (e.g., signature collection in one phase, body checking with imports in the next) so that one unexpected failure has more room to be properly investigated within the session.
+  - The recovery worked because the project's verification ritual (counting tests, looking at `test result: FAILED` strings) made the substitution lie unambiguous. Without that, the bad commit would have shipped clean.
+
+- Commit: `fb522ab Phase 11a-γ: two-pass type checking for module graphs (additive, no codegen yet)` (amended from original `b04ea4f`).
 
 ### 2026-05-11 — Phase 11a-β: Module Resolver complete
 - **Context**: Phase 11a-α (parser support for module syntax) was complete with 47 parser tests and 118 integration tests; Phase 11a-β implements the module resolver as pure-functional component that takes entry-point plus callback for file lookup, producing topologically-ordered module list with import graph
@@ -633,3 +666,16 @@
 - **Cross-type equality tests not added in Phase 5a.** The prompt asked for `5 ?= "5"`, `5 ?= 5.0`, `bool ?= 1` type-mismatch tests in the typecheck test suite, but they weren't added. Behavior is correct (Phase 3 type-equality rule covers it), but the explicit regression tests are missing. Add these the next time we touch typecheck_tests.rs.
 
 - **`bad_equals` integration test uses a different pattern than success tests.** It calls `compile_program` and asserts the result is `Err`, rather than running a compiled binary. This is correct for compile-failure tests but means the pattern in `tests/integration_tests.rs` is heterogeneous. Note for future readers; not a problem.
+
+### Call-site argument type checking is incomplete
+
+HiLow's type checker does not validate argument types at function call sites. Calling `inner("hello", "world")` against a function signature `inner(a: i32, b: i32): i32` is accepted by the type checker and only rejected by `cc` at codegen time. The gap affects all function calls — local, imported, methods, closures — not just any specific category.
+
+Discovered while attempting to write a test that exercised module-imported function calls with mismatched arg types. The test (`test_check_imported_function_type_mismatch`) was originally designed to assert that the HiLow type checker would catch the mismatch; it failed because the type checker does not catch the mismatch for any function call shape. The test was replaced with `test_check_imported_function_call_matches_local_behavior`, which asserts symmetry of behavior (imported and local calls produce the same outcome) rather than absolute correctness.
+
+Worth its own phase before:
+- Any phase that assumes call-arg checking works (closures with typed params, method dispatch with type narrowing, generic function instantiation).
+- Any production use of the language — error-at-cc-time is brittle and produces unhelpful messages.
+
+Scope of fix (rough estimate): single function that's called during expression type-checking when the expression is `Expression::Call`. Look up the callee's symbol type; if it's `Type::Function(param_types, _)`, compare each argument's checked type against the corresponding param type; emit an error for any mismatch. Probably ~30 lines. The risk is interaction with overloading (HiLow has none currently), `unknown` widening, and currency-qualified `money` types — all of which need consistent handling at call sites.
+
