@@ -649,6 +649,18 @@
 
 ## Known issues / TODOs
 
+### Cleanup debt (consolidate before Phase 14+)
+
+These items are intentional duplications introduced to keep phase boundaries additive. They each work correctly in isolation; together they want a consolidation pass when their interactions start mattering.
+
+**1. Duplicate `main()` generation in codegen.** The single-file path and the module-graph path both emit the `main()` shell — return-value declaration, body emission, memory-leak check, cleanup epilogue. Introduced in Phase 11a-δ-α because consolidating would have required restructuring single-file codegen. Path forward: extract a `emit_main_function(body_emitter)` helper that both paths call, parameterized on how the body's statements get emitted. Estimate: ~30 lines moved, no behavior change. Cleanest moment to do this: before Phase 11a-δ-β (where multi-module compilation will exercise the module-graph path more rigorously, and any divergence between the two `main()` paths becomes a real bug risk).
+
+**2. Duplicate import-type resolution.** The type checker's `collect_module_exports` computes the type of each exported declaration during pass 1 of `check_graph`. Codegen has a parallel `populate_import_types` doing the same computation. Introduced in Phase 11a-δ-α because the prompt forbade adding accessors to `TypeChecker`. Path forward: either (a) one controlled accessor on `TypeChecker` exposing `module_exports` to codegen, or (b) `ResolvedGraph` carries the export tables alongside its files (resolver builds them by walking exports during graph construction). Option (b) is architecturally cleaner — the export table is a property of the resolved graph, not the type checker's intermediate state — but requires touching the resolver. Option (a) is one accessor and is acceptable if the accessor is the only one. Decide which when consolidating. Estimate: 20-40 lines depending on choice.
+
+**3. `ParsedFile` and `TopLevel` are parallel types.** Same shape, different namespaces. The parser produces `TopLevel`; the resolver uses `ParsedFile`; codegen now receives both (`TopLevel` from single-file path, `ParsedFile` from graph path). Introduced in Phase 11a-β to keep the resolver's contract independent of parser's output shape. The independence hasn't paid for itself: nothing about the resolver's logic actually depends on the type being different. Path forward: collapse to one type, owned by the AST module (`TopLevel` is the natural choice — it's there first). Resolver imports `TopLevel`; `ParsedFile` enum disappears. Estimate: ~30 lines, mostly find-and-replace. Should be done before Phase 12 (Low mode) so the Low-mode compilation path has only one notion of "a parsed top-level."
+
+**Consolidation phase target.** A single "Phase 11a-ε: codegen and resolver consolidation" phase covering all three items would run ~100-150 lines net (most code moves around, little gets added). Run it after 11a-δ-β lands. Doing all three together is cheaper than three separate phases because the items interact: choosing option (b) for item 2 affects the shape touched in item 3, and item 1's helper interacts with the codegen path consolidations that fall out of items 2 and 3.
+
 ### Code quality
 - **5 cargo warnings** (unused imports, unnecessary `mut`). Run `cargo fix --allow-dirty` at a natural break point (end of Phase 5 or 6) to clean up.
 
