@@ -97,6 +97,8 @@ pub struct CodeGenerator {
     tuple_struct_definitions: String,
     /// Phase 9e: Track which tuple types have been generated (to avoid duplicates)
     generated_tuple_types: HashSet<Vec<Type>>,
+    /// Phase 11a-δ-α: Current module name mapping for cross-module calls
+    current_name_map: Option<HashMap<String, String>>,
 }
 
 impl CodeGenerator {
@@ -123,6 +125,7 @@ impl CodeGenerator {
             main_program_optionals: Vec::new(),
             tuple_struct_definitions: String::new(),
             generated_tuple_types: HashSet::new(),
+            current_name_map: None,
         }
     }
 
@@ -175,6 +178,368 @@ impl CodeGenerator {
         final_output.push_str(&self.output);
 
         Ok(final_output)
+    }
+
+    /// Generate C code for a resolved graph (Phase 11a-δ-α)
+    pub fn generate_graph(
+        &mut self,
+        graph: &crate::resolver::ResolvedGraph,
+        type_checker: &TypeChecker,
+        entry_abs_path: &std::path::Path,
+    ) -> Result<String, CodegenError> {
+        let mut final_output = String::new();
+
+        // Add standard C includes first
+        final_output.push_str("#include <stdint.h>\n");
+        final_output.push_str("#include <stdbool.h>\n");
+        final_output.push_str("#include \"runtime.h\"\n");
+        final_output.push_str("\n");
+
+        let entry_dir = entry_abs_path.parent().unwrap();
+
+        // Process modules in topological order (dependencies first)
+        for abs_path in &graph.topo_order {
+            let parsed_file = graph.files.get(abs_path).unwrap();
+
+            // Build per-module name map and populate variable types for imports
+            let name_map = self.build_name_map_for_module(abs_path, parsed_file, &graph, entry_dir);
+            self.populate_import_types(parsed_file, &graph, entry_dir);
+            self.current_name_map = Some(name_map);
+
+            match parsed_file {
+                crate::resolver::ParsedFile::Module(module) => {
+                    // Generate exported functions with mangled names
+                    for func in &module.items {
+                        if func.is_export {
+                            let mangled_name = self.mangle_module_function_name(abs_path, &func.name, entry_dir);
+                            self.generate_module_function(func, &mangled_name, type_checker)?;
+                        }
+                    }
+
+                    // Generate exported lets with mangled names
+                    for let_decl in &module.lets {
+                        if let_decl.is_export {
+                            if let LetPattern::Identifier(var_name, _) = &let_decl.pattern {
+                                let mangled_name = self.mangle_module_let_name(abs_path, var_name, entry_dir);
+                                self.generate_module_let(let_decl, &mangled_name, type_checker)?;
+                            }
+                        }
+                    }
+                }
+                crate::resolver::ParsedFile::Program(program) => {
+                    // This should be the entry program - process last
+                    if abs_path == &entry_abs_path.to_string_lossy().to_string() {
+                        // Generate the main program
+                        self.generate_main_function(program, type_checker)?;
+                    }
+                }
+            }
+        }
+
+        self.current_name_map = None;
+
+        // Build the final output
+        // Add tuple struct definitions (Phase 9e)
+        final_output.push_str(&self.tuple_struct_definitions);
+
+        // Add environment struct definitions (from closures)
+        final_output.push_str(&self.environment_structs);
+
+        // Add generated functions (from function expressions and modules)
+        final_output.push_str(&self.generated_functions);
+
+        // Add main program code
+        final_output.push_str(&self.output);
+
+        Ok(final_output)
+    }
+
+    /// Build name mapping for a module during graph codegen (Phase 11a-δ-α)
+    fn build_name_map_for_module(
+        &self,
+        module_path: &str,
+        parsed_file: &crate::resolver::ParsedFile,
+        graph: &crate::resolver::ResolvedGraph,
+        entry_dir: &std::path::Path,
+    ) -> HashMap<String, String> {
+        let mut name_map = HashMap::new();
+
+        // Add this module's own declarations (exported and private)
+        match parsed_file {
+            crate::resolver::ParsedFile::Module(module) => {
+                // Add exported functions
+                for func in &module.items {
+                    if func.is_export {
+                        let mangled_name = self.mangle_module_function_name(module_path, &func.name, entry_dir);
+                        name_map.insert(func.name.clone(), mangled_name);
+                    }
+                }
+
+                // Add exported lets
+                for let_decl in &module.lets {
+                    if let_decl.is_export {
+                        if let LetPattern::Identifier(var_name, _) = &let_decl.pattern {
+                            let mangled_name = self.mangle_module_let_name(module_path, var_name, entry_dir);
+                            name_map.insert(var_name.clone(), mangled_name);
+                        }
+                    }
+                }
+            }
+            crate::resolver::ParsedFile::Program(_) => {
+                // Programs don't have exportable declarations in the same way
+            }
+        }
+
+        // Add imports from other modules
+        for import in parsed_file.imports() {
+            let imported_module_path = &import.path;
+            if let Some(imported_file) = graph.files.get(imported_module_path) {
+                if let crate::resolver::ParsedFile::Module(imported_module) = imported_file {
+                    for imported_name in &import.names {
+                        // Check functions
+                        for func in &imported_module.items {
+                            if func.is_export && func.name == *imported_name {
+                                let mangled_name = self.mangle_module_function_name(imported_module_path, &func.name, entry_dir);
+                                name_map.insert(imported_name.clone(), mangled_name);
+                            }
+                        }
+
+                        // Check lets
+                        for let_decl in &imported_module.lets {
+                            if let_decl.is_export {
+                                if let LetPattern::Identifier(var_name, _) = &let_decl.pattern {
+                                    if var_name == imported_name {
+                                        let mangled_name = self.mangle_module_let_name(imported_module_path, var_name, entry_dir);
+                                        name_map.insert(imported_name.clone(), mangled_name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        name_map
+    }
+
+    /// Mangle function name for module (Phase 11a-δ-α)
+    fn mangle_module_function_name(&self, abs_path: &str, func_name: &str, entry_dir: &std::path::Path) -> String {
+        let rel_path = self.get_relative_path(abs_path, entry_dir);
+        format!("{}__{}",
+            rel_path.replace("/", "_").replace(".hl", ""),
+            func_name
+        )
+    }
+
+    /// Mangle let name for module (Phase 11a-δ-α)
+    fn mangle_module_let_name(&self, abs_path: &str, let_name: &str, entry_dir: &std::path::Path) -> String {
+        let rel_path = self.get_relative_path(abs_path, entry_dir);
+        format!("{}__{}",
+            rel_path.replace("/", "_").replace(".hl", ""),
+            let_name
+        )
+    }
+
+    /// Get relative path from absolute path given entry directory
+    fn get_relative_path(&self, abs_path: &str, entry_dir: &std::path::Path) -> String {
+        let abs_path_obj = std::path::Path::new(abs_path);
+        abs_path_obj.strip_prefix(entry_dir)
+            .unwrap_or(abs_path_obj)
+            .to_string_lossy()
+            .to_string()
+    }
+
+    /// Generate a module function with mangled name (Phase 11a-δ-α)
+    fn generate_module_function(&mut self, func: &Function, mangled_name: &str, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate function signature
+        let return_type = self.hilow_type_to_c(&Type::from_ast_type(&func.return_type));
+        self.generated_functions.push_str(&return_type);
+        self.generated_functions.push_str(" ");
+        self.generated_functions.push_str(mangled_name);
+        self.generated_functions.push_str("(");
+
+        // Add parameters
+        for (i, param) in func.params.iter().enumerate() {
+            if i > 0 {
+                self.generated_functions.push_str(", ");
+            }
+            self.generated_functions.push_str(&self.hilow_type_to_c(&Type::from_ast_type(&param.ty)));
+            self.generated_functions.push_str(" ");
+            self.generated_functions.push_str(&param.name);
+        }
+
+        self.generated_functions.push_str(") {\n");
+
+        // Store current output and switch to generated_functions
+        let saved_output = self.output.clone();
+        self.output.clear();
+
+        // Generate function body
+        if let Some(ref body) = func.body {
+            self.generate_block_with_parameter_context(body, &func.params, type_checker)?;
+        }
+
+        // Move generated body to generated_functions
+        self.generated_functions.push_str(&self.output);
+        self.generated_functions.push_str("}\n\n");
+
+        // Restore output
+        self.output = saved_output;
+
+        Ok(())
+    }
+
+    /// Generate a module let with mangled name (Phase 11a-δ-α)
+    fn generate_module_let(&mut self, let_decl: &LetDecl, mangled_name: &str, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        if let Some(ref initializer) = let_decl.initializer {
+            // For now, assume simple name pattern (not tuple destructuring)
+            if let LetPattern::Identifier(var_name, type_annotation) = &let_decl.pattern {
+                // Use type annotation if provided, otherwise infer from initializer
+                let hilow_type = if let Some(ref annotation) = type_annotation {
+                    Type::from_ast_type(annotation)
+                } else {
+                    // Infer type from the literal if it's a simple literal
+                    match initializer {
+                        Expression::IntLit(_, _) => crate::types::Type::I32,
+                        Expression::StringLit(_, _) => crate::types::Type::String,
+                        Expression::BoolLit(_, _) => crate::types::Type::Bool,
+                        _ => crate::types::Type::I32, // Default fallback
+                    }
+                };
+
+                let c_type = self.hilow_type_to_c(&hilow_type);
+                self.generated_functions.push_str(&c_type);
+                self.generated_functions.push_str(" ");
+                self.generated_functions.push_str(mangled_name);
+                self.generated_functions.push_str(" = ");
+
+                // Store current output and switch to generated_functions
+                let saved_output = self.output.clone();
+                self.output.clear();
+
+                // Generate initializer
+                self.generate_expression(initializer, type_checker)?;
+
+                // Move generated initializer to generated_functions
+                self.generated_functions.push_str(&self.output);
+                self.generated_functions.push_str(";\n");
+
+                // Restore output
+                self.output = saved_output;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Generate main function from program (Phase 11a-δ-α)
+    fn generate_main_function(&mut self, program: &Program, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Generate the main function
+        self.output.push_str("int main() {\n");
+        self.output.push_str("  int return_value = 0;\n"); // Default return value
+
+        if let Some(ref body) = program.body {
+            // Mark that we're in the main program
+            self.in_main_program = true;
+            self.scope_depth = 1; // Main program starts at scope 1
+
+            // Generate program body statements
+            for item in &body.items {
+                match item {
+                    BlockItem::Statement(statement) => {
+                        self.generate_statement(statement, type_checker)?;
+                    }
+                    BlockItem::Function(_func) => {
+                        // Functions in program body should already be handled separately
+                        // For graph mode, we skip them as they're not part of the main program flow
+                    }
+                }
+            }
+
+            self.in_main_program = false;
+
+            // Phase 9c fix: Final cleanup for any remaining Optional variables
+            for var_name in &self.main_program_optionals.clone() {
+                if self.heap_owners.contains_key(var_name) {
+                    let c_var_name = self.mangle_variable_name(var_name);
+                    self.output.push_str(&format!("    // Phase 9c fix: Final cleanup for {}\n", var_name));
+                    self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
+                }
+            }
+
+            // Phase 8a: Emit cleanup for all heap-owned variables in main scope
+            self.emit_scope_cleanup(1);
+        }
+
+        // Phase 8a: Emit memory leak check before program exit
+        self.output.push_str("    // Memory leak check (Phase 8a)\n");
+        self.output.push_str("    if (hl_alloc_count != hl_free_count) {\n");
+        self.output.push_str("        fprintf(stderr, \"MEMORY LEAK: allocated %d, freed %d (diff=%d)\\n\",\n");
+        self.output.push_str("                hl_alloc_count, hl_free_count, hl_alloc_count - hl_free_count);\n");
+        self.output.push_str("        return 1;\n");
+        self.output.push_str("    }\n");
+        self.output.push_str("    return return_value;\n");
+        self.output.push_str("}\n");
+
+        Ok(())
+    }
+
+    /// Populate variable types for imported symbols (Phase 11a-δ-α)
+    fn populate_import_types(
+        &mut self,
+        parsed_file: &crate::resolver::ParsedFile,
+        graph: &crate::resolver::ResolvedGraph,
+        entry_dir: &std::path::Path,
+    ) {
+        for import in parsed_file.imports() {
+            let imported_module_path = &import.path;
+            if let Some(imported_file) = graph.files.get(imported_module_path) {
+                if let crate::resolver::ParsedFile::Module(imported_module) = imported_file {
+                    for imported_name in &import.names {
+                        // Check lets
+                        for let_decl in &imported_module.lets {
+                            if let_decl.is_export {
+                                if let LetPattern::Identifier(var_name, type_annotation) = &let_decl.pattern {
+                                    if var_name == imported_name {
+                                        // Infer type of the let variable
+                                        let hilow_type = if let Some(ref annotation) = type_annotation {
+                                            Type::from_ast_type(annotation)
+                                        } else {
+                                            // Infer type from the literal if it's a simple literal
+                                            if let Some(ref initializer) = let_decl.initializer {
+                                                match initializer {
+                                                    Expression::IntLit(_, _) => crate::types::Type::I32,
+                                                    Expression::StringLit(_, _) => crate::types::Type::String,
+                                                    Expression::BoolLit(_, _) => crate::types::Type::Bool,
+                                                    _ => crate::types::Type::I32, // Default fallback
+                                                }
+                                            } else {
+                                                crate::types::Type::I32 // Default fallback
+                                            }
+                                        };
+                                        // Add to variable_types map
+                                        self.variable_types.insert(imported_name.clone(), hilow_type);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check functions - add them as Function types
+                        for func in &imported_module.items {
+                            if func.is_export && func.name == *imported_name {
+                                let param_types: Vec<Type> = func.params.iter()
+                                    .map(|p| Type::from_ast_type(&p.ty))
+                                    .collect();
+                                let return_type = Type::from_ast_type(&func.return_type);
+                                let func_type = Type::Function(param_types, Box::new(return_type));
+                                self.variable_types.insert(imported_name.clone(), func_type);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn emit_includes(&mut self) {
@@ -1115,6 +1480,12 @@ impl CodeGenerator {
                 self.output.push_str(if *value { "true" } else { "false" });
             }
             Expression::Ident { name, refined_type, .. } => {
+                // Phase 11a-δ-α: Check if this is a cross-module reference first
+                if let Some(mangled_name) = self.current_name_map.as_ref().and_then(|m| m.get(name)).cloned() {
+                    self.output.push_str(&mangled_name);
+                    return Ok(());
+                }
+
                 // Check if this variable is hoisted to an environment
                 if let Some((env_var, _env_struct)) = self.hoisted_variables.get(name) {
                     // Variable is hoisted - use environment access
@@ -1655,6 +2026,23 @@ impl CodeGenerator {
         if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
             if func_name == "print" {
                 return self.generate_print_call(call, type_checker);
+            }
+        }
+
+        // Phase 11a-δ-α: cross-module names resolve to plain C functions
+        if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
+            if let Some(mangled_name) = self.current_name_map.as_ref().and_then(|m| m.get(func_name)).cloned() {
+                // Emit plain function call to mangled C name
+                self.output.push_str(&mangled_name);
+                self.output.push_str("(");
+                for (i, arg) in call.args.iter().enumerate() {
+                    if i > 0 {
+                        self.output.push_str(", ");
+                    }
+                    self.generate_expression(arg, type_checker)?;
+                }
+                self.output.push_str(")");
+                return Ok(());
             }
         }
 

@@ -1,0 +1,3 @@
+high module {
+  export let MAX: i32 = 10
+}

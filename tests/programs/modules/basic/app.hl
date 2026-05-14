@@ -1,0 +1,6 @@
+import { add } from "./math"
+
+high program(): i32 {
+  print(add(2, 3))
+  return 0
+}

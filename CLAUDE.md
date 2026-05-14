@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 9f — Call-Site Argument Type Checking**
+**Current phase: Phase 11a-δ-α — End-to-End Module Compilation (Two-Node Graphs Only)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -2329,3 +2329,43 @@ fn test_reject_tuple_arity_mismatch_integration() {
             error_message.contains("variables") || error_message.contains("element"),
             "Error should mention arity/mismatch issue: {}", error_message);
 }
+
+#[test]
+fn test_modules_basic_integration() {
+    let executable = compile_program("tests/programs/modules/basic/app.hl")
+        .expect("Failed to compile modules/basic/app.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run modules/basic test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/modules/basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_modules_export_let_integration() {
+    let executable = compile_program("tests/programs/modules/export_let/app.hl")
+        .expect("Failed to compile modules/export_let/app.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run modules/export_let test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/modules/export_let.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

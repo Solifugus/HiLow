@@ -1,0 +1,6 @@
+import { MAX } from "./constants"
+
+high program(): i32 {
+  print(MAX)
+  return 0
+}
