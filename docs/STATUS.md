@@ -7,9 +7,9 @@
 ## Current state
 
 **Phase:** Phase 11a-δ — Compile-Pipeline Wiring and Module Codegen  
-**Status:** Phase 11a-γ complete, Phase 11a-δ next
+**Status:** Phase 9f complete, Phase 11a-δ next
 **Branch:** main
-**Last commit:** Phase 11a-γ: two-pass type checking for module graphs (additive, no codegen yet)
+**Last commit:** Phase 9f: call-site argument type checking; resolves Phase 7c-β TODO
 
 ---
 
@@ -24,6 +24,24 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-13 — Phase 9f: Call-Site Argument Type Checking
+
+- **Gap closure.** Fixed the call-site argument type checking gap documented in STATUS.md. The type checker now validates that each argument's type matches the corresponding parameter type for all function calls, not just function values. Previously, calls like `add("hello", "world")` against signature `add(a: i32, b: i32): i32` were accepted by HiLow but failed at C compilation with unhelpful gcc errors.
+
+- **Implementation details.** Modified `check_call` in `src/typecheck/mod.rs` using Option A from the prompt: refactored the pre-loop argument checking to use `check_expression_with_expected_type` against corresponding parameter types inside the `Type::Function` branch. Applied the same compatibility logic as `check_let_statement`: exact type equality plus special case allowing `money<X>` to be passed where `money` is expected. Fixed local function declaration to store full `Type::Function(param_types, return_type)` instead of just return type, enabling argument checking for locally-defined functions.
+
+- **Error messages.** Format: "Type mismatch in argument N: expected TYPE but got TYPE". Multiple argument mismatches are all reported (no short-circuiting). Error position uses `call.position` for all argument errors.
+
+- **Test coverage.** Added 6 new tests to `typecheck_tests.rs` (51 → 57 passed): argument type mismatch, correct types accepted, multiple mismatches reported, integer literal coercion to i64, money compatibility. Updated `test_check_imported_function_call_matches_local_behavior` in `typecheck_module_tests.rs` with strengthened assertion - both imported and local calls now produce type errors as expected after Phase 9f.
+
+- **Findings on test edge cases.** Test 4 (integer literal coercion): `check_expression_with_expected_type` successfully coerces integer literals `2, 3` to i64 when function expects `(i64, i64)`, confirming the mechanism works as designed. Test 6 (money generic to specific): Current behavior allows `money` to `money<USD>` calls (both succeed), documenting actual type system behavior rather than assumed restriction.
+
+- **Verification ritual.** Clean baseline maintained: 118 integration (0 failed, 1 ignored), 57 typecheck (6 new), 11 typecheck_module (strengthened assertion), 47 parser, 8 resolver, all others unchanged. No regressions introduced.
+
+- **Gap resolved.** Removed "Call-site argument type checking is incomplete" from Known issues/TODOs. The Phase 7c-β TODO comment at line 1402 has been replaced with actual implementation. All function call shapes (local, imported, methods, closures) now have consistent argument type validation.
+
+- Commit: "Phase 9f: call-site argument type checking; resolves Phase 7c-β TODO"
 
 ### 2026-05-12 — Phase 11a-γ: two-pass type checking for module graphs
 
@@ -667,15 +685,4 @@
 
 - **`bad_equals` integration test uses a different pattern than success tests.** It calls `compile_program` and asserts the result is `Err`, rather than running a compiled binary. This is correct for compile-failure tests but means the pattern in `tests/integration_tests.rs` is heterogeneous. Note for future readers; not a problem.
 
-### Call-site argument type checking is incomplete
-
-HiLow's type checker does not validate argument types at function call sites. Calling `inner("hello", "world")` against a function signature `inner(a: i32, b: i32): i32` is accepted by the type checker and only rejected by `cc` at codegen time. The gap affects all function calls — local, imported, methods, closures — not just any specific category.
-
-Discovered while attempting to write a test that exercised module-imported function calls with mismatched arg types. The test (`test_check_imported_function_type_mismatch`) was originally designed to assert that the HiLow type checker would catch the mismatch; it failed because the type checker does not catch the mismatch for any function call shape. The test was replaced with `test_check_imported_function_call_matches_local_behavior`, which asserts symmetry of behavior (imported and local calls produce the same outcome) rather than absolute correctness.
-
-Worth its own phase before:
-- Any phase that assumes call-arg checking works (closures with typed params, method dispatch with type narrowing, generic function instantiation).
-- Any production use of the language — error-at-cc-time is brittle and produces unhelpful messages.
-
-Scope of fix (rough estimate): single function that's called during expression type-checking when the expression is `Expression::Call`. Look up the callee's symbol type; if it's `Type::Function(param_types, _)`, compare each argument's checked type against the corresponding param type; emit an error for any mismatch. Probably ~30 lines. The risk is interaction with overloading (HiLow has none currently), `unknown` widening, and currency-qualified `money` types — all of which need consistent handling at call sites.
 

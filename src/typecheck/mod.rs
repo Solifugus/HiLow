@@ -407,8 +407,12 @@ impl TypeChecker {
             if let BlockItem::Function(function) = item {
                 // For Phase 6a-fixup, nested functions can't access enclosing variables
                 // They're treated as top-level functions that happen to be declared nested
-                // Add function to symbol table - for simplicity, use return type as the function type
-                let func_type = Type::from_ast_type(&function.return_type);
+                // Add function to symbol table with full function type for call-site argument checking
+                let param_types: Vec<Type> = function.params.iter()
+                    .map(|p| Type::from_ast_type(&p.ty))
+                    .collect();
+                let return_type = Type::from_ast_type(&function.return_type);
+                let func_type = Type::Function(param_types, Box::new(return_type));
                 self.declare_variable(&function.name, func_type, function.position.clone());
             }
         }
@@ -1383,11 +1387,6 @@ impl TypeChecker {
         // Type check the callee
         let callee_type = self.check_expression(&call.callee);
 
-        // Type check all arguments
-        for arg in &call.args {
-            self.check_expression(arg);
-        }
-
         // Phase 7c-β: Handle function value calls
         if let Type::Function(param_types, return_type) = &callee_type {
             // Validate argument count
@@ -1399,9 +1398,36 @@ impl TypeChecker {
                 return Type::Unknown;
             }
 
-            // TODO: Validate argument types match parameter types
-            // For now, just return the return type
+            // Validate argument types match parameter types
+            for (arg_index, (arg, expected_param_type)) in call.args.iter().zip(param_types.iter()).enumerate() {
+                let arg_type = self.check_expression_with_expected_type(arg, expected_param_type);
+
+                // Check compatibility using same logic as let-statement
+                let types_compatible = if *expected_param_type == arg_type {
+                    true
+                } else if matches!(expected_param_type, Type::Money) && matches!(arg_type, Type::MoneyOf(_)) {
+                    true  // money<X> can be passed where money is expected
+                } else {
+                    false
+                };
+
+                if !types_compatible {
+                    self.add_error(
+                        format!("Type mismatch in argument {}: expected {} but got {}",
+                                arg_index + 1,
+                                expected_param_type,
+                                arg_type),
+                        call.position.clone()
+                    );
+                }
+            }
+
             return *return_type.clone();
+        }
+
+        // For non-function callees, type check arguments without expected types
+        for arg in &call.args {
+            self.check_expression(arg);
         }
 
         // Phase 6a-fixup: For nested functions, return the function's return type

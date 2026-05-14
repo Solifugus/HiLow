@@ -78,16 +78,11 @@ fn test_check_program_imports_module_let() {
 
 #[test]
 fn test_check_imported_function_call_matches_local_behavior() {
-    // HiLow's type checker currently does not validate argument types at call
-    // sites (see "Known issues" in STATUS.md). The gap exists for all function
-    // calls, not just imported ones. This test verifies that imported function
-    // calls behave the same as local function calls in this regard: whatever
-    // outcome the type checker produces for a local call with wrong-typed args,
-    // it must produce the same outcome for an imported call with wrong-typed args.
-    //
-    // When call-arg type checking is implemented in a future phase, this test
-    // should be updated (or replaced) to assert that both cases produce a type
-    // error, rather than asserting symmetry of the absence of one.
+    // Phase 9f implemented call-site argument type checking, closing the gap
+    // documented in STATUS.md. This test verifies that imported function calls
+    // and local function calls both produce type errors when called with
+    // mismatched argument types, ensuring consistent behavior across all
+    // function call contexts.
 
     // Imported function called with wrong-typed args
     let mut imported_checker = TypeChecker::new();
@@ -104,13 +99,16 @@ fn test_check_imported_function_call_matches_local_behavior() {
     ]);
     let local_result = local_checker.check_graph(&local_graph);
 
-    // Both must produce the same outcome (success or matching error shape).
-    // Today: both succeed at the HiLow level; the C compiler catches the mismatch later.
+    // Both must produce the same outcome (both should now be Err after Phase 9f)
     assert_eq!(
         imported_result.is_ok(), local_result.is_ok(),
         "Imported call and local call diverged in type-check outcome.\n  imported: {:?}\n  local: {:?}",
         imported_result, local_result
     );
+
+    // Stronger assertions: both should now produce type errors
+    assert!(imported_result.is_err(), "Imported call should now produce type error");
+    assert!(local_result.is_err(), "Local call should now produce type error");
 }
 
 #[test]

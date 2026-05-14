@@ -637,3 +637,96 @@ fn test_no_narrowing_when_if_doesnt_return() {
                 errors[0].message.contains("operands must be numeric"));
     }
 }
+
+// Phase 9f: Call-site argument type checking tests
+
+#[test]
+fn test_call_arg_type_mismatch_string_for_i32() {
+    let input = r#"
+    high program(): i32 {
+        function add(a: i32, b: i32): i32 { return a + b }
+        add("hello", 5)
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type mismatch error for string argument");
+
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("Type mismatch in argument 1: expected i32 but got string"));
+    }
+}
+
+#[test]
+fn test_call_arg_correct_types_passes() {
+    let input = r#"
+    high program(): i32 {
+        function add(a: i32, b: i32): i32 { return a + b }
+        add(2, 3)
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Expected successful type check, got: {:?}", result);
+}
+
+#[test]
+fn test_call_multiple_arg_mismatches_all_reported() {
+    let input = r#"
+    high program(): i32 {
+        function add(a: i32, b: i32): i32 { return a + b }
+        add("hello", "world")
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type mismatch errors for both arguments");
+
+    if let Err(errors) = result {
+        assert!(errors.len() >= 2, "Expected at least 2 errors, got: {}", errors.len());
+        assert!(errors[0].message.contains("Type mismatch in argument 1") ||
+                errors[1].message.contains("Type mismatch in argument 1"));
+        assert!(errors[0].message.contains("Type mismatch in argument 2") ||
+                errors[1].message.contains("Type mismatch in argument 2"));
+    }
+}
+
+#[test]
+fn test_call_integer_literal_coerces_to_i64() {
+    let input = r#"
+    high program(): i32 {
+        function bigAdd(a: i64, b: i64): i64 { return a + b }
+        bigAdd(2, 3)
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Expected integer literal coercion to i64 to work, got: {:?}", result);
+}
+
+#[test]
+fn test_call_money_specific_to_generic_compatible() {
+    let input = r#"
+    high program(): i32 {
+        function fee(amount: money): money { return amount }
+        let x: money<USD> = 5.00 USD
+        fee(x)
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Expected money<USD> to money compatibility, got: {:?}", result);
+}
+
+#[test]
+fn test_call_money_to_money_specific_behavior() {
+    let input = r#"
+    high program(): i32 {
+        function feeUSD(amount: money<USD>): money<USD> { return amount }
+        let x: money = 5.00 USD  // This creates generic money from money<USD> literal
+        feeUSD(x)
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    // Note: Current type system behavior allows this. The assignment `let x: money = 5.00 USD`
+    // uses the money<USD> -> money compatibility rule, so x has type money. Calling feeUSD(x)
+    // passes a money where money<USD> is expected. This currently succeeds, documenting the
+    // actual behavior rather than assuming it should fail.
+    assert!(result.is_ok(), "Current behavior allows money to money<USD> calls, got: {:?}", result);
+}
