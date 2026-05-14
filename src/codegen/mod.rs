@@ -435,54 +435,7 @@ impl CodeGenerator {
 
     /// Generate main function from program (Phase 11a-δ-α)
     fn generate_main_function(&mut self, program: &Program, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Generate the main function
-        self.output.push_str("int main() {\n");
-        self.output.push_str("  int return_value = 0;\n"); // Default return value
-
-        if let Some(ref body) = program.body {
-            // Mark that we're in the main program
-            self.in_main_program = true;
-            self.scope_depth = 1; // Main program starts at scope 1
-
-            // Generate program body statements
-            for item in &body.items {
-                match item {
-                    BlockItem::Statement(statement) => {
-                        self.generate_statement(statement, type_checker)?;
-                    }
-                    BlockItem::Function(_func) => {
-                        // Functions in program body should already be handled separately
-                        // For graph mode, we skip them as they're not part of the main program flow
-                    }
-                }
-            }
-
-            self.in_main_program = false;
-
-            // Phase 9c fix: Final cleanup for any remaining Optional variables
-            for var_name in &self.main_program_optionals.clone() {
-                if self.heap_owners.contains_key(var_name) {
-                    let c_var_name = self.mangle_variable_name(var_name);
-                    self.output.push_str(&format!("    // Phase 9c fix: Final cleanup for {}\n", var_name));
-                    self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
-                }
-            }
-
-            // Phase 8a: Emit cleanup for all heap-owned variables in main scope
-            self.emit_scope_cleanup(1);
-        }
-
-        // Phase 8a: Emit memory leak check before program exit
-        self.output.push_str("    // Memory leak check (Phase 8a)\n");
-        self.output.push_str("    if (hl_alloc_count != hl_free_count) {\n");
-        self.output.push_str("        fprintf(stderr, \"MEMORY LEAK: allocated %d, freed %d (diff=%d)\\n\",\n");
-        self.output.push_str("                hl_alloc_count, hl_free_count, hl_alloc_count - hl_free_count);\n");
-        self.output.push_str("        return 1;\n");
-        self.output.push_str("    }\n");
-        self.output.push_str("    return return_value;\n");
-        self.output.push_str("}\n");
-
-        Ok(())
+        self.emit_main_function(program, type_checker)
     }
 
     /// Populate variable types for imported symbols (Phase 11a-δ-α)
@@ -555,42 +508,8 @@ impl CodeGenerator {
             self.generate_program_body_functions(body, type_checker)?;
         }
 
-        // Generate the main function
-        self.output.push_str("int main() {\n");
-        self.output.push_str("  int return_value = 0;\n"); // Default return value
-
-        if let Some(body) = &program.body {
-            // Mark that we're in the main program
-            self.in_main_program = true;
-            self.scope_depth = 1; // Main program starts at scope 1
-            self.generate_program_body_statements(body, type_checker)?;
-            self.in_main_program = false;
-
-            // Phase 9c fix: Final cleanup for any remaining Optional variables
-            // This ensures cleanup happens even if scope-based cleanup missed them due to type narrowing
-            for var_name in &self.main_program_optionals.clone() {
-                if self.heap_owners.contains_key(var_name) {
-                    let c_var_name = self.mangle_variable_name(var_name);
-                    self.output.push_str(&format!("    // Phase 9c fix: Final cleanup for {}\n", var_name));
-                    self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
-                }
-            }
-
-            // Phase 8a: Emit cleanup for all heap-owned variables in main scope
-            self.emit_scope_cleanup(1);
-        }
-
-        // Phase 8a: Emit memory leak check before program exit
-        self.output.push_str("    // Memory leak check (Phase 8a)\n");
-        self.output.push_str("    if (hl_alloc_count != hl_free_count) {\n");
-        self.output.push_str("        fprintf(stderr, \"MEMORY LEAK: allocated %d, freed %d (diff=%d)\\n\",\n");
-        self.output.push_str("                hl_alloc_count, hl_free_count, hl_alloc_count - hl_free_count);\n");
-        self.output.push_str("        return 1;\n");
-        self.output.push_str("    }\n");
-        self.output.push_str("    return return_value;\n");
-
-        self.output.push_str("}\n");
-        Ok(())
+        // Generate the main function using consolidated helper
+        self.emit_main_function(program, type_checker)
     }
 
     fn generate_module(&mut self, module: &Module, type_checker: &TypeChecker) -> Result<(), CodegenError> {
@@ -4498,6 +4417,42 @@ impl CodeGenerator {
         self.output.push_str("        return 1;\n");
         self.output.push_str("    }\n");
         self.output.push_str("    return return_value;\n");
+    }
+
+    /// Phase 11a-ε: Consolidated main() function emission helper
+    fn emit_main_function(&mut self, program: &Program, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Emit main function header
+        self.output.push_str("int main() {\n");
+        self.output.push_str("  int return_value = 0;\n");
+
+        if let Some(body) = &program.body {
+            // Mark that we're in the main program
+            self.in_main_program = true;
+            self.scope_depth = 1; // Main program starts at scope 1
+
+            // Generate program body statements
+            self.generate_program_body_statements(body, type_checker)?;
+
+            self.in_main_program = false;
+
+            // Phase 9c fix: Final cleanup for any remaining Optional variables
+            for var_name in &self.main_program_optionals.clone() {
+                if self.heap_owners.contains_key(var_name) {
+                    let c_var_name = self.mangle_variable_name(var_name);
+                    self.output.push_str(&format!("    // Phase 9c fix: Final cleanup for {}\n", var_name));
+                    self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
+                }
+            }
+
+            // Phase 8a: Emit cleanup for all heap-owned variables in main scope
+            self.emit_scope_cleanup(1);
+        }
+
+        // Phase 8a: Emit memory leak check and return
+        self.emit_leak_check_and_return();
+        self.output.push_str("}\n");
+
+        Ok(())
     }
 
 

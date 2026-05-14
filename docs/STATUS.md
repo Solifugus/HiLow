@@ -7,7 +7,7 @@
 ## Current state
 
 **Phase:** Phase 11a-δ — Compile-Pipeline Wiring and Module Codegen  
-**Status:** Phase 9f complete, Phase 11a-δ next
+**Status:** Phase 11a-ε complete, Phase 11a-δ-β next
 **Branch:** main
 **Last commit:** Phase 9f: call-site argument type checking; resolves Phase 7c-β TODO
 
@@ -24,6 +24,20 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-14 — Phase 11a-ε: Consolidate Duplicate `main()` Emission
+
+- **Cleanup debt resolution.** Addressed item 1 from cleanup debt section - duplicate `main()` emission between single-file path (`generate_main_function`) and module-graph path (`generate_program`). Both paths previously contained identical main() shell emission code: return-value declaration, body emission, memory-leak check, cleanup epilogue.
+
+- **Implementation.** Extracted shared `emit_main_function` helper that both paths now call. Helper uses existing `generate_program_body_statements` (module-graph path's approach) and existing `emit_leak_check_and_return` for leak check portion. Single-file path went from manual statement loop to shared approach with no behavior change. Module-graph path went from inline emission to shared helper.
+
+- **Duplication elimination verified.** `grep -c "MEMORY LEAK: allocated" src/codegen/mod.rs` → 1 (was 2). `grep -c 'self.output.push_str("int main()' src/codegen/mod.rs` → 1 (was 2). Net code reduction: 45 lines (40 insertions, 85 deletions).
+
+- **Verification ritual.** Clean baseline and final state: 120 integration (0 failed, 1 ignored), 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests, all others unchanged. Mid-session checkpoints after single-file conversion and after module-graph conversion both clean - no regressions introduced.
+
+- **Generated C preservation.** Test counts unchanged (no new tests, no removed tests). All existing integration tests pass, confirming generated C behavior unchanged despite consolidated emission path. The `generate_program_body_statements` approach proved to be a drop-in replacement for single-file path's manual statement iteration.
+
+- Commit: "Phase 11a-ε: consolidate duplicate main() emission into shared helper"
 
 ### 2026-05-13 — Phase 9f: Call-Site Argument Type Checking
 
@@ -653,7 +667,7 @@
 
 These items are intentional duplications introduced to keep phase boundaries additive. They each work correctly in isolation; together they want a consolidation pass when their interactions start mattering.
 
-**1. Duplicate `main()` generation in codegen.** The single-file path and the module-graph path both emit the `main()` shell — return-value declaration, body emission, memory-leak check, cleanup epilogue. Introduced in Phase 11a-δ-α because consolidating would have required restructuring single-file codegen. Path forward: extract a `emit_main_function(body_emitter)` helper that both paths call, parameterized on how the body's statements get emitted. Estimate: ~30 lines moved, no behavior change. Cleanest moment to do this: before Phase 11a-δ-β (where multi-module compilation will exercise the module-graph path more rigorously, and any divergence between the two `main()` paths becomes a real bug risk).
+~~**1. Duplicate `main()` generation in codegen.**~~ *(Completed in Phase 11a-ε.)* Both paths now call shared `emit_main_function` helper. Generated C output unchanged.
 
 **2. Duplicate import-type resolution.** The type checker's `collect_module_exports` computes the type of each exported declaration during pass 1 of `check_graph`. Codegen has a parallel `populate_import_types` doing the same computation. Introduced in Phase 11a-δ-α because the prompt forbade adding accessors to `TypeChecker`. Path forward: either (a) one controlled accessor on `TypeChecker` exposing `module_exports` to codegen, or (b) `ResolvedGraph` carries the export tables alongside its files (resolver builds them by walking exports during graph construction). Option (b) is architecturally cleaner — the export table is a property of the resolved graph, not the type checker's intermediate state — but requires touching the resolver. Option (a) is one accessor and is acceptable if the accessor is the only one. Decide which when consolidating. Estimate: 20-40 lines depending on choice.
 
