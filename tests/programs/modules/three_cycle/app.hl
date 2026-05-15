@@ -1,0 +1,6 @@
+import { stage_a } from "./a"
+
+high program(): i32 {
+  print(stage_a(2))
+  return 0
+}

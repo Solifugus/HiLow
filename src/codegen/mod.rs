@@ -99,6 +99,8 @@ pub struct CodeGenerator {
     generated_tuple_types: HashSet<Vec<Type>>,
     /// Phase 11a-δ-α: Current module name mapping for cross-module calls
     current_name_map: Option<HashMap<String, String>>,
+    /// Phase 11b: Forward declarations for exported functions and lets
+    forward_declarations: String,
 }
 
 impl CodeGenerator {
@@ -126,6 +128,7 @@ impl CodeGenerator {
             tuple_struct_definitions: String::new(),
             generated_tuple_types: HashSet::new(),
             current_name_map: None,
+            forward_declarations: String::new(),
         }
     }
 
@@ -219,19 +222,42 @@ impl CodeGenerator {
 
             match parsed_file {
                 TopLevel::Module(module) => {
-                    // Generate exported functions with mangled names
+                    // Generate forward declarations and exported functions with mangled names
                     for func in &module.items {
                         if func.is_export {
                             let mangled_name = self.mangle_module_function_name(abs_path, &func.name, entry_dir);
+
+                            // Add forward declaration
+                            let return_c_type = self.hilow_type_to_c(&Type::from_ast_type(&func.return_type));
+                            let mut forward_decl = format!("{} {}(", return_c_type, mangled_name);
+
+                            for (i, param) in func.params.iter().enumerate() {
+                                if i > 0 {
+                                    forward_decl.push_str(", ");
+                                }
+                                let param_c_type = self.hilow_type_to_c(&Type::from_ast_type(&param.ty));
+                                forward_decl.push_str(&format!("{} {}", param_c_type, param.name));
+                            }
+
+                            forward_decl.push_str(");\n");
+                            self.forward_declarations.push_str(&forward_decl);
+
                             self.generate_module_function(func, &mangled_name, type_checker)?;
                         }
                     }
 
-                    // Generate exported lets with mangled names
+                    // Generate forward declarations and exported lets with mangled names
                     for let_decl in &module.lets {
                         if let_decl.is_export {
-                            if let LetPattern::Identifier(var_name, _) = &let_decl.pattern {
+                            if let LetPattern::Identifier(var_name, type_annotation) = &let_decl.pattern {
                                 let mangled_name = self.mangle_module_let_name(abs_path, var_name, entry_dir);
+
+                                // Add extern declaration for the let
+                                if let Some(annotation) = type_annotation {
+                                    let let_c_type = self.hilow_type_to_c(&Type::from_ast_type(annotation));
+                                    self.forward_declarations.push_str(&format!("extern {} {};\n", let_c_type, mangled_name));
+                                }
+
                                 self.generate_module_let(let_decl, &mangled_name, type_checker)?;
                             }
                         }
@@ -250,6 +276,10 @@ impl CodeGenerator {
         self.current_name_map = None;
 
         // Build the final output
+        // Add forward declarations for exported functions and lets (Phase 11b)
+        final_output.push_str(&self.forward_declarations);
+        final_output.push_str("\n");
+
         // Add tuple struct definitions (Phase 9e)
         final_output.push_str(&self.tuple_struct_definitions);
 

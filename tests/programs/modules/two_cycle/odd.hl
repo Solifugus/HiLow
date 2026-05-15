@@ -1,0 +1,8 @@
+import { is_even } from "./even"
+
+high module {
+  export function is_odd(n: i32): bool {
+    if (n ?= 0) { return false }
+    return is_even(n - 1)
+  }
+}

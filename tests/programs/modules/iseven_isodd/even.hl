@@ -1,0 +1,8 @@
+import { check_odd } from "./odd"
+
+high module {
+  export function check_even(n: i32): i32 {
+    if (n ?= 0) { return 1 }
+    return check_odd(n - 1)
+  }
+}

@@ -161,69 +161,18 @@ where
 
     // Check for cycles
     if topo_order.len() != files.len() {
-        // There's a cycle - find it
-        let remaining: Vec<String> = files
+        // There's a cycle - append remaining nodes in alphabetical order
+        let mut remaining: Vec<String> = files
             .keys()
             .filter(|path| !topo_order.contains(path))
             .cloned()
             .collect();
 
-        // Find a cycle by doing DFS from one of the remaining nodes
-        if let Some(start) = remaining.first() {
-            let mut cycle_path = Vec::new();
-            let mut cycle_visited = std::collections::HashSet::new();
+        // Sort alphabetically for deterministic ordering
+        remaining.sort();
 
-            fn find_cycle_dfs(
-                node: &str,
-                imports: &HashMap<String, Vec<String>>,
-                path: &mut Vec<String>,
-                visited: &mut std::collections::HashSet<String>,
-            ) -> Option<Vec<String>> {
-                if path.contains(&node.to_string()) {
-                    // Found cycle - extract it
-                    let cycle_start = path.iter().position(|x| x == node).unwrap();
-                    let mut cycle = path[cycle_start..].to_vec();
-                    cycle.push(node.to_string()); // Close the cycle
-                    return Some(cycle);
-                }
-
-                if visited.contains(node) {
-                    return None;
-                }
-
-                visited.insert(node.to_string());
-                path.push(node.to_string());
-
-                if let Some(deps) = imports.get(node) {
-                    for dep in deps {
-                        if let Some(cycle) = find_cycle_dfs(dep, imports, path, visited) {
-                            return Some(cycle);
-                        }
-                    }
-                }
-
-                path.pop();
-                None
-            }
-
-            let cycle = find_cycle_dfs(start, &imports, &mut cycle_path, &mut cycle_visited)
-                .unwrap_or_else(|| vec![start.clone(), start.clone()]);
-
-            // Find the position of the import that closed the cycle
-            let cycle_closer = cycle.get(cycle.len() - 2).unwrap_or(start);
-            let cycle_target = cycle.last().unwrap();
-            let position = files[cycle_closer]
-                .imports()
-                .iter()
-                .find(|import| import.path == *cycle_target)
-                .map(|import| import.position.clone())
-                .unwrap_or(Position { line: 1, column: 1 });
-
-            return Err(ResolverError::Cycle {
-                cycle,
-                position,
-            });
-        }
+        // Append cycle members to topo_order
+        topo_order.extend(remaining);
     }
 
     Ok(ResolvedGraph {

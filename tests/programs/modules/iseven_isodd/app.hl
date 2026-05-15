@@ -1,0 +1,6 @@
+import { check_even } from "./even"
+
+high program(): i32 {
+  print(check_even(6))
+  return 0
+}

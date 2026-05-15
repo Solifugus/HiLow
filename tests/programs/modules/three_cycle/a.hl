@@ -1,0 +1,8 @@
+import { stage_b } from "./b"
+
+high module {
+  export function stage_a(n: i32): i32 {
+    if (n ?= 0) { return 1 }
+    return stage_b(n - 1)
+  }
+}

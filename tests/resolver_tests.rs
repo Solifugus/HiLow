@@ -117,7 +117,7 @@ fn test_resolve_self_import_fails() {
 }
 
 #[test]
-fn test_resolve_two_cycle_fails() {
+fn test_resolve_two_cycle() {
     let mut files = HashMap::new();
     files.insert("even".to_string(), make_module(vec![("odd", vec![])]));
     files.insert("odd".to_string(), make_module(vec![("even", vec![])]));
@@ -130,19 +130,16 @@ fn test_resolve_two_cycle_fails() {
     };
 
     let result = resolve("even", parse);
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        ResolverError::Cycle { cycle, .. } => {
-            assert!(cycle.contains(&"even".to_string()));
-            assert!(cycle.contains(&"odd".to_string()));
-            assert_eq!(cycle.first(), cycle.last()); // First and last should be the same
-        }
-        _ => panic!("Expected Cycle error"),
-    }
+    assert!(result.is_ok());
+    let graph = result.unwrap();
+    assert_eq!(graph.topo_order.len(), 2);
+    assert!(graph.topo_order.contains(&"even".to_string()));
+    assert!(graph.topo_order.contains(&"odd".to_string()));
+    assert_eq!(graph.files.len(), 2);
 }
 
 #[test]
-fn test_resolve_three_cycle_fails() {
+fn test_resolve_three_cycle() {
     let mut files = HashMap::new();
     files.insert("a".to_string(), make_module(vec![("b", vec![])]));
     files.insert("b".to_string(), make_module(vec![("c", vec![])]));
@@ -156,16 +153,13 @@ fn test_resolve_three_cycle_fails() {
     };
 
     let result = resolve("a", parse);
-    assert!(result.is_err());
-    match result.unwrap_err() {
-        ResolverError::Cycle { cycle, .. } => {
-            assert!(cycle.contains(&"a".to_string()));
-            assert!(cycle.contains(&"b".to_string()));
-            assert!(cycle.contains(&"c".to_string()));
-            assert_eq!(cycle.first(), cycle.last()); // First and last should be the same
-        }
-        _ => panic!("Expected Cycle error"),
-    }
+    assert!(result.is_ok());
+    let graph = result.unwrap();
+    assert_eq!(graph.topo_order.len(), 3);
+    assert!(graph.topo_order.contains(&"a".to_string()));
+    assert!(graph.topo_order.contains(&"b".to_string()));
+    assert!(graph.topo_order.contains(&"c".to_string()));
+    assert_eq!(graph.files.len(), 3);
 }
 
 #[test]
