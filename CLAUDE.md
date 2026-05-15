@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 11a-ζ-1 — Unify `ParsedFile` and `TopLevel`**
+**Current phase: Phase 11a-ζ-2 — Consolidate Import-Type Resolution**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

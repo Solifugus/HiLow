@@ -203,7 +203,18 @@ impl CodeGenerator {
 
             // Build per-module name map and populate variable types for imports
             let name_map = self.build_name_map_for_module(abs_path, parsed_file, &graph, entry_dir);
-            self.populate_import_types(parsed_file, &graph, entry_dir);
+
+            // For each import in this module, look up types from typecheck's module_exports
+            for import in parsed_file.imports() {
+                if let Some(export_table) = type_checker.module_exports().get(&import.path) {
+                    for imported_name in &import.names {
+                        if let Some(ty) = export_table.get(imported_name) {
+                            self.variable_types.insert(imported_name.clone(), ty.clone());
+                        }
+                    }
+                }
+            }
+
             self.current_name_map = Some(name_map);
 
             match parsed_file {
@@ -438,62 +449,6 @@ impl CodeGenerator {
         self.emit_main_function(program, type_checker)
     }
 
-    /// Populate variable types for imported symbols (Phase 11a-δ-α)
-    fn populate_import_types(
-        &mut self,
-        parsed_file: &TopLevel,
-        graph: &crate::resolver::ResolvedGraph,
-        entry_dir: &std::path::Path,
-    ) {
-        for import in parsed_file.imports() {
-            let imported_module_path = &import.path;
-            if let Some(imported_file) = graph.files.get(imported_module_path) {
-                if let TopLevel::Module(imported_module) = imported_file {
-                    for imported_name in &import.names {
-                        // Check lets
-                        for let_decl in &imported_module.lets {
-                            if let_decl.is_export {
-                                if let LetPattern::Identifier(var_name, type_annotation) = &let_decl.pattern {
-                                    if var_name == imported_name {
-                                        // Infer type of the let variable
-                                        let hilow_type = if let Some(ref annotation) = type_annotation {
-                                            Type::from_ast_type(annotation)
-                                        } else {
-                                            // Infer type from the literal if it's a simple literal
-                                            if let Some(ref initializer) = let_decl.initializer {
-                                                match initializer {
-                                                    Expression::IntLit(_, _) => crate::types::Type::I32,
-                                                    Expression::StringLit(_, _) => crate::types::Type::String,
-                                                    Expression::BoolLit(_, _) => crate::types::Type::Bool,
-                                                    _ => crate::types::Type::I32, // Default fallback
-                                                }
-                                            } else {
-                                                crate::types::Type::I32 // Default fallback
-                                            }
-                                        };
-                                        // Add to variable_types map
-                                        self.variable_types.insert(imported_name.clone(), hilow_type);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Check functions - add them as Function types
-                        for func in &imported_module.items {
-                            if func.is_export && func.name == *imported_name {
-                                let param_types: Vec<Type> = func.params.iter()
-                                    .map(|p| Type::from_ast_type(&p.ty))
-                                    .collect();
-                                let return_type = Type::from_ast_type(&func.return_type);
-                                let func_type = Type::Function(param_types, Box::new(return_type));
-                                self.variable_types.insert(imported_name.clone(), func_type);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     fn emit_includes(&mut self) {
         self.output.push_str("#include <stdint.h>\n");

@@ -156,6 +156,12 @@ impl TypeChecker {
         self.finish_check()
     }
 
+    /// Returns the per-module export tables built during pass 1 of check_graph.
+    /// Codegen consults this for cross-module type information.
+    pub fn module_exports(&self) -> &HashMap<String, ExportTable> {
+        &self.module_exports
+    }
+
     /// Collect exports from a parsed module into an export table
     fn collect_module_exports(&mut self, path: &str, parsed: &TopLevel) -> ExportTable {
         let mut export_table = HashMap::new();

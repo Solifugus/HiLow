@@ -7,7 +7,7 @@
 ## Current state
 
 **Phase:** Phase 11a-ζ — Cleanup Debt Resolution  
-**Status:** Phase 11a-ζ-1 complete, Phase 11a-ζ-2 next (debt item 2) or Phase 11b next
+**Status:** Phase 11a-ζ-2 complete; all cleanup debt resolved; Phase 11b next
 **Branch:** main
 **Last commit:** Phase 11a-δ-β: multi-module graphs (chains and diamonds) compile and run end-to-end
 
@@ -24,6 +24,22 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-14 — Phase 11a-ζ-2: Consolidate Import-Type Resolution
+
+- **Pre-flight verification ritual.** Clean baseline: 122 integration (0 failed, 1 ignored), 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests, all other unit test suites passing.
+
+- **Mid-session checkpoint.** After adding TypeChecker::module_exports() accessor and replacing populate_import_types call with inline loop using the accessor, all 122 integration tests + other test suites pass unchanged. Build shows expected warning about unused populate_import_types function. Replacement logic produces identical behavior.
+
+- **Consolidation implementation.** Added single public accessor `TypeChecker::module_exports() -> &HashMap<String, ExportTable>` in src/typecheck/mod.rs (4 lines with doc comment). Replaced `populate_import_types(...)` call in codegen's `generate_graph` with 8-line inline loop that reads from type_checker.module_exports() and populates variable_types identically. Deleted entire `populate_import_types` function from src/codegen/mod.rs (56 lines removed).
+
+- **Duplication elimination verified.** `grep -n "populate_import_types" src/codegen/mod.rs` → no output (completely removed). `grep -B 1 -A 4 "pub fn module_exports" src/typecheck/mod.rs` → shows new accessor. Net code reduction: 52 lines (6 insertions, 58 deletions). Codegen now reads from typecheck's already-computed export tables instead of recomputing the same information.
+
+- **Post-change verification ritual.** Clean final state: same test counts as baseline (122 integration, 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests). No behavior change - pure refactor. Generated C for module tests unchanged.
+
+- **Cleanup debt complete.** All three debt items from Phase 11a-α through 11a-δ-α work now resolved: item 1 (duplicate main() emission) completed in Phase 11a-ε, item 2 (duplicate import-type resolution) completed in this phase, item 3 (ParsedFile/TopLevel unification) completed in Phase 11a-ζ-1.
+
+- Commit: "Phase 11a-ζ-2: consolidate import-type resolution via TypeChecker accessor"
 
 ### 2026-05-14 — Phase 11a-ζ-1: Unify `ParsedFile` and `TopLevel`
 
@@ -703,11 +719,11 @@ These items are intentional duplications introduced to keep phase boundaries add
 
 ~~**1. Duplicate `main()` generation in codegen.**~~ *(Completed in Phase 11a-ε.)* Both paths now call shared `emit_main_function` helper. Generated C output unchanged.
 
-**2. Duplicate import-type resolution.** The type checker's `collect_module_exports` computes the type of each exported declaration during pass 1 of `check_graph`. Codegen has a parallel `populate_import_types` doing the same computation. Introduced in Phase 11a-δ-α because the prompt forbade adding accessors to `TypeChecker`. Path forward: either (a) one controlled accessor on `TypeChecker` exposing `module_exports` to codegen, or (b) `ResolvedGraph` carries the export tables alongside its files (resolver builds them by walking exports during graph construction). Option (b) is architecturally cleaner — the export table is a property of the resolved graph, not the type checker's intermediate state — but requires touching the resolver. Option (a) is one accessor and is acceptable if the accessor is the only one. Decide which when consolidating. Estimate: 20-40 lines depending on choice.
+~~**2. Duplicate import-type resolution.**~~ *(Completed in Phase 11a-ζ-2.)* Codegen now reads from TypeChecker's module_exports via single public accessor instead of recomputing. 56-line `populate_import_types` function deleted; replaced with 8-line inline loop. Generated C unchanged.
 
 ~~**3. `ParsedFile` and `TopLevel` are parallel types.**~~ *(Completed in Phase 11a-ζ-1.)* Unified into single `TopLevel` type. `ParsedFile` enum deleted from resolver; `TopLevel` gained `imports()` accessor. All reference sites updated (~35 mechanical substitutions). Pure refactor with no behavior change.
 
-**Consolidation phase target.** A single "Phase 11a-ε: codegen and resolver consolidation" phase covering all three items would run ~100-150 lines net (most code moves around, little gets added). Run it after 11a-δ-β lands. Doing all three together is cheaper than three separate phases because the items interact: choosing option (b) for item 2 affects the shape touched in item 3, and item 1's helper interacts with the codegen path consolidations that fall out of items 2 and 3.
+**Cleanup debt resolved.** All three items completed across three phases: 11a-ε (item 1), 11a-ζ-1 (item 3), and 11a-ζ-2 (item 2). Total consolidation: net -154 lines (item 1: -45 lines, item 2: -52 lines, item 3: -57 lines). All pure refactors with no behavior change.
 
 ### Code quality
 - **5 cargo warnings** (unused imports, unnecessary `mut`). Run `cargo fix --allow-dirty` at a natural break point (end of Phase 5 or 6) to clean up.
