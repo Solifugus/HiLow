@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 11a-ζ — Cleanup Debt Resolution  
-**Status:** Phase 11a-ζ-2 complete; all cleanup debt resolved; Phase 11b next
+**Phase:** Phase 11b — Cyclic Module Graphs and Cross-Module Init Rule  
+**Status:** Phase 11b complete (resolver, codegen, integration tests); cross-module init rule deferred to Phase 11b-fixup
 **Branch:** main
-**Last commit:** Phase 11a-δ-β: multi-module graphs (chains and diamonds) compile and run end-to-end
+**Last commit:** Phase 11b: cyclic module graphs (resolver, codegen forward declarations)
 
 ---
 
@@ -24,6 +24,30 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-14 — Phase 11b: Cyclic Module Graphs and Cross-Module Init Rule
+
+- **Pre-flight verification ritual.** Clean baseline: 122 integration (0 failed, 1 ignored), 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests, all other unit test suites passing.
+
+- **Mid-session checkpoint 1.** After resolver cycle support and resolver test updates, all tests pass. Resolver now appends cycle members to topo_order in alphabetical order instead of returning ResolverError::Cycle. Updated test_resolve_two_cycle and test_resolve_three_cycle to expect Ok(graph) with all cycle members present.
+
+- **Mid-session checkpoint 2.** After codegen forward declarations implementation, all tests pass. Added forward_declarations: String field to CodeGenerator, collects C forward declarations for exported functions/lets during topo iteration, inserts them after includes in final C output.
+
+- **Post-change verification ritual.** Clean final state: 125 integration (122 + 3 new), 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests. Three new cycle integration tests pass end-to-end.
+
+- **Generated C inspection for test_modules_two_cycle_integration.** Lines 4-5: `bool even__is_even(int32_t n);` and `bool odd__is_odd(int32_t n);` forward declarations. Lines 7-19: Function bodies with mutual calls (even__is_even calls odd__is_odd, odd__is_odd calls even__is_even). Lines 21+: main() calling into cycle producing expected "4 even" output.
+
+- **Resolver change.** Replaced 69-line cycle detection/error construction block (lines 172-226) with 8-line alphabetical append: collect remaining nodes, sort them, extend topo_order. `ResolverError::Cycle` no longer constructed anywhere in resolver.
+
+- **Forward-declaration emission.** Added field to CodeGenerator struct, initialize in new(). During topo iteration over exported functions, collect C signatures with hilow_type_to_c() and append to forward_declarations buffer. For exported lets, collect extern declarations with type annotations. Insert forward_declarations after includes, before tuple/environment definitions in final C output.
+
+- **Cross-module init rule.** Deferred to Phase 11b-fixup per prompt guidance - implemented core cycle functionality first, init rule is optional last piece. Session focused on resolver and codegen changes to enable cycles end-to-end.
+
+- **Integration tests.** Added three new tests: test_modules_two_cycle_integration (even/odd mutual recursion), test_modules_three_cycle_integration (a→b→c→a chain), test_modules_iseven_isodd_integration (variant of even/odd). All compile, run, and produce expected output. Files in tests/programs/modules/{two_cycle,three_cycle,iseven_isodd}/ with expected outputs in tests/expected/modules/.
+
+- **Module work milestone.** Module system now complete end-to-end including cycles. Resolver handles arbitrary dependency graphs (DAGs and cycles), type checker processes in two passes to handle forward references, codegen emits forward declarations for cross-module calls. All non-cyclic patterns (single file, linear chains, diamonds) continue to work unchanged.
+
+- Commit: "Phase 11b: cyclic module graphs (resolver, codegen forward declarations)"
 
 ### 2026-05-14 — Phase 11a-ζ-2: Consolidate Import-Type Resolution
 
@@ -712,6 +736,19 @@
 ---
 
 ## Known issues / TODOs
+
+### Duplicated leak-check epilogue in module-graph main()
+
+The generated C for module-graph compilation emits the memory-leak check
+and `return return_value` block twice at the end of `main()`. The second
+copy is unreachable (after the first return). Functionally harmless but
+indicates an emission path that wasn't consolidated when Phase 11a-ε
+unified the two `main()` emission sites. Discovered during Phase 11b
+verification on test_modules_two_cycle_integration generated C.
+
+Fix likely small: trace main() output assembly in `generate_graph` and
+find the redundant emission. Worth addressing as a small fixup phase
+alongside Phase 11b-fixup (cross-module init rule).
 
 ### Cleanup debt (consolidate before Phase 14+)
 
