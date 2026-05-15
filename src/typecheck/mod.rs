@@ -157,15 +157,15 @@ impl TypeChecker {
     }
 
     /// Collect exports from a parsed module into an export table
-    fn collect_module_exports(&mut self, path: &str, parsed: &crate::resolver::ParsedFile) -> ExportTable {
+    fn collect_module_exports(&mut self, path: &str, parsed: &TopLevel) -> ExportTable {
         let mut export_table = HashMap::new();
 
         match parsed {
-            crate::resolver::ParsedFile::Program(_) => {
+            TopLevel::Program(_) => {
                 // Programs don't have exports, but we may be checking a single program via this path
                 // No exports to collect
             }
-            crate::resolver::ParsedFile::Module(module) => {
+            TopLevel::Module(module) => {
                 // Process exported functions
                 for function in &module.items {
                     if function.is_export {
@@ -222,7 +222,7 @@ impl TypeChecker {
     }
 
     /// Check the bodies of functions and lets in a module
-    fn check_module_bodies(&mut self, path: &str, parsed: &crate::resolver::ParsedFile, all_imports: &HashMap<String, Vec<String>>) {
+    fn check_module_bodies(&mut self, path: &str, parsed: &TopLevel, all_imports: &HashMap<String, Vec<String>>) {
         // Start a fresh outermost scope for this module
         self.enter_scope();
 
@@ -230,7 +230,7 @@ impl TypeChecker {
         if let Some(imported_paths) = all_imports.get(path) {
             // For each import statement in this module, resolve the names
             match parsed {
-                crate::resolver::ParsedFile::Program(program) => {
+                TopLevel::Program(program) => {
                     for import_stmt in &program.imports {
                         if imported_paths.contains(&import_stmt.path) {
                             if let Some(export_table) = self.module_exports.get(&import_stmt.path).cloned() {
@@ -254,7 +254,7 @@ impl TypeChecker {
                         }
                     }
                 }
-                crate::resolver::ParsedFile::Module(module) => {
+                TopLevel::Module(module) => {
                     for import_stmt in &module.imports {
                         if imported_paths.contains(&import_stmt.path) {
                             if let Some(export_table) = self.module_exports.get(&import_stmt.path).cloned() {
@@ -283,7 +283,7 @@ impl TypeChecker {
 
         // Add module's own declarations to scope and check their bodies
         match parsed {
-            crate::resolver::ParsedFile::Program(program) => {
+            TopLevel::Program(program) => {
                 // Check program body using existing helper
                 if let Some(body) = &program.body {
                     // Add program's functions to scope first
@@ -314,7 +314,7 @@ impl TypeChecker {
                     }
                 }
             }
-            crate::resolver::ParsedFile::Module(module) => {
+            TopLevel::Module(module) => {
                 // Add module's functions to scope first
                 for function in &module.items {
                     let param_types: Vec<crate::types::Type> = function.params

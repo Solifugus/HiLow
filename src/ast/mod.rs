@@ -443,3 +443,12 @@ pub enum TopLevel {
     Program(Program),
     Module(Module),
 }
+
+impl TopLevel {
+    pub fn imports(&self) -> &[ImportStatement] {
+        match self {
+            TopLevel::Program(p) => &p.imports,
+            TopLevel::Module(m) => &m.imports,
+        }
+    }
+}

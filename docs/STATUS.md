@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 11a-δ — Compile-Pipeline Wiring and Module Codegen  
-**Status:** Phase 11a-ε complete, Phase 11a-δ-β next
+**Phase:** Phase 11a-ζ — Cleanup Debt Resolution  
+**Status:** Phase 11a-ζ-1 complete, Phase 11a-ζ-2 next (debt item 2) or Phase 11b next
 **Branch:** main
-**Last commit:** Phase 9f: call-site argument type checking; resolves Phase 7c-β TODO
+**Last commit:** Phase 11a-δ-β: multi-module graphs (chains and diamonds) compile and run end-to-end
 
 ---
 
@@ -24,6 +24,40 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-14 — Phase 11a-ζ-1: Unify `ParsedFile` and `TopLevel`
+
+- **Pre-flight verification ritual.** Clean baseline: 122 integration (0 failed, 1 ignored), 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests, all other unit test suites passing.
+
+- **Mid-session checkpoint.** After deleting `ParsedFile` enum from resolver and updating resolver signatures, observed 24 compile errors (expected ~25). All errors were "cannot find type `ParsedFile`" as expected - no unexpected error categories.
+
+- **Mechanical refactor.** Removed `ParsedFile` enum and its `impl` block from `src/resolver/mod.rs`. Added `imports()` accessor to `TopLevel` in `src/ast/mod.rs`. Updated ~35 reference sites across resolver, codegen, typecheck, main.rs, and two test files. Deleted vestigial `TopLevel::Program(p) => ParsedFile::Program(p)` conversion match from main.rs - parser now returns `TopLevel` directly to resolver.
+
+- **Files modified.** 9 files total: src/ast/mod.rs (+9 lines for impl), src/resolver/mod.rs (-18 lines enum deleted, -6 lines type updates), src/codegen/mod.rs (8 type substitutions), src/typecheck/mod.rs (8 type substitutions), src/main.rs (-6 lines conversion removed, +2 lines type updates), plus 2 test files (mechanical type updates).
+
+- **Post-change verification ritual.** Clean final state: same test counts as baseline (122 integration, 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests). No test changes other than type names and imports.
+
+- **Verification greps.** `grep -rn "ParsedFile" src/ tests/` → no output (completely removed). `grep -A 7 "impl TopLevel" src/ast/mod.rs` → shows new imports() accessor. `grep -n "TopLevel::Program(p) => ParsedFile" src/main.rs` → no output (conversion deleted).
+
+- **Pure refactor confirmed.** No behavior changes - same generated C, same test results, same logic flow. `ParsedFile` and `TopLevel` were genuinely identical types serving the same role in different modules.
+
+- Commit: "Phase 11a-ζ-1: unify ParsedFile and TopLevel into single TopLevel type"
+
+### 2026-05-14 — Phase 11a-δ-β: Multi-Module Graphs End-to-End
+
+- **Boundary removal.** Removed the 5-line boundary check in `main.rs:compile_graph` that limited module graphs to 2 nodes. After removal, control flows directly from resolver to type-checking via `check_graph` for any graph size.
+
+- **Chain integration test.** Added 3-node linear chain: app → middle → leaf. Each module's exported function calls the one below it. Chain produces `14` (7 * 2). Verifies codegen emits all three modules in topo order and cross-module call chain works at runtime.
+
+- **Diamond integration test.** Added 4-node diamond: app imports a and b; both a and b import util. Shared dependency `util` compiled once into output. Both `a__func_a` and `b__func_b` correctly call `util__helper`. Diamond produces `13` ((5+1) + (5+2)).
+
+- **Generated C inspection.** Diamond case shows single `util__helper` definition, two callers (`a__func_a`, `b__func_b`) each calling it, main function calling both. Shared dependencies not duplicated in output.
+
+- **Simple boundary removal sufficient.** The prediction held - no codegen bugs surfaced with N-node graphs. All existing functionality unchanged. The `generate_graph` loop was already N-shaped; the type checker's `check_graph` was already tested against diamond graphs.
+
+- **Test count progression.** Integration tests: 120 → 122. All other counts unchanged. Clean verification ritual before and after.
+
+- Commit: "Phase 11a-δ-β: multi-module graphs (chains and diamonds) compile and run end-to-end"
 
 ### 2026-05-14 — Phase 11a-ε: Consolidate Duplicate `main()` Emission
 
@@ -671,7 +705,7 @@ These items are intentional duplications introduced to keep phase boundaries add
 
 **2. Duplicate import-type resolution.** The type checker's `collect_module_exports` computes the type of each exported declaration during pass 1 of `check_graph`. Codegen has a parallel `populate_import_types` doing the same computation. Introduced in Phase 11a-δ-α because the prompt forbade adding accessors to `TypeChecker`. Path forward: either (a) one controlled accessor on `TypeChecker` exposing `module_exports` to codegen, or (b) `ResolvedGraph` carries the export tables alongside its files (resolver builds them by walking exports during graph construction). Option (b) is architecturally cleaner — the export table is a property of the resolved graph, not the type checker's intermediate state — but requires touching the resolver. Option (a) is one accessor and is acceptable if the accessor is the only one. Decide which when consolidating. Estimate: 20-40 lines depending on choice.
 
-**3. `ParsedFile` and `TopLevel` are parallel types.** Same shape, different namespaces. The parser produces `TopLevel`; the resolver uses `ParsedFile`; codegen now receives both (`TopLevel` from single-file path, `ParsedFile` from graph path). Introduced in Phase 11a-β to keep the resolver's contract independent of parser's output shape. The independence hasn't paid for itself: nothing about the resolver's logic actually depends on the type being different. Path forward: collapse to one type, owned by the AST module (`TopLevel` is the natural choice — it's there first). Resolver imports `TopLevel`; `ParsedFile` enum disappears. Estimate: ~30 lines, mostly find-and-replace. Should be done before Phase 12 (Low mode) so the Low-mode compilation path has only one notion of "a parsed top-level."
+~~**3. `ParsedFile` and `TopLevel` are parallel types.**~~ *(Completed in Phase 11a-ζ-1.)* Unified into single `TopLevel` type. `ParsedFile` enum deleted from resolver; `TopLevel` gained `imports()` accessor. All reference sites updated (~35 mechanical substitutions). Pure refactor with no behavior change.
 
 **Consolidation phase target.** A single "Phase 11a-ε: codegen and resolver consolidation" phase covering all three items would run ~100-150 lines net (most code moves around, little gets added). Run it after 11a-δ-β lands. Doing all three together is cheaper than three separate phases because the items interact: choosing option (b) for item 2 affects the shape touched in item 3, and item 1's helper interacts with the codegen path consolidations that fall out of items 2 and 3.
 

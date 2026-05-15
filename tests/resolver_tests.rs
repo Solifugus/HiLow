@@ -1,10 +1,10 @@
-use hilowc::resolver::{resolve, ParsedFile, ResolverError};
-use hilowc::ast::{Module, ImportStatement, Mode};
+use hilowc::resolver::{resolve, ResolverError};
+use hilowc::ast::{Module, ImportStatement, Mode, TopLevel};
 use hilowc::lexer::Position;
 use std::collections::HashMap;
 
 // Helper function to create a Module with given imports and empty body
-fn make_module(imports: Vec<(&str, Vec<&str>)>) -> ParsedFile {
+fn make_module(imports: Vec<(&str, Vec<&str>)>) -> TopLevel {
     let import_statements: Vec<ImportStatement> = imports
         .into_iter()
         .map(|(path, names)| ImportStatement {
@@ -14,7 +14,7 @@ fn make_module(imports: Vec<(&str, Vec<&str>)>) -> ParsedFile {
         })
         .collect();
 
-    ParsedFile::Module(Module {
+    TopLevel::Module(Module {
         mode: Mode::High,
         imports: import_statements,
         items: Vec::new(), // Empty items for tests
@@ -28,7 +28,7 @@ fn test_resolve_single_file_no_imports() {
     let mut files = HashMap::new();
     files.insert("app".to_string(), make_module(vec![]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -51,7 +51,7 @@ fn test_resolve_linear_chain() {
     files.insert("math".to_string(), make_module(vec![("util", vec![])]));
     files.insert("util".to_string(), make_module(vec![]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -73,7 +73,7 @@ fn test_resolve_diamond() {
     files.insert("b".to_string(), make_module(vec![("util", vec![])]));
     files.insert("util".to_string(), make_module(vec![]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -99,7 +99,7 @@ fn test_resolve_self_import_fails() {
     let mut files = HashMap::new();
     files.insert("self".to_string(), make_module(vec![("self", vec![])]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -122,7 +122,7 @@ fn test_resolve_two_cycle_fails() {
     files.insert("even".to_string(), make_module(vec![("odd", vec![])]));
     files.insert("odd".to_string(), make_module(vec![("even", vec![])]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -148,7 +148,7 @@ fn test_resolve_three_cycle_fails() {
     files.insert("b".to_string(), make_module(vec![("c", vec![])]));
     files.insert("c".to_string(), make_module(vec![("a", vec![])]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -173,7 +173,7 @@ fn test_resolve_missing_module_fails() {
     let mut files = HashMap::new();
     files.insert("app".to_string(), make_module(vec![("missing", vec![])]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },
@@ -199,7 +199,7 @@ fn test_resolve_deep_chain() {
     files.insert("c".to_string(), make_module(vec![("d", vec![])]));
     files.insert("d".to_string(), make_module(vec![]));
 
-    let parse = |path: &str| -> Result<ParsedFile, ResolverError> {
+    let parse = |path: &str| -> Result<TopLevel, ResolverError> {
         files.get(path).cloned().ok_or_else(|| ResolverError::ModuleNotFound {
             path: path.to_string(),
             position: Position { line: 1, column: 1 },

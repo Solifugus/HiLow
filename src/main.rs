@@ -171,8 +171,8 @@ fn rewrite_imports_to_absolute(ast: TopLevel, base_dir: &Path) -> Result<TopLeve
     }
 }
 
-fn make_parse_callback() -> impl FnMut(&str) -> Result<resolver::ParsedFile, resolver::ResolverError> {
-    let mut cache: HashMap<String, resolver::ParsedFile> = HashMap::new();
+fn make_parse_callback() -> impl FnMut(&str) -> Result<TopLevel, resolver::ResolverError> {
+    let mut cache: HashMap<String, TopLevel> = HashMap::new();
 
     move |abs_path: &str| {
         if let Some(cached) = cache.get(abs_path) {
@@ -205,10 +205,7 @@ fn make_parse_callback() -> impl FnMut(&str) -> Result<resolver::ParsedFile, res
                 position: crate::lexer::Position { line: 1, column: 1 },
             })?;
 
-        let result = match rewritten_ast {
-            TopLevel::Program(p) => resolver::ParsedFile::Program(p),
-            TopLevel::Module(m) => resolver::ParsedFile::Module(m),
-        };
+        let result = rewritten_ast;
 
         cache.insert(abs_path.to_string(), result.clone());
         Ok(result)

@@ -1,17 +1,14 @@
 use hilowc::typecheck::TypeChecker;
-use hilowc::resolver::{ParsedFile, ResolvedGraph, resolve};
+use hilowc::resolver::{ResolvedGraph, resolve};
 use hilowc::ast::TopLevel;
 use hilowc::lexer::Lexer;
 use hilowc::parser::Parser;
 use std::collections::HashMap;
 
-/// Helper to parse module source into ParsedFile
-fn parse_module_source(source: &str) -> ParsedFile {
+/// Helper to parse module source into TopLevel
+fn parse_module_source(source: &str) -> TopLevel {
     let top_level = Parser::new(source).unwrap().parse().expect("parse");
-    match top_level {
-        TopLevel::Program(p) => ParsedFile::Program(p),
-        TopLevel::Module(m) => ParsedFile::Module(m),
-    }
+    top_level
 }
 
 /// Helper to build a resolved graph from modules

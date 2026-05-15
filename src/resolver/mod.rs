@@ -1,21 +1,7 @@
-use crate::ast::{Program, Module, ImportStatement};
+use crate::ast::{Program, Module, ImportStatement, TopLevel};
 use crate::lexer::Position;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ParsedFile {
-    Program(Program),
-    Module(Module),
-}
-
-impl ParsedFile {
-    pub fn imports(&self) -> &[ImportStatement] {
-        match self {
-            ParsedFile::Program(p) => &p.imports,
-            ParsedFile::Module(m) => &m.imports,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolverError {
@@ -45,12 +31,12 @@ pub struct ResolvedGraph {
 
     /// The parsed file for each module path. Owned here so the caller can
     /// iterate and type-check / codegen later without re-parsing.
-    pub files: HashMap<String, ParsedFile>,
+    pub files: HashMap<String, TopLevel>,
 }
 
 pub fn resolve<F>(entry_path: &str, mut parse: F) -> Result<ResolvedGraph, ResolverError>
 where
-    F: FnMut(&str) -> Result<ParsedFile, ResolverError>,
+    F: FnMut(&str) -> Result<TopLevel, ResolverError>,
 {
     let mut files = HashMap::new();
     let mut imports = HashMap::new();
@@ -60,13 +46,13 @@ where
     fn dfs_load<F>(
         path: &str,
         parse: &mut F,
-        files: &mut HashMap<String, ParsedFile>,
+        files: &mut HashMap<String, TopLevel>,
         imports: &mut HashMap<String, Vec<String>>,
         visited: &mut std::collections::HashSet<String>,
         current_path_stack: &mut Vec<String>,
     ) -> Result<(), ResolverError>
     where
-        F: FnMut(&str) -> Result<ParsedFile, ResolverError>,
+        F: FnMut(&str) -> Result<TopLevel, ResolverError>,
     {
         if visited.contains(path) {
             return Ok(()); // Already processed

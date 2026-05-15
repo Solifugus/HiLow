@@ -207,7 +207,7 @@ impl CodeGenerator {
             self.current_name_map = Some(name_map);
 
             match parsed_file {
-                crate::resolver::ParsedFile::Module(module) => {
+                TopLevel::Module(module) => {
                     // Generate exported functions with mangled names
                     for func in &module.items {
                         if func.is_export {
@@ -226,7 +226,7 @@ impl CodeGenerator {
                         }
                     }
                 }
-                crate::resolver::ParsedFile::Program(program) => {
+                TopLevel::Program(program) => {
                     // This should be the entry program - process last
                     if abs_path == &entry_abs_path.to_string_lossy().to_string() {
                         // Generate the main program
@@ -258,7 +258,7 @@ impl CodeGenerator {
     fn build_name_map_for_module(
         &self,
         module_path: &str,
-        parsed_file: &crate::resolver::ParsedFile,
+        parsed_file: &TopLevel,
         graph: &crate::resolver::ResolvedGraph,
         entry_dir: &std::path::Path,
     ) -> HashMap<String, String> {
@@ -266,7 +266,7 @@ impl CodeGenerator {
 
         // Add this module's own declarations (exported and private)
         match parsed_file {
-            crate::resolver::ParsedFile::Module(module) => {
+            TopLevel::Module(module) => {
                 // Add exported functions
                 for func in &module.items {
                     if func.is_export {
@@ -285,7 +285,7 @@ impl CodeGenerator {
                     }
                 }
             }
-            crate::resolver::ParsedFile::Program(_) => {
+            TopLevel::Program(_) => {
                 // Programs don't have exportable declarations in the same way
             }
         }
@@ -294,7 +294,7 @@ impl CodeGenerator {
         for import in parsed_file.imports() {
             let imported_module_path = &import.path;
             if let Some(imported_file) = graph.files.get(imported_module_path) {
-                if let crate::resolver::ParsedFile::Module(imported_module) = imported_file {
+                if let TopLevel::Module(imported_module) = imported_file {
                     for imported_name in &import.names {
                         // Check functions
                         for func in &imported_module.items {
@@ -441,14 +441,14 @@ impl CodeGenerator {
     /// Populate variable types for imported symbols (Phase 11a-δ-α)
     fn populate_import_types(
         &mut self,
-        parsed_file: &crate::resolver::ParsedFile,
+        parsed_file: &TopLevel,
         graph: &crate::resolver::ResolvedGraph,
         entry_dir: &std::path::Path,
     ) {
         for import in parsed_file.imports() {
             let imported_module_path = &import.path;
             if let Some(imported_file) = graph.files.get(imported_module_path) {
-                if let crate::resolver::ParsedFile::Module(imported_module) = imported_file {
+                if let TopLevel::Module(imported_module) = imported_file {
                     for imported_name in &import.names {
                         // Check lets
                         for let_decl in &imported_module.lets {

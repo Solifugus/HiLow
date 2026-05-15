@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 11a-δ-β — Multi-Module Graphs End-to-End**
+**Current phase: Phase 11a-ζ-1 — Unify `ParsedFile` and `TopLevel`**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
