@@ -1,0 +1,7 @@
+import { helper } from "./util"
+
+high module {
+  export function func_b(): i32 {
+    return helper() + 2
+  }
+}

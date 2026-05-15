@@ -1,0 +1,6 @@
+import { doubled } from "./middle"
+
+high program(): i32 {
+  print(doubled())
+  return 0
+}

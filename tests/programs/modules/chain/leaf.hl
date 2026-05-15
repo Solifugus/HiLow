@@ -1,0 +1,5 @@
+high module {
+  export function base_value(): i32 {
+    return 7
+  }
+}

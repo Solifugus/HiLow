@@ -1,0 +1,7 @@
+import { base_value } from "./leaf"
+
+high module {
+  export function doubled(): i32 {
+    return base_value() * 2
+  }
+}

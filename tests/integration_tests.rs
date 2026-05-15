@@ -2369,3 +2369,43 @@ fn test_modules_export_let_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_modules_chain_integration() {
+    let executable = compile_program("tests/programs/modules/chain/app.hl")
+        .expect("Failed to compile modules/chain/app.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run modules/chain test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/modules/chain.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_modules_diamond_integration() {
+    let executable = compile_program("tests/programs/modules/diamond/app.hl")
+        .expect("Failed to compile modules/diamond/app.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run modules/diamond test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/modules/diamond.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

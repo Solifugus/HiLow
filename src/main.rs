@@ -83,10 +83,6 @@ fn compile_graph(abs_entry_path: &Path, entry_ast: TopLevel, output_path: &str) 
     let graph = resolver::resolve(&entry_abs_str, parse_callback)
         .map_err(|e| format!("Resolve error: {:?}", e))?;
 
-    // Boundary checks
-    if graph.topo_order.len() > 2 {
-        return Err(format!("multi-module graphs not yet implemented in Phase 11a-δ-α (pending Phase 11a-δ-β); graph has {} nodes", graph.topo_order.len()).into());
-    }
 
     let mut type_checker = typecheck::TypeChecker::new();
     type_checker.check_graph(&graph)
