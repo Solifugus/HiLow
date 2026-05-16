@@ -19,6 +19,7 @@ fn make_module(imports: Vec<(&str, Vec<&str>)>) -> TopLevel {
         imports: import_statements,
         items: Vec::new(), // Empty items for tests
         lets: Vec::new(), // Empty lets for tests
+        watchers: Vec::new(), // Empty watchers for tests
         position: Position { line: 1, column: 1 },
     })
 }

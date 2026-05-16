@@ -368,6 +368,12 @@ impl TypeChecker {
                             crate::ast::BlockItem::Statement(statement) => {
                                 self.check_statement(statement);
                             }
+                            crate::ast::BlockItem::Watcher(watcher) => {
+                                self.add_error(
+                                    "watchers are not yet implemented; Phase 10-α implements parsing only, type checking comes in Phase 10-β".to_string(),
+                                    watcher.position.clone()
+                                );
+                            }
                         }
                     }
                 }
@@ -480,6 +486,12 @@ impl TypeChecker {
             match item {
                 BlockItem::Statement(statement) => self.check_statement(statement),
                 BlockItem::Function(function) => self.check_function(function),
+                BlockItem::Watcher(watcher) => {
+                    self.add_error(
+                        "watchers are not yet implemented; Phase 10-α implements parsing only, type checking comes in Phase 10-β".to_string(),
+                        watcher.position.clone()
+                    );
+                }
             }
         }
 
@@ -974,6 +986,13 @@ impl TypeChecker {
                         Type::Unknown
                     }
                 }
+            },
+            Expression::WatcherExpr(watcher_expr) => {
+                self.add_error(
+                    "watchers are not yet implemented; Phase 10-α implements parsing only, type checking comes in Phase 10-β".to_string(),
+                    watcher_expr.position.clone()
+                );
+                Type::Unknown
             },
         }
     }
@@ -1615,6 +1634,10 @@ impl TypeChecker {
                                     self.write_refinements_to_block(func_body);
                                 }
                             }
+                            BlockItem::Watcher(_) => {
+                                // Watchers are not yet implemented in Phase 10-α
+                                // Skip refinement processing
+                            }
                         }
                     }
                 }
@@ -1777,6 +1800,9 @@ impl TypeChecker {
             }
             Expression::TupleAccess(tuple_expr, _, _) => {
                 self.write_refinements_to_expression(tuple_expr);
+            }
+            Expression::WatcherExpr(watcher_expr) => {
+                self.write_refinements_to_block(&mut watcher_expr.body);
             }
             // Literals don't contain variables to refine
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
@@ -2531,6 +2557,10 @@ impl TypeChecker {
             Expression::TupleAccess(tuple_expr, _, _) => {
                 self.check_for_captures_in_expression(tuple_expr, outer_scope_depth);
             }
+            Expression::WatcherExpr(_) => {
+                // Watcher expressions are not yet implemented in Phase 10-α
+                // Skip capture checking
+            }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
             Expression::MoneyLit(_, _, _) | Expression::StringLit(_, _) |
@@ -2707,6 +2737,10 @@ impl TypeChecker {
             }
             Expression::TupleAccess(tuple_expr, _, _) => {
                 self.collect_captures_in_expression(tuple_expr, outer_scope_depth, captures);
+            }
+            Expression::WatcherExpr(_) => {
+                // Watcher expressions are not yet implemented in Phase 10-α
+                // Skip capture collection
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
@@ -2885,6 +2919,7 @@ impl HasPosition for Expression {
             Expression::Unknown(unknown_construction) => unknown_construction.position.clone(),
             Expression::TupleLit(_, pos) => pos.clone(),
             Expression::TupleAccess(_, _, pos) => pos.clone(),
+            Expression::WatcherExpr(watcher_expr) => watcher_expr.position.clone(),
         }
     }
 

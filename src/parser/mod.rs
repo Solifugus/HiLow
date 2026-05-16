@@ -187,6 +187,7 @@ impl Parser {
 
         let mut items = Vec::new();
         let mut lets = Vec::new();
+        let mut watchers = Vec::new();
 
         // Parse declarations until we hit the closing brace
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
@@ -199,11 +200,38 @@ impl Parser {
             };
 
             // Determine what kind of declaration this is
-            if self.check(&TokenKind::Function) || self.check(&TokenKind::High) || self.check(&TokenKind::Low) {
-                // Function declaration (possibly with explicit mode)
+            if self.check(&TokenKind::Function) {
+                // Function declaration
                 let mut function = self.parse_function_signature(mode.clone())?;
                 function.is_export = is_export;
                 items.push(function);
+            } else if self.check(&TokenKind::Watcher) {
+                // Watcher declaration
+                let mut watcher = self.parse_watcher_signature(mode.clone())?;
+                watcher.is_export = is_export;
+                watchers.push(watcher);
+            } else if self.check(&TokenKind::High) || self.check(&TokenKind::Low) {
+                // Mode-prefixed declaration - peek ahead to see if it's function or watcher
+                match self.peek_ahead(1)?.kind {
+                    TokenKind::Function => {
+                        let mut function = self.parse_function_signature(mode.clone())?;
+                        function.is_export = is_export;
+                        items.push(function);
+                    }
+                    TokenKind::Watcher => {
+                        let mut watcher = self.parse_watcher_signature(mode.clone())?;
+                        watcher.is_export = is_export;
+                        watchers.push(watcher);
+                    }
+                    _ => {
+                        let token = self.peek()?;
+                        return Err(ParseError::UnexpectedToken {
+                            expected: "'function' or 'watcher' after mode keyword".to_string(),
+                            found: token.kind.clone(),
+                            position: token.position.clone(),
+                        });
+                    }
+                }
             } else if self.check(&TokenKind::Let) {
                 // Let declaration
                 if is_export {
@@ -240,6 +268,7 @@ impl Parser {
             mode,
             items,
             lets,
+            watchers,
             imports: vec![],  // Phase 11a-α: imports are attached from parse_top_level
             position: start_pos,
         })
@@ -410,6 +439,183 @@ impl Parser {
         let ty = self.parse_type()?;
 
         Ok(Parameter { name, ty, position })
+    }
+
+    fn peek_ahead(&self, offset: usize) -> Result<&Token, ParseError> {
+        let index = self.current + offset;
+        if index >= self.tokens.len() {
+            let last_pos = if self.tokens.is_empty() {
+                Position { line: 1, column: 1 }
+            } else {
+                self.tokens[self.tokens.len() - 1].position.clone()
+            };
+            return Err(ParseError::UnexpectedEof {
+                expected: "token".to_string(),
+                position: last_pos,
+            });
+        }
+        Ok(&self.tokens[index])
+    }
+
+    fn parse_watcher_signature(&mut self, default_mode: Mode) -> Result<Watcher, ParseError> {
+        let start_pos = self.peek()?.position.clone();
+        let mut is_export = false;
+
+        // Check for export keyword
+        if self.check(&TokenKind::Export) {
+            is_export = true;
+            self.advance()?;
+        }
+
+        // Check for explicit mode
+        let watcher_mode = if self.check(&TokenKind::High) || self.check(&TokenKind::Low) {
+            let mode_token = self.advance()?;
+            match mode_token.kind {
+                TokenKind::High => Mode::High,
+                TokenKind::Low => Mode::Low,
+                _ => unreachable!(),
+            }
+        } else {
+            // Inherit from enclosing scope
+            default_mode
+        };
+
+        // Expect 'watcher' keyword
+        self.expect_token(TokenKind::Watcher, "Expected 'watcher'")?;
+
+        // Parse watcher name
+        let name_token = self.expect_identifier("Expected watcher name")?;
+        let name = name_token.lexeme;
+
+        // Parse subscription list
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after watcher name")?;
+        let subscriptions = self.parse_subscription_list()?;
+        self.expect_token(TokenKind::RightParen, "Expected ')' after subscription list")?;
+
+        // No return type for watchers (unlike functions)
+        // Parse body
+        let body = self.parse_block()?;
+
+        Ok(Watcher {
+            name,
+            mode: watcher_mode,
+            subscriptions,
+            body,
+            is_export,
+            position: start_pos,
+        })
+    }
+
+    fn parse_subscription_list(&mut self) -> Result<Vec<Subscription>, ParseError> {
+        let mut subscriptions = Vec::new();
+
+        // Handle empty subscription list - this is an error for watchers
+        if self.check(&TokenKind::RightParen) {
+            let pos = self.peek()?.position.clone();
+            return Err(ParseError::UnsupportedFeature {
+                feature: "empty watcher subscription list".to_string(),
+                position: pos,
+                suggestion: "provide at least one subscription".to_string(),
+            });
+        }
+
+        // Parse first subscription
+        subscriptions.push(self.parse_subscription()?);
+
+        // Parse additional subscriptions
+        while self.check(&TokenKind::Comma) {
+            self.advance()?; // consume comma
+            subscriptions.push(self.parse_subscription()?);
+        }
+
+        // Check for duplicate variable/modifier combinations
+        let mut seen = std::collections::HashSet::new();
+        for subscription in &subscriptions {
+            let key = (&subscription.variable_name, &subscription.modifier);
+            if seen.contains(&key) {
+                return Err(ParseError::UnexpectedToken {
+                    expected: "unique subscription".to_string(),
+                    found: TokenKind::Identifier, // The duplicate variable name
+                    position: subscription.position.clone(),
+                });
+            }
+            seen.insert(key);
+        }
+
+        Ok(subscriptions)
+    }
+
+    fn parse_subscription(&mut self) -> Result<Subscription, ParseError> {
+        let start_pos = self.peek()?.position.clone();
+        let mut modifier = SubscriptionModifier::Changed; // default
+        let mut alias = None;
+
+        // Check for modifier: (modifier)variable or (alias=modifier)variable
+        if self.check(&TokenKind::LeftParen) {
+            self.advance()?; // consume '('
+
+            // Parse the modifier part
+            let first_ident = self.expect_identifier("Expected modifier or alias in subscription")?;
+
+            if self.check(&TokenKind::Equal) {
+                // This is alias=modifier form
+                alias = Some(first_ident.lexeme);
+                self.advance()?; // consume '='
+                let modifier_ident = self.expect_identifier("Expected modifier after '=' in subscription")?;
+                modifier = self.parse_subscription_modifier(&modifier_ident.lexeme, &modifier_ident.position)?;
+            } else {
+                // This is just modifier form
+                modifier = self.parse_subscription_modifier(&first_ident.lexeme, &first_ident.position)?;
+            }
+
+            self.expect_token(TokenKind::RightParen, "Expected ')' after subscription modifier")?;
+        }
+
+        // Parse variable name
+        let var_token = self.expect_identifier("Expected variable name in subscription")?;
+        let variable_name = var_token.lexeme;
+
+        Ok(Subscription {
+            variable_name,
+            modifier,
+            alias,
+            position: start_pos,
+        })
+    }
+
+    fn parse_subscription_modifier(&self, name: &str, position: &Position) -> Result<SubscriptionModifier, ParseError> {
+        match name {
+            "changed" => Ok(SubscriptionModifier::Changed),
+            "assigned" => Ok(SubscriptionModifier::Assigned),
+            "deep" => Ok(SubscriptionModifier::Deep),
+            "added" => Ok(SubscriptionModifier::Added),
+            "removed" => Ok(SubscriptionModifier::Removed),
+            "moved" => Ok(SubscriptionModifier::Moved),
+            _ => Err(ParseError::UnsupportedFeature {
+                feature: format!("subscription modifier '{}'", name),
+                position: position.clone(),
+                suggestion: "valid modifiers are: changed, assigned, deep, added, removed, moved".to_string(),
+            })
+        }
+    }
+
+    fn parse_watcher_expression(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        // Expect 'watcher' keyword (already consumed by caller)
+
+        // Parse subscription list
+        self.expect_token(TokenKind::LeftParen, "Expected '(' after 'watcher' in expression")?;
+        let subscriptions = self.parse_subscription_list()?;
+        self.expect_token(TokenKind::RightParen, "Expected ')' after subscription list in watcher expression")?;
+
+        // Parse body
+        let body = self.parse_block()?;
+
+        Ok(Expression::WatcherExpr(WatcherExpr {
+            subscriptions,
+            body,
+            position: start_pos,
+            captures: RefCell::new(Vec::new()),
+        }))
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
@@ -661,6 +867,29 @@ impl Parser {
                     // Parse nested function definition (inherits mode from program/module)
                     let function = self.parse_function_signature(mode.clone())?;
                     items.push(BlockItem::Function(function));
+                }
+                TokenKind::Watcher => {
+                    // Parse nested watcher definition (inherits mode from program/module)
+                    let watcher = self.parse_watcher_signature(mode.clone())?;
+                    items.push(BlockItem::Watcher(watcher));
+                }
+                TokenKind::High | TokenKind::Low => {
+                    // Peek ahead to see if it's followed by function or watcher
+                    match self.peek_ahead(1)?.kind {
+                        TokenKind::Function => {
+                            let function = self.parse_function_signature(mode.clone())?;
+                            items.push(BlockItem::Function(function));
+                        }
+                        TokenKind::Watcher => {
+                            let watcher = self.parse_watcher_signature(mode.clone())?;
+                            items.push(BlockItem::Watcher(watcher));
+                        }
+                        _ => {
+                            // Not a function or watcher, treat as statement
+                            let statement = self.parse_statement()?;
+                            items.push(BlockItem::Statement(statement));
+                        }
+                    }
                 }
                 _ => {
                     // Parse statement
@@ -1304,6 +1533,10 @@ impl Parser {
             TokenKind::Function => {
                 // Function expression
                 self.parse_function_expression(token.position)
+            }
+            TokenKind::Watcher => {
+                // Watcher expression
+                self.parse_watcher_expression(token.position)
             }
             TokenKind::Match => {
                 // Match expression

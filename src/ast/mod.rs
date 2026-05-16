@@ -231,6 +231,42 @@ pub struct FunctionExpr {
     pub captures: RefCell<Vec<(String, Type, Position)>>,  // name, ast::Type, first-ref position
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SubscriptionModifier {
+    Changed,
+    Assigned,
+    Deep,
+    Added,
+    Removed,
+    Moved,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Subscription {
+    pub variable_name: String,
+    pub modifier: SubscriptionModifier,  // defaults to Changed when no parens present
+    pub alias: Option<String>,           // the `alias=` part if present
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Watcher {
+    pub name: String,
+    pub mode: Mode,
+    pub subscriptions: Vec<Subscription>,
+    pub body: Block,
+    pub is_export: bool,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WatcherExpr {
+    pub subscriptions: Vec<Subscription>,
+    pub body: Block,
+    pub position: Position,
+    pub captures: RefCell<Vec<(String, Type, Position)>>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchPattern {
     Literal(Literal),
@@ -299,12 +335,14 @@ pub enum Expression {
     Unknown(UnknownConstruction),
     TupleLit(Vec<Expression>, Position), // tuple literal: (expr1, expr2, ...)
     TupleAccess(Box<Expression>, usize, Position), // tuple.0, tuple.1, etc.
+    WatcherExpr(WatcherExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockItem {
     Statement(Statement),
     Function(Function),
+    Watcher(Watcher),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -434,6 +472,7 @@ pub struct Module {
     pub mode: Mode,
     pub items: Vec<Function>,
     pub lets: Vec<LetDecl>,             // Phase 11a-α: module-level let declarations
+    pub watchers: Vec<Watcher>,
     pub imports: Vec<ImportStatement>,  // Phase 11a-α: top-of-file imports
     pub position: Position,
 }

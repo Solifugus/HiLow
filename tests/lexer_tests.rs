@@ -415,10 +415,10 @@ fn test_keyword_unknown() {
 }
 
 #[test]
-fn test_keyword_watch() {
-    let input = "watch";
+fn test_keyword_watcher() {
+    let input = "watcher";
     let tokens = Lexer::new(input).tokens().unwrap();
-    assert_eq!(tokens[0].kind, TokenKind::Watch);
+    assert_eq!(tokens[0].kind, TokenKind::Watcher);
 }
 
 #[test]

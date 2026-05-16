@@ -225,6 +225,14 @@ impl CodeGenerator {
 
             match parsed_file {
                 TopLevel::Module(module) => {
+                    // Check if module contains watchers (not yet implemented in Phase 10-α)
+                    if !module.watchers.is_empty() {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: "watcher declarations".to_string(),
+                            phase: "Phase 10-γ".to_string(),
+                        });
+                    }
+
                     // Generate forward declarations and exported functions with mangled names
                     for func in &module.items {
                         if func.is_export {
@@ -1498,6 +1506,12 @@ impl CodeGenerator {
                 // Generate struct field access
                 self.generate_expression(tuple_expr, type_checker)?;
                 self.output.push_str(&format!("._{}", index));
+            }
+            Expression::WatcherExpr(_) => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "watcher expressions".to_string(),
+                    phase: "Phase 10-γ".to_string(),
+                });
             }
         }
         Ok(())

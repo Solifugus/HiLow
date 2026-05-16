@@ -1165,3 +1165,534 @@ import { add } from "./math""#;
     let error_msg = format!("{}", error);
     assert!(error_msg.contains("'import' statements must appear before the program or module block"));
 }
+
+// Phase 10-α: Watcher parsing tests
+
+// Declaration form, valid cases
+
+#[test]
+fn test_parse_watcher_simple_declaration() {
+    let input = "high program(): i32 { watcher onCounter(counter) { print(counter) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onCounter");
+                        assert_eq!(watcher.mode, Mode::High);
+                        assert!(!watcher.is_export);
+                        assert_eq!(watcher.subscriptions.len(), 1);
+
+                        let sub = &watcher.subscriptions[0];
+                        assert_eq!(sub.variable_name, "counter");
+                        assert_eq!(sub.modifier, SubscriptionModifier::Changed);
+                        assert_eq!(sub.alias, None);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_with_modifier() {
+    let input = "high program(): i32 { watcher onItems((deep)items) { print(items) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onItems");
+                        assert_eq!(watcher.subscriptions.len(), 1);
+
+                        let sub = &watcher.subscriptions[0];
+                        assert_eq!(sub.variable_name, "items");
+                        assert_eq!(sub.modifier, SubscriptionModifier::Deep);
+                        assert_eq!(sub.alias, None);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_with_aliased_modifier() {
+    let input = "high program(): i32 { watcher onItemsAdded((newAdds=added)items) { print(items) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onItemsAdded");
+                        assert_eq!(watcher.subscriptions.len(), 1);
+
+                        let sub = &watcher.subscriptions[0];
+                        assert_eq!(sub.variable_name, "items");
+                        assert_eq!(sub.modifier, SubscriptionModifier::Added);
+                        assert_eq!(sub.alias, Some("newAdds".to_string()));
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_multiple_subscriptions() {
+    let input = "high program(): i32 { watcher onChange(a, b, c) { print(a, b, c) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onChange");
+                        assert_eq!(watcher.subscriptions.len(), 3);
+
+                        assert_eq!(watcher.subscriptions[0].variable_name, "a");
+                        assert_eq!(watcher.subscriptions[0].modifier, SubscriptionModifier::Changed);
+
+                        assert_eq!(watcher.subscriptions[1].variable_name, "b");
+                        assert_eq!(watcher.subscriptions[1].modifier, SubscriptionModifier::Changed);
+
+                        assert_eq!(watcher.subscriptions[2].variable_name, "c");
+                        assert_eq!(watcher.subscriptions[2].modifier, SubscriptionModifier::Changed);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_mixed_modifiers() {
+    let input = "high program(): i32 { watcher onMix(a, (assigned)b, (newAdds=added)c) { print(a, b, c) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onMix");
+                        assert_eq!(watcher.subscriptions.len(), 3);
+
+                        let sub_a = &watcher.subscriptions[0];
+                        assert_eq!(sub_a.variable_name, "a");
+                        assert_eq!(sub_a.modifier, SubscriptionModifier::Changed);
+                        assert_eq!(sub_a.alias, None);
+
+                        let sub_b = &watcher.subscriptions[1];
+                        assert_eq!(sub_b.variable_name, "b");
+                        assert_eq!(sub_b.modifier, SubscriptionModifier::Assigned);
+                        assert_eq!(sub_b.alias, None);
+
+                        let sub_c = &watcher.subscriptions[2];
+                        assert_eq!(sub_c.variable_name, "c");
+                        assert_eq!(sub_c.modifier, SubscriptionModifier::Added);
+                        assert_eq!(sub_c.alias, Some("newAdds".to_string()));
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_same_variable_different_modifiers() {
+    let input = "high program(): i32 { watcher onAll((added)items, (removed)items) { print(items) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onAll");
+                        assert_eq!(watcher.subscriptions.len(), 2);
+
+                        let sub1 = &watcher.subscriptions[0];
+                        assert_eq!(sub1.variable_name, "items");
+                        assert_eq!(sub1.modifier, SubscriptionModifier::Added);
+
+                        let sub2 = &watcher.subscriptions[1];
+                        assert_eq!(sub2.variable_name, "items");
+                        assert_eq!(sub2.modifier, SubscriptionModifier::Removed);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_high_watcher() {
+    let input = "high program(): i32 { high watcher onRequest(req) { print(req) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onRequest");
+                        assert_eq!(watcher.mode, Mode::High);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_low_watcher() {
+    let input = "low program(): i32 { low watcher onFlag(flag) { print(flag) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onFlag");
+                        assert_eq!(watcher.mode, Mode::Low);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_export_watcher() {
+    let input = "high module { export watcher onPublic(x) { print(x) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.watchers.len(), 1);
+            let watcher = &module.watchers[0];
+            assert_eq!(watcher.name, "onPublic");
+            assert!(watcher.is_export);
+        }
+        _ => panic!("Expected Module"),
+    }
+}
+
+// Expression form, valid cases
+
+#[test]
+fn test_parse_watcher_expression_basic() {
+    let input = "high program(): i32 { let w = watcher(x) { print(x) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::Let(let_decl)) => {
+                        if let Some(ref init) = let_decl.initializer {
+                            match init {
+                                Expression::WatcherExpr(watcher_expr) => {
+                                    assert_eq!(watcher_expr.subscriptions.len(), 1);
+                                    let sub = &watcher_expr.subscriptions[0];
+                                    assert_eq!(sub.variable_name, "x");
+                                    assert_eq!(sub.modifier, SubscriptionModifier::Changed);
+                                }
+                                _ => panic!("Expected WatcherExpr"),
+                            }
+                        } else {
+                            panic!("Expected initializer");
+                        }
+                    }
+                    _ => panic!("Expected Let statement"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_expression_with_modifier() {
+    let input = "high program(): i32 { let w = watcher((deep)items) { print(items) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::Let(let_decl)) => {
+                        if let Some(ref init) = let_decl.initializer {
+                            match init {
+                                Expression::WatcherExpr(watcher_expr) => {
+                                    assert_eq!(watcher_expr.subscriptions.len(), 1);
+                                    let sub = &watcher_expr.subscriptions[0];
+                                    assert_eq!(sub.variable_name, "items");
+                                    assert_eq!(sub.modifier, SubscriptionModifier::Deep);
+                                }
+                                _ => panic!("Expected WatcherExpr"),
+                            }
+                        } else {
+                            panic!("Expected initializer");
+                        }
+                    }
+                    _ => panic!("Expected Let statement"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_expression_in_object_literal() {
+    let input = r#"high program(): i32 { let obj = { onChange: watcher(x) { print(x) } } }"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::Let(let_decl)) => {
+                        if let Some(ref init) = let_decl.initializer {
+                            match init {
+                                Expression::ObjectLiteral(obj_lit) => {
+                                    assert_eq!(obj_lit.properties.len(), 1);
+                                    let (prop_name, prop_value) = &obj_lit.properties[0];
+                                    assert_eq!(prop_name, "onChange");
+                                    match prop_value {
+                                        Expression::WatcherExpr(watcher_expr) => {
+                                            assert_eq!(watcher_expr.subscriptions.len(), 1);
+                                            let sub = &watcher_expr.subscriptions[0];
+                                            assert_eq!(sub.variable_name, "x");
+                                        }
+                                        _ => panic!("Expected WatcherExpr"),
+                                    }
+                                }
+                                _ => panic!("Expected ObjectLiteral"),
+                            }
+                        } else {
+                            panic!("Expected initializer");
+                        }
+                    }
+                    _ => panic!("Expected Let statement"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+// Error cases
+
+#[test]
+fn test_parse_watcher_empty_subscription_list_error() {
+    let input = "high program(): i32 { watcher noop() { } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let error_msg = format!("{}", error);
+    assert!(error_msg.contains("empty watcher subscription list"));
+}
+
+#[test]
+fn test_parse_watcher_same_modifier_twice_error() {
+    let input = "high program(): i32 { watcher dup((added)x, (added)x) { print(x) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let error_msg = format!("{}", error);
+    // Should fail due to duplicate subscription
+    assert!(error_msg.contains("Unexpected token"));
+}
+
+#[test]
+fn test_parse_watcher_unknown_modifier_error() {
+    let input = "high program(): i32 { watcher bad((foo)x) { print(x) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let error_msg = format!("{}", error);
+    assert!(error_msg.contains("subscription modifier 'foo'"));
+    assert!(error_msg.contains("changed, assigned, deep, added, removed, moved"));
+}
+
+#[test]
+fn test_parse_watcher_no_return_type_error() {
+    // Watchers should not have return types
+    let input = "high program(): i32 { watcher hasReturnType(x): i32 { return 5 } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    let error_msg = format!("{}", error);
+    // Should fail because we expect '{' after ')' but find ':'
+    assert!(error_msg.contains("Expected '{'") || error_msg.contains("Expected \"{\""));
+}
+
+// Note: test_parse_watcher_inside_function_body_unsupported is not implemented
+// because the current parser architecture doesn't support nested watchers in function bodies
+// This is tracked as deferred work in Phase 10-α
+
+// Lexer/keyword tests
+
+#[test]
+fn test_lexer_watcher_keyword() {
+    use hilowc::lexer::{Lexer, TokenKind};
+
+    let input = "watcher";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Watcher);
+}
+
+#[test]
+fn test_lexer_watch_no_longer_keyword() {
+    use hilowc::lexer::{Lexer, TokenKind};
+
+    let input = "watch";
+    let tokens = Lexer::new(input).tokens().unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Identifier);
+}
+
+// Module body tests
+
+#[test]
+fn test_parse_module_with_watcher() {
+    let input = "high module { watcher onSomething(x) { print(x) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.watchers.len(), 1);
+            let watcher = &module.watchers[0];
+            assert_eq!(watcher.name, "onSomething");
+            assert_eq!(module.items.len(), 0); // No functions
+            assert_eq!(module.lets.len(), 0); // No lets
+        }
+        _ => panic!("Expected Module"),
+    }
+}
+
+#[test]
+fn test_parse_module_function_and_watcher_mix() {
+    let input = "high module { function foo(): i32 { return 1 } watcher onChange(x) { print(x) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Module(module) => {
+            assert_eq!(module.items.len(), 1); // One function
+            assert_eq!(module.watchers.len(), 1); // One watcher
+            assert_eq!(module.lets.len(), 0); // No lets
+
+            let function = &module.items[0];
+            assert_eq!(function.name, "foo");
+
+            let watcher = &module.watchers[0];
+            assert_eq!(watcher.name, "onChange");
+        }
+        _ => panic!("Expected Module"),
+    }
+}

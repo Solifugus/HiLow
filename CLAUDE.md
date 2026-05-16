@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 11b-fixup — Duplicated Epilogue Fix + Cross-Module Init Rule**
+**Current phase: Phase 10-α — Parser Support for Watcher Syntax**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
