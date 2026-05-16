@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 10-γ — Codegen for Watcher Firing on Numeric/Bool Types  
-**Status:** Phase 10-γ complete; watcher codegen for (changed)/(assigned) modifiers on numeric/bool types; watcher methods (.pause(), .resume(), .end(), .isActive()) deferred to follow-on phase
+**Phase:** Phase 10-γ-fixup — Watcher Methods  
+**Status:** Phase 10-γ-fixup complete; Phase 10-δ next (escape analysis and factory pattern)
 **Branch:** main
-**Last commit:** Phase 10-γ: codegen for watcher firing on (changed)/(assigned) modifiers over numeric/bool types
+**Last commit:** Phase 10-γ-fixup: watcher methods (.pause, .resume, .end, .isActive) with per-watcher static state
 
 ---
 
@@ -24,6 +24,64 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-16 — Phase 10-γ-fixup: Watcher Methods
+
+- **Pre-change verification ritual.**
+  ```
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 128 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.35s
+  test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Post-change verification ritual.**
+  ```
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 131 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.34s
+  test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Integration test count**: 131 (128 + 3 new watcher method tests).
+
+- **Watcher method type checking**: Added `check_watcher_method_call` to type checker, validates four methods with zero arguments, returns Type::Nothing for pause/resume/end and Type::Bool for isActive. Added special case for `time` identifier in Expression::Ident to fix time builtin handling.
+
+- **CodeGenerator additions**: Added `watcher_name_to_id: HashMap<String, usize>` field for method dispatch. Modified `generate_watcher` to emit static state variables (`hilow_watcher_<id>_active = true`, `hilow_watcher_<id>_ended = false`) and four helper functions (pause, resume, end, isActive) alongside watcher body.
+
+- **Watcher method codegen**: Added dispatch in `generate_call` for MemberAccess callees on watcher names, compiles to static helper function calls. Added type inference for watcher method calls in `infer_expression_type_for_codegen` to return correct types for print dispatch.
+
+- **Notification site updates**: Modified all three notification sites in `generate_assign_statement` to gate watcher calls on `hilow_watcher_<id>_active` flag. Added `extract_watcher_id` helper to parse ID from function names.
+
+- **Manual verification tests**: Unknown method error: `"watcher has no method 'unknownMethod'; valid methods are 'pause', 'resume', 'end', 'isActive'"`. Method with args error: `"watcher method 'pause' takes no arguments, got 1"`.
+
+- **Three new integration tests**: `test_watcher_pause_resume` (pause suspends firing, resume re-enables), `test_watcher_end_is_permanent` (end permanently disables, resume has no effect), `test_watcher_isactive_query` (queries state: true, false, true, false).
+
+- **Design decisions confirmed**: Special-case dispatch for watcher methods rather than general method-call infrastructure. Per-watcher static state rather than heap allocation. `.end()` is permanent - `.resume()` cannot revive an ended watcher.
 
 ### 2026-05-16 — Phase 10-γ: Codegen for Watcher Firing on Numeric/Bool Types
 
