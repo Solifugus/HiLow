@@ -757,6 +757,34 @@
 
 ## Known issues / TODOs
 
+### Watchers (and nested functions) inside ordinary blocks
+
+The current `Block` struct in `src/ast/mod.rs` has `statements: Vec<Statement>` — it accepts statements but not nested function or watcher declarations. The existing architecture already restricts nested functions to program/module body level via `ProgramBody.items: Vec<BlockItem>`. Phase 10-α follows the same restriction for watchers: declarations are accepted at program/module body level but not inside ordinary blocks.
+
+The spec example in `hilow-design.md` shows a watcher inside a function body:
+
+```hilow
+function processSession(session) {
+  watcher onUpdate(session.state) {
+    log(session.state)
+  }
+  // ... session work ...
+}
+```
+
+This case currently won't parse, both for the function/watcher dispatch reason and because `Block.statements` is the wrong type to hold it. Generalizing `Block` to accept nested declarations is a separate phase — call it "Phase 10-η: nested declarations in blocks" or similar. It would also unblock nested function declarations inside function bodies, which the existing architecture also doesn't support.
+
+This is a structural change that ripples through the type checker and codegen (anywhere that walks block contents would need updating to handle the broader item type). Worth doing carefully when its turn comes.
+
+### Semantic support for collection-mutation modifiers
+
+Phase 10-α parses all six subscription modifiers — `(changed)`, `(assigned)`, `(deep)`, `(added)`, `(removed)`, `(moved)` — but only as syntax. The semantics they imply are tiered:
+
+- `(changed)` and `(assigned)` work with the existing assignment infrastructure. The runtime just needs to know what each watcher subscribes to and fire on the appropriate event. Likely covered in Phase 10-γ (codegen for non-escaping watchers).
+- `(deep)`, `(added)`, `(removed)`, `(moved)` require mutation tracking: the runtime must know which methods on collections constitute mutations, and notify watchers whose subscriptions cover those mutations. This is a substantial new piece of runtime infrastructure. Likely its own phase — Phase 10-ε in the rough sub-phase breakdown — and probably the trickiest single piece of the watcher implementation.
+
+Until then, programs using collection-mutation modifiers parse but error at type check or codegen with a clear "not yet implemented" message.
+
 ### Cleanup debt (consolidate before Phase 14+)
 
 These items are intentional duplications introduced to keep phase boundaries additive. They each work correctly in isolation; together they want a consolidation pass when their interactions start mattering.
