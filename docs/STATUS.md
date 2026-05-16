@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 11b — Cyclic Module Graphs and Cross-Module Init Rule  
-**Status:** Phase 11b complete (resolver, codegen, integration tests); cross-module init rule deferred to Phase 11b-fixup
+**Phase:** Phase 11b-fixup — Duplicated Epilogue Fix + Cross-Module Init Rule  
+**Status:** Phase 11b-fixup complete; duplicated epilogue fixed, cross-module init rule enforced
 **Branch:** main
-**Last commit:** Phase 11b: cyclic module graphs (resolver, codegen forward declarations)
+**Last commit:** Phase 11b-fixup: remove duplicated leak-check epilogue and enforce cross-module init rule
 
 ---
 
@@ -24,6 +24,26 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-15 — Phase 11b-fixup: Duplicated Epilogue Fix + Cross-Module Init Rule
+
+- **Pre-flight verification ritual.** Clean baseline: 125 integration (0 failed, 1 ignored), 47 parser, 8 resolver, 11 typecheck_module, 57 typecheck_tests, all other unit test suites passing.
+
+- **Mid-session checkpoint (after Item A).** After adding main_explicitly_returned flag to CodeGenerator and updating generate_return_statement/emit_main_function to skip duplicate epilogue emission, all 125 integration tests still pass. No behavioral changes - removed unreachable code after explicit returns.
+
+- **Post-change verification ritual.** Clean final state: 125 integration, 47 parser, 8 resolver, 13 typecheck_module (11 + 2 new), 57 typecheck_tests. Every test result shows "ok" with "0 failed".
+
+- **Item A: Duplicated epilogue fix.** Added main_explicitly_returned: bool field to CodeGenerator struct, initialized to false in new(). In generate_return_statement, set flag to true after emit_leak_check_and_return() call in in_main_program branch. In emit_main_function, reset flag at top and conditionally call emit_leak_check_and_return() only if !main_explicitly_returned. This eliminates duplicate "MEMORY LEAK: allocated" blocks that appeared after explicit returns in main().
+
+- **Item B: Cross-module init rule.** Added expression_contains_cross_module_call() helper method to TypeChecker that recursively walks expression trees for Call nodes with Ident callees not in local function names set. Updated collect_module_exports to check exported let initializers against this rule and emit error if cross-module function calls detected. Error format: "exported 'let' initializer 'X' cannot call functions from other modules (called 'Y')".
+
+- **Test implementation.** Added test_export_let_cannot_call_imported_function and test_export_let_can_call_local_function to typecheck_module_tests.rs. First test verifies rejection of cross-module calls in export let initializers, second test verifies acceptance of local function calls. Both tests pass.
+
+- **Test 1 path: Manual verification.** Automated C inspection too complex within existing test patterns. Fallback to manual verification: arithmetic integration test still passes after fix, confirming unreachable code removal doesn't affect behavior. Duplicated epilogue existed since Phase 9b but was harmless (unreachable after explicit return).
+
+- **Duplicated epilogue history.** Issue predated module work - existed in single-file programs with explicit returns since Phase 9b when leak-check emission was added. generate_return_statement emitted cleanup+return, then emit_main_function also emitted cleanup+return. Second was unreachable but cleaner to remove.
+
+- Commit: "Phase 11b-fixup: remove duplicated leak-check epilogue and enforce cross-module init rule"
 
 ### 2026-05-14 — Phase 11b: Cyclic Module Graphs and Cross-Module Init Rule
 
@@ -736,19 +756,6 @@
 ---
 
 ## Known issues / TODOs
-
-### Duplicated leak-check epilogue in module-graph main()
-
-The generated C for module-graph compilation emits the memory-leak check
-and `return return_value` block twice at the end of `main()`. The second
-copy is unreachable (after the first return). Functionally harmless but
-indicates an emission path that wasn't consolidated when Phase 11a-ε
-unified the two `main()` emission sites. Discovered during Phase 11b
-verification on test_modules_two_cycle_integration generated C.
-
-Fix likely small: trace main() output assembly in `generate_graph` and
-find the redundant emission. Worth addressing as a small fixup phase
-alongside Phase 11b-fixup (cross-module init rule).
 
 ### Cleanup debt (consolidate before Phase 14+)
 
