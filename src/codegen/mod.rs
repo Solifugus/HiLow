@@ -1359,7 +1359,7 @@ impl CodeGenerator {
                     if self.watcher_subscribers.contains_key(var_name) {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: "compound assignment of watched variable".to_string(),
-                            phase: "not yet implemented in Phase 10-γ".to_string(),
+                            phase: "Phase 10-γ".to_string(),
                         });
                     }
                 }
