@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 11b-fixup — Duplicated Epilogue Fix + Cross-Module Init Rule  
-**Status:** Phase 11b-fixup complete; duplicated epilogue fixed, cross-module init rule enforced
+**Phase:** Phase 10-β — Type Checking for Watchers  
+**Status:** Phase 10-β complete; watcher type checking implemented including modifier-variable compatibility, alias types committed for mutation modifiers; codegen guard rails preserved (one was missing at program-body level, added during a session-side fixup)
 **Branch:** main
-**Last commit:** Phase 11b-fixup: remove duplicated leak-check epilogue and enforce cross-module init rule
+**Last commit:** Phase 10-β: type checking for watcher declarations, expressions, and subscription modifiers
 
 ---
 
@@ -24,6 +24,56 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-16 — Phase 10-β: Type Checking for Watchers
+
+- **Pre-flight verification ritual.** Clean baseline: 125 integration, 67 parser, 8 resolver, 13 typecheck_module, 57 typecheck_tests, all other unit test suites passing.
+
+- **Mid-session checkpoints.** After adding Type::Watcher and check_watcher methods (before replacing guard rails), all 125 integration tests passed. After replacing typecheck guard rails (before adding new tests), all existing tests passed.
+
+- **Post-change verification ritual.** Clean final state: 125 integration, 67 parser, 8 resolver, 28 typecheck_module (13 + 15 new watcher tests), 57 typecheck_tests, all other unit test suites unchanged.
+
+- **Type::Watcher addition.** Added `Watcher` variant to `Type` enum in `src/types/mod.rs`. Unit-like type — all watcher values share this type; subscription information is not encoded at the type level. Added `Type::Watcher => "void*"` placeholder in `hilow_type_to_c` for codegen pass-through.
+
+- **check_watcher and check_watcher_expression.** Replace the Phase 10-α typecheck guard rails at three sites (two `BlockItem::Watcher` arms in module-body and program-body walks; one `Expression::WatcherExpr` arm). Parallel to `check_function` and `check_function_expression`: enter scope, register subscription bindings as body-scope locals, check body, enforce no-return-with-value rule, exit function scope (clearing persistent refinements).
+
+- **check_subscription_and_bind helper.** For each subscription: (1) look up outer variable type by name, (2) reject callable types (functions, watchers), (3) validate modifier-type compatibility, (4) register variable name as body-scope local with outer type, (5) if alias present, register alias as body-scope local with alias type.
+
+- **Modifier-type compatibility rules.** `(changed)` and `(assigned)` accepted on any type. `(deep)` rejected for primitives — meaningless since primitives can't be mutated in place. `(added)` and `(removed)` require collection type; alias type is `[T]` where T is element type. `(moved)` requires array type; alias type is `[(usize, usize)]` representing (from_index, to_index) pairs.
+
+- **No-return-with-value enforcement.** Watcher bodies may contain bare `return;` for early exit but `return value;` is a compile error.
+
+- **Codegen guard rail gap discovered and fixed in-session.** Phase 10-α had guard rails for module-level watchers (via `Module.watchers` non-empty check) and `Expression::WatcherExpr`. It did *not* have a guard rail for `BlockItem::Watcher` at program-body level — the codegen's `if let BlockItem::Function = ...` patterns silently dropped watchers. The Phase 10-β prompt did not call this out as a separate site to guard, and Claude Code's initial implementation did not add one. The gap was caught during manual verification (a watcher-bearing test program compiled and ran with exit code 0 instead of failing at codegen with the expected error). Fix: added `else if let BlockItem::Watcher(watcher) = item` branch in `generate_program_body_functions`, returning `CodegenError::UnsupportedFeature { feature: "watcher declarations", phase: "Phase 10-γ" }`.
+
+- **Manual verification.** A watcher-bearing program now fails at codegen with the message `Code generation error: Unsupported feature 'watcher declarations' - will be implemented in Phase 10-γ` (exit code 1). A program without watchers compiles cleanly (exit code 0).
+
+- **Methodology lesson — fabricated debrief output.** The original Phase 10-β debrief produced by Claude Code included a "Manual valid-case test output" section claiming a test file `./test_valid_watcher.hl` compiled and ran with exit code 42. The file did not exist on disk. The output was fabricated; no such verification was performed. The fabrication was caught by inspecting the working tree and re-running the claimed test ourselves, which revealed both the missing test file and the missing codegen guard rail. This is the second occurrence of a fabricated/paraphrased debrief output (Phase 11b had paraphrased generated C with a typo). Worth treating literal-output debrief requirements as non-negotiable in future prompts and routinely spot-reproducing manual steps before accepting a phase as complete.
+
+- Commit: "Phase 10-β: type checking for watcher declarations, expressions, and subscription modifiers"
+
+### 2026-05-16 — Phase 10-α: Parser Support for Watcher Syntax
+
+- **Pre-flight verification ritual.** Clean baseline: 125 integration, 47 parser, 8 resolver, 13 typecheck_module, 57 typecheck_tests, all other unit test suites passing.
+
+- **Mid-session checkpoints.** After AST additions and lexer rename (before parser logic), build clean with expected warnings about unused new types, all existing tests passed. After parser logic (before new tests), build clean, all existing tests passed.
+
+- **Post-change verification ritual.** Clean final state: 125 integration, 67 parser (47 + 20 new), 8 resolver, 13 typecheck_module, 57 typecheck_tests. All other test suites unchanged.
+
+- **AST additions.** Added `SubscriptionModifier` enum (Changed, Assigned, Deep, Added, Removed, Moved with Eq+Hash derives for duplicate detection); `Subscription` struct (variable_name, modifier, alias, position); `Watcher` struct (name, mode, subscriptions, body, is_export, position — no return type field); `WatcherExpr` struct (subscriptions, body, position, captures); `BlockItem::Watcher(Watcher)` variant; `Module.watchers: Vec<Watcher>` field; `Expression::WatcherExpr(WatcherExpr)` variant. All additive.
+
+- **Lexer rename.** Replaced `TokenKind::Watch` with `TokenKind::Watcher`. Keyword string changed from `"watch"` to `"watcher"`. Updated lexer tests.
+
+- **Parser additions.** `parse_watcher_signature` (parallel to `parse_function_signature`); `parse_subscription_list`; `parse_subscription` (handles bare-identifier, `(modifier)x`, and `(alias=modifier)x` forms); `parse_subscription_modifier` (string-to-enum mapping with valid-modifier error message); `parse_watcher_expression` (parallel to `parse_function_expression`). Added `peek_ahead(offset)` helper to support two-token lookahead between `High|Low` and `Function|Watcher`.
+
+- **Dispatch updates.** `parse_program_body` and `parse_module` dispatch on `TokenKind::Watcher` (and `High|Low` followed by `Watcher`) to parse watcher declarations. `parse_primary_expression` dispatches on `TokenKind::Watcher` to parse watcher expressions. Module-body watchers go into `Module.watchers`.
+
+- **Type checker and codegen guard rails.** Three guard rail sites added in type checker (two BlockItem::Watcher arms, one Expression::WatcherExpr arm) and module-level + expression sites in codegen. All emit a clear "watchers are not yet implemented in Phase 10-α" or "will be implemented in Phase 10-γ" message. Phase 10-α was the first phase to deliberately ship code paths that error rather than process new constructs; this proved valuable in catching the missing program-body codegen guard during Phase 10-β.
+
+- **20 new parser tests.** Coverage: simple declarations, expressions, mode prefixes (high/low watcher), export modifier, modifier syntax, alias syntax, multiple subscriptions, same-variable-different-modifiers, empty subscription list error, same-modifier-twice error, unknown modifier error, return-type-on-watcher error, watcher-inside-function-body-unsupported error, lexer keyword tests, module-body integration.
+
+- **Bug found and fixed in session.** Initial module-body dispatch parsed watchers but didn't add them to the final `Module` struct — `Module.watchers` was always empty even when watcher declarations existed. Fix: assign to `module.watchers` in the dispatch branch.
+
+- Commit: "Phase 10-α: parser support for watcher declarations, expressions, and subscription modifiers"
 
 ### 2026-05-15 — Phase 11b-fixup: Duplicated Epilogue Fix + Cross-Module Init Rule
 
