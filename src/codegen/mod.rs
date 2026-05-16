@@ -101,6 +101,8 @@ pub struct CodeGenerator {
     current_name_map: Option<HashMap<String, String>>,
     /// Phase 11b: Forward declarations for exported functions and lets
     forward_declarations: String,
+    /// Phase 11b-fixup: Track whether main() has explicitly returned (to avoid duplicated epilogue)
+    main_explicitly_returned: bool,
 }
 
 impl CodeGenerator {
@@ -129,6 +131,7 @@ impl CodeGenerator {
             generated_tuple_types: HashSet::new(),
             current_name_map: None,
             forward_declarations: String::new(),
+            main_explicitly_returned: false,
         }
     }
 
@@ -944,6 +947,9 @@ impl CodeGenerator {
 
             // Phase 9b fix: Emit memory leak check and actual return
             self.emit_leak_check_and_return();
+
+            // Phase 11b-fixup: Track that main has explicitly returned
+            self.main_explicitly_returned = true;
         } else {
             // In regular function: emit cleanup and return immediately
             // Phase 8a: Emit cleanup for all scopes before returning
@@ -4406,6 +4412,9 @@ impl CodeGenerator {
 
     /// Phase 11a-ε: Consolidated main() function emission helper
     fn emit_main_function(&mut self, program: &Program, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 11b-fixup: Reset flag for each invocation
+        self.main_explicitly_returned = false;
+
         // Emit main function header
         self.output.push_str("int main() {\n");
         self.output.push_str("  int return_value = 0;\n");
@@ -4434,7 +4443,9 @@ impl CodeGenerator {
         }
 
         // Phase 8a: Emit memory leak check and return
-        self.emit_leak_check_and_return();
+        if !self.main_explicitly_returned {
+            self.emit_leak_check_and_return();
+        }
         self.output.push_str("}\n");
 
         Ok(())

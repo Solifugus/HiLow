@@ -247,3 +247,36 @@ fn test_check_export_function_with_explicit_types() {
     let result = type_checker.check_graph(&graph);
     assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
 }
+
+#[test]
+fn test_export_let_cannot_call_imported_function() {
+    let mut type_checker = TypeChecker::new();
+
+    // Two modules: helper exports a function; main_mod imports it and declares export let X: i32 = helper()
+    let graph = build_graph(vec![
+        ("./helper", "high module { export function helper(): i32 { return 42 } }"),
+        ("./main_mod", "import { helper } from \"./helper\"\nhigh module { export let X: i32 = helper() }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected Err(errors), got Ok(())");
+
+    if let Err(errors) = result {
+        let error_found = errors.iter().any(|e|
+            e.to_string().contains("cannot call functions from other modules"));
+        assert!(error_found, "Expected error about cross-module call, got: {:?}", errors);
+    }
+}
+
+#[test]
+fn test_export_let_can_call_local_function() {
+    let mut type_checker = TypeChecker::new();
+
+    // One module: declares a local function, then export let X: i32 = local_helper()
+    let graph = build_graph(vec![
+        ("./test", "high module { function local_helper(): i32 { return 42 } export let X: i32 = local_helper() }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}

@@ -2,7 +2,7 @@ use crate::ast::{self, *};
 use crate::types::{Type, TypeError};
 use crate::lexer::Position;
 use crate::qualifiers::{QualifierRegistry, QualifierContext, CodegenStatus};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Symbol table entry for a variable
 #[derive(Debug, Clone)]
@@ -204,6 +204,21 @@ impl TypeChecker {
                         if let LetPattern::Identifier(name, type_annotation) = &let_decl.pattern {
                             if let Some(type_annotation) = type_annotation {
                                 let let_type = crate::types::Type::from_ast_type(type_annotation);
+
+                                // Phase 11b-fixup: reject cross-module function calls in export let initializers
+                                if let Some(ref initializer) = let_decl.initializer {
+                                    let local_function_names: std::collections::HashSet<String> = module.items
+                                        .iter()
+                                        .map(|f| f.name.clone())
+                                        .collect();
+                                    if let Some(callee_name) = self.expression_contains_cross_module_call(initializer, &local_function_names) {
+                                        self.errors.push(crate::types::TypeError::new(
+                                            format!("exported 'let' initializer '{}' cannot call functions from other modules (called '{}')", name, callee_name),
+                                            let_decl.position.clone(),
+                                        ));
+                                    }
+                                }
+
                                 export_table.insert(name.clone(), let_type);
                             } else {
                                 // Missing type annotation on exported let
@@ -225,6 +240,43 @@ impl TypeChecker {
         }
 
         export_table
+    }
+
+    /// Phase 11b-fixup: Check if an expression contains cross-module function calls
+    fn expression_contains_cross_module_call(&self, expr: &Expression, local_function_names: &std::collections::HashSet<String>) -> Option<String> {
+        match expr {
+            Expression::Call(call) => {
+                // Check the callee
+                if let Expression::Ident { name, .. } = call.callee.as_ref() {
+                    if !local_function_names.contains(name) {
+                        return Some(name.clone());
+                    }
+                }
+                // Recurse into the callee (for nested calls like (foo())(x))
+                if let Some(name) = self.expression_contains_cross_module_call(&call.callee, local_function_names) {
+                    return Some(name);
+                }
+                // Recurse into args
+                for arg in &call.args {
+                    if let Some(name) = self.expression_contains_cross_module_call(arg, local_function_names) {
+                        return Some(name);
+                    }
+                }
+                None
+            }
+            Expression::BinaryOp(bop) => {
+                if let Some(name) = self.expression_contains_cross_module_call(&bop.lhs, local_function_names) {
+                    return Some(name);
+                }
+                self.expression_contains_cross_module_call(&bop.rhs, local_function_names)
+            }
+            Expression::UnaryOp(uop) => {
+                self.expression_contains_cross_module_call(&uop.operand, local_function_names)
+            }
+            // Other expression types don't contain calls in ways relevant to this rule.
+            // Add cases here if testing reveals gaps.
+            _ => None,
+        }
     }
 
     /// Check the bodies of functions and lets in a module
