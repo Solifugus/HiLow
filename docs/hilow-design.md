@@ -8,7 +8,7 @@ HiLow is a compiled programming language with two modes: **High** for applicatio
 - **JS-comfort, systems-power**: Application code feels like JavaScript; systems code has C-level control
 - **No type coercion**: Strong typing without implicit conversions in either mode
 - **No runtime, no GC**: Both modes compile to native code with predictable execution
-- **Explicit reactive primitive**: `watch()` for event-driven and concurrent code in both modes
+- **Explicit reactive primitive**: `watcher` for event-driven and concurrent code in both modes
 - **Pragmatic correctness**: Optional formal verification through constraints and contracts
 - **First-class application types**: `time` and `money` are built in, not library afterthoughts
 
@@ -142,7 +142,7 @@ The compiler verifies the `@low-callable` annotation: if the function body uses 
 - All operators including `?=`, `!=`, `is`, `(qualifier)=`
 - All control flow constructs
 - F-strings and quote recursion
-- `watch()` reactive primitive
+- `watcher` reactive primitive
 - Pattern matching and destructuring
 - Module imports/exports
 - Constraints and function contracts (`requires`/`ensures`)
@@ -204,7 +204,7 @@ high      if        import    in        invariant is
 let       loop      low       manual    match     module
 not       nothing   or        program   requires  return
 shared    stack     stealth   switch    this      true
-unknown   watch     when      while
+unknown   watcher   when      while
 ```
 
 ### Reserved for Future Use
@@ -1348,79 +1348,290 @@ function actuallyBad(): *u8 {
 }
 ```
 
-## Watch System
+## Watcher System
 
-`watch()` is HiLow's primitive for reactive programming. It expresses "when these values change, run this code." It's available in both modes and underlies HiLow's approach to async, concurrency, and event handling.
+A watcher is a reactive construct that runs in response to changes in subscribed variables. Watchers are how HiLow expresses **situation-aware programming**: code that responds to whatever combination of conditions emerges, regardless of how those conditions came to be. They handle constraints, self-healing, event-driven programming, async result aggregation, and multi-source coordination — all through one mechanism: "when these values change, run this code, and let the body decide what to do."
 
-### Basic Watch
+Watchers are a fundamental construct alongside functions. Both share body-level semantics — parameter binding, mode rules, scope, closures — but differ in their invocation model. A function is invoked by an explicit call expression. A watcher is invoked by the runtime when any subscribed variable changes.
+
+### Watcher Declaration
+
+Watchers parallel functions in syntax. The declaration form binds a name in the enclosing scope:
 
 ```hilow
 let balance = 1000
 
-let watcher = watch(balance) {
+watcher onBalance(balance) {
   print(f"Balance changed to: {balance}")
 }
 
-balance = 2000                      // Triggers watch
-
-// Lifecycle
-watcher.pause()
-balance = 3000                      // No trigger
-watcher.resume()
-balance = 4000                      // Triggers
-watcher.end()
-balance = 5000                      // Never triggers again
+balance = 2000                      // Watcher fires
 ```
 
-### Multiple Variables
+Like functions, watchers can be declared in either mode:
+
+```hilow
+high watcher onRequest(req) {
+  // High mode body — flexible objects, refcounting, etc.
+}
+
+low watcher onHardwareFlag(flag) {
+  // Low mode body — fixed memory, no refcounting
+}
+```
+
+Mode is inherited from the enclosing context (program, module, or function) unless explicitly overridden. The same mode rules that govern functions govern watchers.
+
+A watcher does **not** fire at declaration time. Declaration is setup, not execution. The body runs only on subsequent value changes to subscribed variables.
+
+### Subscription List and Snapshot Semantics
+
+The watcher's parameter list is a **subscription list** — each entry names an outer-scope variable to observe. When any subscribed variable's value changes, the runtime reads the current values of all subscribed variables and passes them into the body as parameters:
 
 ```hilow
 let x = 0
 let y = 0
 
-let w = watch(x, y) {
-  print(f"x={x}, y={y}")
+watcher onPosition(x, y) {
+  // Inside the body, x and y are local parameters
+  // holding snapshot values at the moment the watcher fired.
+  print(f"Position: ({x}, {y})")
 }
 
-x = 10                              // Triggers
-y = 20                              // Triggers
+x = 10                              // Fires with x=10, y=0
+y = 20                              // Fires with x=10, y=20
 ```
 
-### No Self-Triggering
-
-A watch does not re-trigger from modifications made within its own body:
+Inside the body, the subscribed names are ordinary local parameters bound to snapshot values. They have no connection back to the outer variables — writing to them modifies the local parameter only:
 
 ```hilow
 let counter = 0
 
-let w = watch(counter) {
-  counter = counter + 1             // Does NOT cause recursion
+watcher onCounter(counter) {
+  counter = counter + 1             // Modifies the local parameter only.
+  print(counter)                    // Prints the modified local value.
+}                                   // Outer counter is untouched.
+
+counter = 10                        // Fires with counter=10; prints 11.
+                                    // Outer counter is still 10.
+counter = 11                        // Fires with counter=11; prints 12.
+```
+
+Because the body cannot write to the outer variable through the parameter name, the self-triggering problem dissolves: a watcher fundamentally cannot trigger itself by writing through its parameters. (It could still trigger itself by assigning to the outer variable through a different path — for example, if a captured reference is used — but the common case is handled by the language semantics directly.)
+
+### Value-Change Triggering
+
+A watcher fires only when a subscribed variable's value actually changes. Assignment alone is not enough:
+
+```hilow
+let temperature = 20
+
+watcher onTemperature(temperature) {
+  print(f"Temperature: {temperature}")
 }
 
-counter = 10                        // Triggers once, counter becomes 11
+temperature = 20                    // No fire — value unchanged
+temperature = 21                    // Fires
+temperature = 21                    // No fire — value unchanged
+temperature = 20                    // Fires
 ```
+
+**Equality semantics.** For primitive types (integers, booleans, floats, strings, etc.), value equality determines whether a change occurred. For non-primitive types (objects, arrays, tuples), reference equality is used by default: reassigning the variable to a structurally-equal-but-distinct value fires the watcher; mutating the value in place (e.g., `list.push(x)`) does not.
+
+This default keeps the firing rule cheap. To watch for mutations or for specific kinds of changes (additions, removals, etc.), use a subscription modifier — see below.
+
+For watchers with multiple subscriptions, each individual variable's change is evaluated independently. The watcher fires once per detected change to any subscribed variable.
+
+### Subscription Modifiers
+
+Each entry in a subscription list can carry a **modifier** that controls what kind of change triggers the watcher. The default modifier is `changed`, matching the value-change rule above. Other modifiers extend or refine the triggering behavior:
+
+| Modifier | Fires when |
+|---|---|
+| `(changed)` | Default. Value differs from previous (primitives: value equality; non-primitives: reference equality). |
+| `(assigned)` | Every assignment, regardless of whether the value differs. |
+| `(deep)` | Any mutation to the value, including in-place changes to nested structure. |
+| `(added)` | One or more items added to a collection. |
+| `(removed)` | One or more items removed from a collection. |
+| `(moved)` | Items reordered within a collection without being added or removed. |
+
+The modifier appears as a prefix in parentheses before the variable name:
+
+```hilow
+let temperature = 20
+
+watcher onAnyAssignment((assigned)temperature) {
+  // Fires even on `temperature = temperature` self-assignment.
+}
+
+let items = []
+
+watcher onItemsMutated((deep)items) {
+  // Fires when items.push(x), items[0] = y, etc.
+  print(f"Items now: {items}")
+}
+```
+
+**Default parameter binding.** A modifier without an alias binds the parameter name to the **current full value** of the outer variable. The modifier determines *when* the watcher fires; the parameter always carries the variable's current state. This means even `(added)items` gives you the full current list, not just the added items.
+
+**Aliasing for delta information.** To receive delta-specific information (the items added, the items removed, etc.), provide an alias inside the parentheses with `alias=modifier`:
+
+```hilow
+let items = []
+
+watcher onItemChange((newAdds=added)items) {
+  // `items` is the full current list.
+  // `newAdds` is the list of items that were just added.
+  print(f"Added {newAdds.length} items; total is now {items.length}")
+}
+```
+
+**Multiple modifiers on the same variable.** A single variable can appear multiple times in the subscription list with different modifiers — each gives the watcher a separate way to be triggered, with its own optional alias:
+
+```hilow
+watcher onCollectionEvent(
+  (newAdds=added)items,
+  (gone=removed)items,
+  (shuffled=moved)items
+) {
+  // Each subscription fires the watcher independently.
+  // newAdds, gone, shuffled are delta-bound by their aliases.
+  // items is the full current state (post-mutation).
+}
+```
+
+**Rules.**
+
+- The same variable may appear multiple times with **different** modifiers; the same modifier on the same variable twice in one watcher is a parse error.
+- An empty subscription list is a parse error — a watcher with no subscriptions has no triggering condition and can never fire.
+- Aliases must be unique within a watcher's subscription list.
+
+### Watcher Expressions
+
+Like functions, watchers can also appear as expressions, producing a value that can be bound to a variable or stored in a structure:
+
+```hilow
+let w = watcher(balance) {
+  print(f"Balance: {balance}")
+}
+
+let monitors = {
+  onBalance: watcher(balance) {
+    print(f"Balance: {balance}")
+  },
+  onTransactions: watcher((added)transactions) {
+    print(f"Transactions: {transactions.length}")
+  }
+}
+```
+
+The expression form is useful when the watcher needs to be stored, passed, or referenced by an explicit handle. The declaration form is preferred when a watcher simply needs to exist for the duration of its enclosing scope.
+
+### Lifecycle, Scope, and Escape
+
+A watcher's value is first-class — it can be stored, passed as a parameter, or returned from a function — but its **subscriptions** are part of its identity. The subscription list is fixed at declaration; it determines which variables the watcher observes for the rest of its life.
+
+**Within a scope.** A watcher declared in a scope lives for the duration of that scope. When the scope exits, the watcher ends automatically:
+
+```hilow
+function processSession(session) {
+  watcher onUpdate(session.state) {
+    log(session.state)
+  }
+  
+  // ... session work ...
+}                                   // Watcher ends here when scope exits
+```
+
+This matches HiLow's broader scope-based ownership model.
+
+**Escape and the reachability rule.** When a watcher value escapes its declaring scope (returned from a function, stored in an outer-scope variable, captured by another escaping closure), every variable in its subscription list must remain reachable from the new scope. A subscription to a function-local variable in an escaping watcher is a compile-time error:
+
+```hilow
+function bad() {
+  let local = 0
+  watcher w((changed)local) {
+    print(local)
+  }
+  return w                          // ✗ Error: w subscribes to `local`,
+                                    //   which is local to bad() and would
+                                    //   be unreachable from the caller.
+}
+```
+
+The factory pattern works because parameters captured by the watcher are references to the caller's variables, which remain reachable when the watcher returns:
+
+```hilow
+function makeMonitor(target) {
+  watcher w((changed)target) {
+    print(target)
+  }
+  return w                          // ✓ Legal: `target` is the caller's
+                                    //   variable, reachable post-return.
+}
+
+let myVar = 0
+let m = makeMonitor(myVar)
+myVar = 5                           // Fires through m
+```
+
+If a watcher subscribes to multiple variables, **every** subscription must be valid for the watcher to escape. A single function-local subscription poisons the escape.
+
+The error message names the offending variable and the function from which the watcher would escape, and suggests remedies (promote the variable to a parameter, mark it `shared`, or keep the watcher non-escaping).
+
+**Low mode.** Low mode forbids watcher escape entirely, matching the broader Low-mode closure restriction.
+
+### Operations on Watcher Values
+
+A watcher value (from a declaration or expression) supports four operations:
+
+```hilow
+watcher onCounter(counter) {
+  print(counter)
+}
+
+onCounter.pause()                   // Suspend firing
+counter = 5                         // No fire
+onCounter.resume()                  // Resume firing
+counter = 6                         // Fires
+onCounter.end()                     // Permanently end (also happens at scope exit)
+let active = onCounter.isActive()   // Query state
+```
+
+`.end()` is rarely needed because scope exit handles it automatically. It exists for cases where a watcher should stop before its scope ends — for example, a watcher that ends itself once a condition is met:
+
+```hilow
+watcher untilDone(counter) {
+  if (counter >= 100) {
+    print("Done!")
+    untilDone.end()
+  }
+}
+```
+
+After `.end()`, the watcher value becomes inert: subsequent assignments to subscribed variables produce no fires. The value itself remains valid until it is dropped through normal scope or refcounting rules.
 
 ### Stealth Blocks
 
-Sometimes you need to mutate watched state without firing watchers — during initialization, during recovery from an error, or when performing internal bookkeeping that shouldn't be visible to observers. The `stealth { ... }` block provides this:
+Sometimes you need to mutate watched state without firing watchers — during initialization, recovery, or internal bookkeeping that shouldn't be visible to observers. The `stealth { ... }` block provides this:
 
 ```hilow
 let balance = 0
-let w = watch(balance) {
+watcher onBalance(balance) {
   print(f"Balance changed: {balance}")
 }
 
-balance = 100                       // Watcher fires: "Balance changed: 100"
+balance = 100                       // Fires: "Balance changed: 100"
 
 stealth {
-  balance = 0                       // No watcher fires
-  balance = 500                     // No watcher fires
-}                                   // Final state: balance is 500, no watchers fired
+  balance = 0                       // No fire
+  balance = 500                     // No fire
+}                                   // Final state: balance is 500, no fires occurred
 
-balance = 600                       // Watcher fires: "Balance changed: 600"
+balance = 600                       // Fires: "Balance changed: 600"
 ```
 
-`stealth` blocks are *dynamic* — they suppress watcher notifications for any writes that occur during the block's execution, including writes made inside functions called from the block. This ensures complete suppression for the duration of the operation:
+`stealth` blocks are *dynamic* — they suppress watcher notifications for any writes that occur during the block's execution, including writes made inside functions called from the block:
 
 ```hilow
 function reset() {
@@ -1433,30 +1644,77 @@ stealth {
 }
 ```
 
-The default behavior is the opposite — watchers fire for all writes — because watchers exist for self-healing, monitoring, and reactive updates that should run by default. `stealth` is the explicit opt-out, used when you know a particular operation should not be observed.
+The default behavior is the opposite — watchers fire for all value changes — because watchers exist for constraints, self-healing, monitoring, and reactive updates that should run by default. `stealth` is the explicit opt-out for operations that should not be observed.
 
 `stealth` blocks do not change the values' final state, only the notifications. After a `stealth` block exits, watched variables reflect their actual current values; subsequent writes outside the block trigger watchers normally.
 
 `stealth` is available in both High and Low modes.
 
-### Async Operations
+### Situation-Aware Programming
+
+Watchers shine when a program must respond to combinations of conditions that emerge from independent sources. Rather than encoding an execution order ("first A, then B, then C"), the programmer encodes situational responses ("when A is true, do X; when B is true, do Y; when A and B are both ready, do Z"). The watchers don't coordinate with each other — each just observes its variables and reacts. System-level behavior emerges from the watchers' collective responses to whatever state arises.
+
+Errors are just another situation, observable through the same mechanism. The asymmetry between "success path" and "error path" that infects promise-based code disappears.
 
 ```hilow
-let response = nothing
+let api_data = nothing
+let db_data = nothing
+let sensor_data = nothing
 
-let w = watch(response) {
-  if (response is nothing) return
-  print(f"Got response: {response}")
+// Fires when all three sources have produced valid data.
+watcher onComplete(api_data, db_data, sensor_data) {
+  if (api_data is nothing) return
+  if (db_data is nothing) return
+  if (sensor_data is nothing) return
+  if (api_data is unknown) return
+  if (db_data is unknown) return
+  if (sensor_data is unknown) return
+  reconcile(api_data, db_data, sensor_data)
 }
 
-async {
-  response = http.get("https://api.example.com/data")
+// Handles API failures independently.
+watcher onApiFailure(api_data) {
+  if (api_data is unknown) {
+    log(f"API failed: {api_data.reason}")
+    api_data = fallback_value
+  }
+}
+
+async { api_data = fetch_from_api() }
+async { db_data = fetch_from_db() }
+async { sensor_data = read_sensor() }
+```
+
+The three `async` blocks run concurrently and complete in any order. The watchers observe whatever happens. `onComplete` waits — passively — for all three to be valid. `onApiFailure` independently handles the failure case for one source. Neither watcher knows about the other; both react to situations as they arise.
+
+Other common watcher uses follow the same pattern:
+
+```hilow
+// Self-healing: correct state when it drifts out of bounds.
+watcher onConnections(connectionCount) {
+  if (connectionCount > maxAllowed) {
+    closeOldestConnections(connectionCount - maxAllowed)
+  }
+}
+
+// Constraint enforcement: detect and report violations.
+watcher tempInRange(temperature) {
+  if (temperature < -50.0 or temperature > 150.0) {
+    alarm(f"Temperature out of range: {temperature}")
+  }
+}
+
+// Event-driven: process work as it arrives.
+watcher onRequest((added=added)server.requests) {
+  for (let req in added) {
+    handleRequest(req)
+  }
 }
 ```
 
-The `async { }` block runs concurrently. When `response` is assigned, the watcher fires.
+Each watcher looks at the situation when it fires and decides what to do — including doing nothing. The body's logic is the heart of each watcher; the subscription list is just how the body gets invoked.
 
-### Cross-Process Watches
+### Cross-Process Watchers
 
 Variables marked `shared` can be watched across processes:
 
@@ -1471,49 +1729,59 @@ async {
 }
 
 // Process 2
-let w = watch(counter) {
+watcher onCounter(counter) {
   print(f"Counter: {counter}")
   if (counter >= 100) {
     print("Done!")
-    w.end()
+    onCounter.end()
   }
 }
 ```
 
-### Conditions Inside Watches
+The runtime handles the inter-process notification — the syntax is identical to single-process watchers.
+
+**Consistency model.** Across processes, the runtime guarantees that at least one watcher fire occurs per *logical* change to a `shared` variable, but may **coalesce** rapid changes. If process 1 writes `counter` from 5 to 6 to 7 to 8 in quick succession, process 2's watcher may fire once with `counter=8` rather than three times with successive values. The body should not assume it sees every intermediate value when watching shared state; it should reason about the current value at the moment of fire.
+
+### Conditions Inside Watchers
+
+A watcher fires whenever any subscribed value changes (per its modifiers). The body can guard its logic with ordinary conditionals:
 
 ```hilow
 let enabled = true
 let value = 0
 
-let w = watch(value, enabled) {
+watcher onValue(value, enabled) {
   if (not enabled) return
   print(f"Value: {value}")
 }
 
 enabled = false
-value = 100                         // Watch fires but returns early
-
+value = 100                         // Fires but returns early
 enabled = true
-value = 200                         // Watch fires and prints
+value = 200                         // Fires and prints
 ```
 
-### Watch Verification
+### Relationship to Functions
 
-The proof system detects circular watch dependencies at compile time:
+At the body level, watchers and functions are nearly identical:
 
-```hilow
-let a = 0
-let b = 0
+- Same statement and expression grammar
+- Same mode rules and mode inheritance
+- Same scoping and capture semantics
+- Same closure rules per mode (high: free capture with refcounting; low: only non-escaping captures)
+- Same parameter-binding mechanics at invocation
 
-watch w1(a) {
-  b = a + 1
-}
+They differ in their invocation model and what each represents:
 
-watch w2(b) {
-  a = b + 1                         // ✗ Proof error: circular dependency
-}
-```
+| | Function | Watcher |
+|---|---|---|
+| Invocation | Explicit call expression | Runtime, on subscribed-variable change |
+| Parameters | Argument expressions at call site | Snapshot of subscribed variables (and deltas if aliased) |
+| Return | Returns a value to caller | Returns nothing |
+| Lifecycle | Tied to call/return | Tied to declaring scope (plus escape rules) |
+| Handle | None — call by name | `.pause()`, `.resume()`, `.end()`, `.isActive()` |
+
+A watcher body cannot declare a return type; the return type is implicitly nothing. Attempting to return a value is a compile error.
 
 ## Error Handling
 
@@ -2396,14 +2664,12 @@ high program(): i32 {
   
   let connections: [object]
   
-  watch w(server.connections) {
-    if (server.connections.length > 0) {
-      let conn = server.connections.pop()
+  watcher w((added=added)server.connections) {
+    for (let conn in added) {
       connections.push(conn)
       
-      watch cw(conn.requests) {
-        if (conn.requests.length > 0) {
-          let req = conn.requests.pop()
+      watcher cw((added=added)conn.requests) {
+        for (let req in added) {
           let resp = handleRequest(req)
           conn.send(resp)
         }
@@ -2412,7 +2678,7 @@ high program(): i32 {
   }
   
   loop {
-    // Event loop - watches handle the work
+    // Event loop - watchers handle the work
   }
   
   return 0
@@ -2473,9 +2739,8 @@ import { fastEncode, fastDecode } from "./codec"
 high program(): i32 {
   let server = http.listen("0.0.0.0:8080")
   
-  watch w(server.requests) {
-    if (server.requests.length > 0) {
-      let req = server.requests.pop()
+  watcher w((added=added)server.requests) {
+    for (let req in added) {
       let body = req.body
       
       // Drop into low for the hot path
@@ -2538,8 +2803,8 @@ high program(): i32 {
     }
   }
   
-  // Watch for completion
-  let w = watch(counter) {
+  // Watcher for completion
+  let w = watcher(counter) {
     print(f"Counter: {counter}")
     
     if (counter >= 1000) {
@@ -2638,11 +2903,11 @@ Other languages conflate "no value" (uninitialized, missing) with "operation fai
 
 `nothing` represents true absence — the variable was never set, the property doesn't exist, the memory was deallocated. `unknown` represents failure with context — the operation tried, didn't succeed, and carries the reason and possible solutions. Treating these as the same value (as JS's `null`/`undefined` does, or as Rust's `None` does for everything) loses information and creates ambiguous error handling.
 
-### Why `watch()` Instead of async/await or Promises
+### Why `watcher` Instead of async/await or Promises
 
 Async/await and Promises are abstractions that require runtime support and complicate the type system (every async function returns a `Promise<T>` that must be awaited). They also separate "things that happen over time" into a special category, when reactive programming applies more broadly than just async I/O.
 
-`watch()` is a single primitive: "when these values change, run this code." It handles async (watch a result variable), events (watch an event queue), reactive UI (watch state), and concurrency (watch shared variables across processes) with one mechanism. It compiles to ordinary callbacks at runtime — no async runtime required.
+`watcher` is a single primitive: "when these subscribed values change, run this code." It handles async (watch a result variable), events (watch an event queue with `(added)`), reactive UI (watch state), and concurrency (watch shared variables across processes) with one mechanism. It compiles to ordinary callbacks at runtime — no async runtime required.
 
 ### Why First-Class Time and Money
 
@@ -2678,7 +2943,7 @@ JavaScript's automatic semicolon insertion has corner cases that surprise progra
 **Distinctive Features:**
 - Quote recursion for strings (no escaping quotes)
 - F-strings without backticks (Python-style)
-- `watch()` for reactive programming, `stealth { }` for suppressed mutations
+- `watcher` for reactive programming, `stealth { }` for suppressed mutations
 - Equality operator `?=`, inequality `!=` (no bare `==`)
 - Negation comparators `!<` and `!>` for invariant-style readability
 - Type test operator `is`
