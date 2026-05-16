@@ -1,0 +1,2 @@
+Counter changed to 5
+Counter changed to 10

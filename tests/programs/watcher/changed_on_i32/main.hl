@@ -1,0 +1,14 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+
+    watcher onCounter((changed)counter) {
+        print(f"Counter changed to {counter}")
+    }
+
+    counter = 0  // Same value, should NOT fire (no change)
+    counter = 5  // Different value, should fire
+    counter = 5  // Same value again, should NOT fire
+    counter = 10 // Different value, should fire
+
+    return 0
+}

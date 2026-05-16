@@ -1,0 +1,14 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+
+    watcher onCounterAssigned((assigned)counter) {
+        print(f"Counter assigned to {counter}")
+    }
+
+    counter = 0  // Should fire (assigned modifier fires on every assignment)
+    counter = 5  // Should fire
+    counter = 5  // Should fire (even same value)
+    counter = 10 // Should fire
+
+    return 0
+}

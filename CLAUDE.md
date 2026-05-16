@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-β — Type Checking for Watchers**
+**Current phase: Phase 10-γ — Codegen for Watcher Firing on Numeric/Bool Types**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

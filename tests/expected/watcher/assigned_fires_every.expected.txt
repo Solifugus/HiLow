@@ -1,0 +1,4 @@
+Counter assigned to 0
+Counter assigned to 5
+Counter assigned to 5
+Counter assigned to 10

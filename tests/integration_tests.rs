@@ -2469,3 +2469,63 @@ fn test_modules_iseven_isodd_integration() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_watcher_changed_on_i32_fires_on_change() {
+    let executable = compile_program("tests/programs/watcher/changed_on_i32/main.hl")
+        .expect("Failed to compile watcher/changed_on_i32/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher changed_on_i32 test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/changed_on_i32.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_assigned_fires_every_assignment() {
+    let executable = compile_program("tests/programs/watcher/assigned_fires_every/main.hl")
+        .expect("Failed to compile watcher/assigned_fires_every/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher assigned_fires_every test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/assigned_fires_every.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_changed_multiple_subscriptions() {
+    let executable = compile_program("tests/programs/watcher/changed_multiple_subscriptions/main.hl")
+        .expect("Failed to compile watcher/changed_multiple_subscriptions/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher changed_multiple_subscriptions test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/changed_multiple_subscriptions.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

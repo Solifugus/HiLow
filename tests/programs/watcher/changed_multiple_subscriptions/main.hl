@@ -1,0 +1,14 @@
+high program(args: [string]): i32 {
+    let x: i32 = 0
+    let y: i32 = 0
+
+    watcher onVariableChange((changed)x, (changed)y) {
+        print(f"Variables changed: x={x} y={y}")
+    }
+
+    x = 5   // Change x, should fire with x=5 y=0
+    y = 10  // Change y, should fire with x=5 y=10
+    x = 15  // Change x again, should fire with x=15 y=10
+
+    return 0
+}

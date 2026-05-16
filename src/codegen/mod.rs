@@ -4,6 +4,19 @@ use crate::typecheck::TypeChecker;
 use crate::lexer::Position;
 use std::collections::{HashMap, HashSet};
 
+/// Phase 10-γ: Subscription information for watcher tracking
+#[derive(Debug, Clone)]
+struct WatcherSubscription {
+    /// Mangled C function name for the watcher body
+    fn_name: String,
+    /// The modifier type that determines firing semantics
+    modifier: SubscriptionModifier,
+    /// All other variables this watcher subscribes to (for passing snapshot
+    /// values to the body when this variable triggers it).
+    /// Variable name → C identifier the body expects.
+    all_subscriptions: Vec<(String, String)>,
+}
+
 /// Types of heap allocations for ownership tracking (Phase 8a)
 #[derive(Debug, Clone, PartialEq)]
 pub enum HeapType {
@@ -103,6 +116,14 @@ pub struct CodeGenerator {
     forward_declarations: String,
     /// Phase 11b-fixup: Track whether main() has explicitly returned (to avoid duplicated epilogue)
     main_explicitly_returned: bool,
+    /// Phase 10-γ: tracking which variables have watchers subscribed to them,
+    /// so assignments to those variables can emit notification calls.
+    watcher_subscribers: HashMap<String, Vec<WatcherSubscription>>,
+    /// Phase 10-γ: emitted C function bodies for watchers, concatenated into
+    /// final output between function definitions and main().
+    watcher_bodies: String,
+    /// Phase 10-γ: Counter for generating unique watcher IDs
+    watcher_counter: usize,
 }
 
 impl CodeGenerator {
@@ -132,6 +153,9 @@ impl CodeGenerator {
             current_name_map: None,
             forward_declarations: String::new(),
             main_explicitly_returned: false,
+            watcher_subscribers: HashMap::new(),
+            watcher_bodies: String::new(),
+            watcher_counter: 0,
         }
     }
 
@@ -180,6 +204,9 @@ impl CodeGenerator {
         // Add generated functions (from function expressions)
         final_output.push_str(&self.generated_functions);
 
+        // Add watcher bodies (Phase 10-γ)
+        final_output.push_str(&self.watcher_bodies);
+
         // Add main program code
         final_output.push_str(&self.output);
 
@@ -225,12 +252,11 @@ impl CodeGenerator {
 
             match parsed_file {
                 TopLevel::Module(module) => {
-                    // Check if module contains watchers (not yet implemented in Phase 10-α)
-                    if !module.watchers.is_empty() {
-                        return Err(CodegenError::UnsupportedFeature {
-                            feature: "watcher declarations".to_string(),
-                            phase: "Phase 10-γ".to_string(),
-                        });
+                    // Phase 10-γ: Generate module watchers
+                    for watcher in &module.watchers {
+                        let func_name = self.generate_watcher(watcher, self.watcher_counter, type_checker)?;
+                        self.register_watcher_subscriptions(watcher, func_name);
+                        self.watcher_counter += 1;
                     }
 
                     // Generate forward declarations and exported functions with mangled names
@@ -299,6 +325,9 @@ impl CodeGenerator {
 
         // Add generated functions (from function expressions and modules)
         final_output.push_str(&self.generated_functions);
+
+        // Add watcher bodies (Phase 10-γ)
+        final_output.push_str(&self.watcher_bodies);
 
         // Add main program code
         final_output.push_str(&self.output);
@@ -588,6 +617,7 @@ impl CodeGenerator {
     }
     fn generate_program_body_functions(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // First, track function signatures for later reference
+        let mut deferred_watchers = Vec::new();
         for item in &body.items {
             if let BlockItem::Function(function) = item {
                 let return_type = Type::from_ast_type(&function.return_type);
@@ -595,12 +625,38 @@ impl CodeGenerator {
                 // to distinguish named functions from function value variables
                 self.functions.insert(function.name.clone(), return_type);
             } else if let BlockItem::Watcher(watcher) = item {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "watcher declarations".to_string(),
-                    phase: "Phase 10-γ".to_string(),
-                   });
-           }
+                // Phase 10-γ: Defer watcher generation until after variables are processed
+                deferred_watchers.push(watcher);
+            }
             // BlockItem::Statement handled in the second pass; no action here
+        }
+
+        // Process variable declarations first to populate variable_types
+        for item in &body.items {
+            if let BlockItem::Statement(Statement::Let(let_decl)) = item {
+                // Add variable type to variable_types so watchers can reference it
+                match &let_decl.pattern {
+                    LetPattern::Identifier(name, Some(ty)) => {
+                        let hilow_type = Type::from_ast_type(ty);
+                        self.variable_types.insert(name.clone(), hilow_type);
+                    }
+                    LetPattern::Identifier(name, None) => {
+                        // Type inference case - get from type checker
+                        if let Some(init) = &let_decl.initializer {
+                            let inferred_type = type_checker.get_expression_type(init);
+                            self.variable_types.insert(name.clone(), inferred_type);
+                        }
+                    }
+                    _ => {} // Tuple patterns handled elsewhere
+                }
+            }
+        }
+
+        // Now generate the deferred watchers
+        for watcher in deferred_watchers {
+            let func_name = self.generate_watcher(watcher, self.watcher_counter, type_checker)?;
+            self.register_watcher_subscriptions(watcher, func_name);
+            self.watcher_counter += 1;
         }
 
         // Generate nested functions as top-level C functions
@@ -1296,6 +1352,83 @@ impl CodeGenerator {
             }
         } else {
             // Regular assignment to variables
+
+            // Phase 10-γ: Check for compound assignment to watched variables
+            if assign_stmt.op != AssignOpKind::Assign {
+                if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
+                    if self.watcher_subscribers.contains_key(var_name) {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: "compound assignment of watched variable".to_string(),
+                            phase: "not yet implemented in Phase 10-γ".to_string(),
+                        });
+                    }
+                }
+            }
+
+            // Phase 10-γ: Handle watcher notifications for simple assignment
+            if assign_stmt.op == AssignOpKind::Assign {
+                if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
+                    if let Some(subscribers_ref) = self.watcher_subscribers.get(var_name) {
+                        // Clone subscribers to avoid borrow conflicts
+                        let subscribers = subscribers_ref.clone();
+                        // We have watchers subscribed to this variable
+                        let has_changed_watchers = subscribers.iter().any(|s| s.modifier == SubscriptionModifier::Changed);
+
+                        if has_changed_watchers {
+                            // Wrap assignment with old-vs-new comparison for (changed) watchers
+                            let var_type = self.variable_types.get(var_name).cloned()
+                                .unwrap_or(Type::I32); // Fallback type
+                            let c_type = self.hilow_type_to_c(&var_type);
+                            let old_var = format!("__hl_old_{}", self.var_counter);
+                            self.var_counter += 1;
+
+                            self.output.push_str("{\n");
+                            self.output.push_str(&format!("    {} {} = {};\n", c_type, old_var, var_name));
+                            self.output.push_str(&format!("    {} = ", var_name));
+                            self.generate_expression(&assign_stmt.value, type_checker)?;
+                            self.output.push_str(";\n");
+
+                            // Emit notifications for each subscriber
+                            for subscriber in subscribers {
+                                match subscriber.modifier {
+                                    SubscriptionModifier::Changed => {
+                                        self.output.push_str(&format!("    if ({} != {}) {{\n", old_var, var_name));
+                                        self.output.push_str(&format!("        {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                        self.output.push_str("    }\n");
+                                    }
+                                    SubscriptionModifier::Assigned => {
+                                        self.output.push_str(&format!("    {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                    }
+                                    _ => {} // Other modifiers already validated earlier
+                                }
+                            }
+                            self.output.push_str("}\n");
+                        } else {
+                            // Only (assigned) watchers - no need for old value tracking
+                            self.generate_expression(&assign_stmt.target, type_checker)?;
+                            self.output.push_str(" = ");
+                            self.generate_expression(&assign_stmt.value, type_checker)?;
+                            self.output.push_str(";\n");
+
+                            // Emit notifications for assigned watchers
+                            for subscriber in subscribers {
+                                if subscriber.modifier == SubscriptionModifier::Assigned {
+                                    self.output.push_str(&format!("  {}(", subscriber.fn_name));
+                                    self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                    self.output.push_str(");\n");
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+
+            // Normal assignment (no watchers)
             self.generate_expression(&assign_stmt.target, type_checker)?;
 
             let op_str = match assign_stmt.op {
@@ -4569,5 +4702,142 @@ impl CodeGenerator {
             // Fallback: use the variable name directly
             self.output.push_str(&c_var_name);
         }
+    }
+
+    /// Phase 10-γ: Check if a type is allowed for watching (numeric/bool types only)
+    fn is_type_watchable_in_phase_10g(&self, ty: &Type) -> bool {
+        matches!(ty,
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+            Type::F32 | Type::F64 | Type::Bool
+        )
+    }
+
+    /// Phase 10-γ: Generate a watcher body as a C function
+    fn generate_watcher(&mut self, watcher: &Watcher, watcher_id: usize, type_checker: &TypeChecker) -> Result<String, CodegenError> {
+        // Validate all subscribed variable types are allowed in Phase 10-γ
+        for subscription in &watcher.subscriptions {
+            let var_name = &subscription.variable_name;
+            // Get variable type from variable_types map (populated during first pass)
+            if let Some(var_type) = self.variable_types.get(var_name) {
+                if !self.is_type_watchable_in_phase_10g(var_type) {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("watching value of type {}", var_type),
+                        phase: "future phase (string and composite watching)".to_string(),
+                    });
+                }
+            } else {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("watching undefined variable '{}'", var_name),
+                    phase: "Phase 10-γ variable resolution".to_string(),
+                });
+            }
+        }
+
+        // Validate all modifiers are supported in Phase 10-γ
+        for subscription in &watcher.subscriptions {
+            match subscription.modifier {
+                SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
+                    // These are supported
+                }
+                SubscriptionModifier::Deep | SubscriptionModifier::Added |
+                SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("watcher modifier {:?}", subscription.modifier),
+                        phase: "future phase: mutation-modifier semantics".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Generate mangled function name
+        let func_name = format!("hilow_watcher_{}_{}", watcher_id, watcher.name);
+
+        // Generate function signature
+        self.watcher_bodies.push_str(&format!("void {}(", func_name));
+
+        // Add parameters for each subscription, in declaration order
+        for (i, subscription) in watcher.subscriptions.iter().enumerate() {
+            if i > 0 {
+                self.watcher_bodies.push_str(", ");
+            }
+
+            let var_name = &subscription.variable_name;
+            let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+
+            // Get the variable type from variable_types map
+            if let Some(var_type) = self.variable_types.get(var_name) {
+                let c_type = self.hilow_type_to_c(var_type);
+                self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
+            }
+        }
+
+        self.watcher_bodies.push_str(") {\n");
+
+        // Generate the watcher body
+        let saved_output = self.output.clone();
+        self.output.clear();
+
+        // Save current variable_types and add watcher parameters to scope
+        let old_variable_types = self.variable_types.clone();
+        for subscription in &watcher.subscriptions {
+            let var_name = &subscription.variable_name;
+            let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+
+            // Get the variable type from variable_types map
+            if let Some(var_type) = old_variable_types.get(var_name) {
+                self.variable_types.insert(param_name.clone(), var_type.clone());
+            }
+        }
+
+        self.generate_block(&watcher.body, type_checker)?;
+
+        // Restore original variable_types
+        self.variable_types = old_variable_types;
+
+        self.watcher_bodies.push_str(&self.output);
+        self.watcher_bodies.push_str("}\n\n");
+
+        self.output = saved_output;
+
+        Ok(func_name)
+    }
+
+    /// Phase 10-γ: Register a watcher as a subscriber to its variables
+    fn register_watcher_subscriptions(&mut self, watcher: &Watcher, func_name: String) {
+        let mut all_subscriptions = Vec::new();
+
+        // Build the list of all subscriptions for snapshot passing
+        for subscription in &watcher.subscriptions {
+            let var_name = subscription.variable_name.clone();
+            let param_name = subscription.alias.as_ref().unwrap_or(&var_name).clone();
+            all_subscriptions.push((var_name, param_name));
+        }
+
+        // Register each variable as having this watcher as a subscriber
+        for subscription in &watcher.subscriptions {
+            let var_name = &subscription.variable_name;
+            let watcher_subscription = WatcherSubscription {
+                fn_name: func_name.clone(),
+                modifier: subscription.modifier.clone(),
+                all_subscriptions: all_subscriptions.clone(),
+            };
+
+            self.watcher_subscribers
+                .entry(var_name.clone())
+                .or_insert_with(Vec::new)
+                .push(watcher_subscription);
+        }
+    }
+
+    /// Phase 10-γ: Emit arguments for a watcher function call (current values of all subscribed variables)
+    fn emit_watcher_call_args(&mut self, all_subscriptions: &[(String, String)]) -> Result<(), CodegenError> {
+        for (i, (var_name, _param_name)) in all_subscriptions.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.output.push_str(var_name);
+        }
+        Ok(())
     }
 }
