@@ -586,7 +586,6 @@ impl CodeGenerator {
         self.exit_scope();
         Ok(())
     }
-
     fn generate_program_body_functions(&mut self, body: &ProgramBody, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // First, track function signatures for later reference
         for item in &body.items {
@@ -595,7 +594,13 @@ impl CodeGenerator {
                 // Store function return types in functions map instead of variable_types
                 // to distinguish named functions from function value variables
                 self.functions.insert(function.name.clone(), return_type);
-            }
+            } else if let BlockItem::Watcher(watcher) = item {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "watcher declarations".to_string(),
+                    phase: "Phase 10-γ".to_string(),
+                   });
+           }
+            // BlockItem::Statement handled in the second pass; no action here
         }
 
         // Generate nested functions as top-level C functions
@@ -604,6 +609,7 @@ impl CodeGenerator {
                 self.generate_function(function, type_checker)?;
             }
         }
+
         Ok(())
     }
 
@@ -2277,6 +2283,7 @@ impl CodeGenerator {
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
             Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
+            Type::Watcher => "void*".to_string(), // Placeholder - codegen for watchers comes in Phase 10-γ
             Type::Tuple(element_types) => self.get_tuple_type_name(element_types),
             Type::ObjectIterValue => "void*".to_string(), // Runtime-dispatched iteration value
             Type::Unknown => "void".to_string(),

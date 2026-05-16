@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-α — Parser Support for Watcher Syntax**
+**Current phase: Phase 10-β — Type Checking for Watchers**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

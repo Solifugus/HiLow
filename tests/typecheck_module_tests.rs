@@ -280,3 +280,245 @@ fn test_export_let_can_call_local_function() {
     let result = type_checker.check_graph(&graph);
     assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
 }
+
+// Watcher type checking tests for Phase 10-β
+
+#[test]
+fn test_watcher_simple_changed_subscription() {
+    let mut type_checker = TypeChecker::new();
+
+    // Simple watcher with a changed subscription
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX(x) { print(x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_assigned_modifier_on_any_type() {
+    let mut type_checker = TypeChecker::new();
+
+    // (assigned) modifier should work on any type, including primitives
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX((assigned)x) { print(x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_deep_on_object() {
+    let mut type_checker = TypeChecker::new();
+
+    // (deep) modifier should work on object types
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let obj = {x: 5}; watcher onObj((deep)obj) { print(obj.x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_added_on_array_with_alias() {
+    let mut type_checker = TypeChecker::new();
+
+    // (added) modifier with alias on array type - simplified without array literal
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { function makeItems(): [i32] { return unknown(\"not implemented\") } let items = makeItems(); watcher onItems((newAdds=added)items) { print(\"added\") } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_moved_on_array() {
+    let mut type_checker = TypeChecker::new();
+
+    // (moved) modifier on array type with alias
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { function makeItems(): [i32] { return unknown(\"not implemented\") } let items = makeItems(); watcher onItems((moves=moved)items) { print(\"moved\") } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_multiple_subscriptions() {
+    let mut type_checker = TypeChecker::new();
+
+    // Watcher with multiple different subscriptions
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; let y: string = \"hello\"; function makeArray(): [i32] { return unknown(\"not implemented\") } let z = makeArray(); watcher multi(x, y, (added)z) { print(x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_same_variable_different_modifiers() {
+    let mut type_checker = TypeChecker::new();
+
+    // Same variable with different modifiers in one watcher
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { function makeItems(): [i32] { return unknown(\"not implemented\") } let items = makeItems(); watcher onItems((added)items, (removed)items) { print(\"changed\") } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_no_return_value() {
+    let mut type_checker = TypeChecker::new();
+
+    // Watcher body with bare return is fine
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX(x) { if (x > 10) { return } print(x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+#[test]
+fn test_watcher_expression_type_is_watcher() {
+    let mut type_checker = TypeChecker::new();
+
+    // Watcher expression assigned to variable should type-check as Type::Watcher
+    // This test passes if type checking succeeds (the actual type verification would be internal)
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; let w = watcher(x) { print(x) }; return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
+}
+
+// Error test cases
+
+#[test]
+fn test_watcher_subscription_undefined_variable() {
+    let mut type_checker = TypeChecker::new();
+
+    // Subscribing to undefined variable should error
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { watcher onUndefined(undefined_var) { print(\"test\") } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected error for undefined variable, got: {:?}", result);
+
+    if let Err(errors) = result {
+        let has_undefined_error = errors.iter().any(|err| {
+            err.to_string().contains("subscribed variable 'undefined_var' is not in scope")
+        });
+        assert!(has_undefined_error, "Expected undefined variable error, got: {:?}", errors);
+    }
+}
+
+#[test]
+fn test_watcher_subscription_to_function() {
+    let mut type_checker = TypeChecker::new();
+
+    // Subscribing to function should error
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { function helper(): i32 { return 5 } watcher onFunc(helper) { print(\"test\") } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected error for function subscription, got: {:?}", result);
+
+    if let Err(errors) = result {
+        let has_function_error = errors.iter().any(|err| {
+            err.to_string().contains("cannot subscribe to 'helper' because it is a function")
+        });
+        assert!(has_function_error, "Expected function subscription error, got: {:?}", errors);
+    }
+}
+
+#[test]
+fn test_watcher_deep_on_primitive_error() {
+    let mut type_checker = TypeChecker::new();
+
+    // (deep) on primitive should error
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX((deep)x) { print(x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected error for (deep) on primitive, got: {:?}", result);
+
+    if let Err(errors) = result {
+        let has_deep_error = errors.iter().any(|err| {
+            err.to_string().contains("(deep) modifier is not meaningful for primitive type")
+        });
+        assert!(has_deep_error, "Expected (deep) primitive error, got: {:?}", errors);
+    }
+}
+
+#[test]
+fn test_watcher_added_on_primitive_error() {
+    let mut type_checker = TypeChecker::new();
+
+    // (added) on primitive should error
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX((added)x) { print(x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected error for (added) on primitive, got: {:?}", result);
+
+    if let Err(errors) = result {
+        let has_added_error = errors.iter().any(|err| {
+            err.to_string().contains("(Added) modifier requires a collection type")
+        });
+        assert!(has_added_error, "Expected (added) collection error, got: {:?}", errors);
+    }
+}
+
+#[test]
+fn test_watcher_moved_on_non_array_error() {
+    let mut type_checker = TypeChecker::new();
+
+    // (moved) on non-array should error
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let obj = {x: 5}; watcher onObj((moved)obj) { print(obj.x) } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected error for (moved) on non-array, got: {:?}", result);
+
+    if let Err(errors) = result {
+        let has_moved_error = errors.iter().any(|err| {
+            err.to_string().contains("(moved) modifier requires an ordered collection type")
+        });
+        assert!(has_moved_error, "Expected (moved) array error, got: {:?}", errors);
+    }
+}
+
+#[test]
+fn test_watcher_return_with_value_error() {
+    let mut type_checker = TypeChecker::new();
+
+    // return with value in watcher should error
+    let graph = build_graph(vec![
+        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX(x) { return 5 } return 42 }")
+    ]);
+
+    let result = type_checker.check_graph(&graph);
+    assert!(result.is_err(), "Expected error for return with value, got: {:?}", result);
+
+    if let Err(errors) = result {
+        let has_return_error = errors.iter().any(|err| {
+            err.to_string().contains("watcher body cannot return a value")
+        });
+        assert!(has_return_error, "Expected return with value error, got: {:?}", errors);
+    }
+}

@@ -369,10 +369,7 @@ impl TypeChecker {
                                 self.check_statement(statement);
                             }
                             crate::ast::BlockItem::Watcher(watcher) => {
-                                self.add_error(
-                                    "watchers are not yet implemented; Phase 10-α implements parsing only, type checking comes in Phase 10-β".to_string(),
-                                    watcher.position.clone()
-                                );
+                                self.check_watcher(watcher);
                             }
                         }
                     }
@@ -428,6 +425,11 @@ impl TypeChecker {
         for function in &module.items {
             self.check_function(function);
         }
+
+        // Check module-level watchers
+        for watcher in &module.watchers {
+            self.check_watcher(watcher);
+        }
     }
 
     fn check_function(&mut self, function: &Function) {
@@ -462,6 +464,195 @@ impl TypeChecker {
         self.exit_scope();
     }
 
+    fn check_watcher(&mut self, watcher: &Watcher) {
+        self.enter_scope();
+
+        // Check each subscription, registering body bindings as we go
+        for sub in watcher.subscriptions.iter() {
+            self.check_subscription_and_bind(sub, &watcher.position);
+        }
+
+        // Check the body
+        self.check_block(&watcher.body);
+
+        // Validate that the body does not contain `return value;` — only bare `return;` is allowed
+        self.check_no_return_with_value(&watcher.body, watcher.position.clone());
+
+        self.exit_function_scope();
+    }
+
+    fn check_subscription_and_bind(&mut self, sub: &Subscription, watcher_position: &Position) {
+        // 1. Look up the outer variable's type by name
+        let outer_type = match self.lookup_variable_type(&sub.variable_name) {
+            Some(t) => t,
+            None => {
+                self.add_error(
+                    format!("subscribed variable '{}' is not in scope", sub.variable_name),
+                    sub.position.clone()
+                );
+                return;
+            }
+        };
+
+        // 2. Reject subscriptions to callable bindings (functions, watchers)
+        if matches!(outer_type, Type::Function(_, _) | Type::Watcher) {
+            self.add_error(
+                format!("cannot subscribe to '{}' because it is a {} (subscriptions are for data values, not callables)",
+                    sub.variable_name,
+                    match outer_type { Type::Function(_, _) => "function", Type::Watcher => "watcher", _ => "?" }),
+                sub.position.clone()
+            );
+            return;
+        }
+
+        // 3. Validate modifier-type compatibility (per the rules above)
+        let alias_type = self.validate_subscription_modifier(&sub.modifier, &outer_type, &sub.position);
+
+        // 4. Register the body-scope binding for the variable name (always the outer type)
+        self.declare_variable(&sub.variable_name, outer_type.clone(), sub.position.clone());
+
+        // 5. If alias present, register it too with the alias type
+        if let Some(ref alias_name) = sub.alias {
+            if let Some(at) = alias_type {
+                self.declare_variable(alias_name, at, sub.position.clone());
+            }
+        }
+    }
+
+    fn validate_subscription_modifier(
+        &mut self,
+        modifier: &SubscriptionModifier,
+        outer_type: &Type,
+        position: &Position,
+    ) -> Option<Type> {
+        use SubscriptionModifier::*;
+        match modifier {
+            Changed | Assigned => {
+                // Compatible with any type; no alias-specific type
+                Some(outer_type.clone())
+            }
+            Deep => {
+                if self.is_primitive_type(outer_type) {
+                    self.add_error(
+                        format!("(deep) modifier is not meaningful for primitive type '{}' (primitives cannot be mutated in place)",
+                            self.type_name(outer_type)),
+                        position.clone()
+                    );
+                    None
+                } else {
+                    Some(outer_type.clone())
+                }
+            }
+            Added | Removed => {
+                // Require collection type
+                if let Some(element_type) = self.collection_element_type(outer_type) {
+                    Some(Type::DynamicArray(Box::new(element_type)))
+                } else {
+                    self.add_error(
+                        format!("({:?}) modifier requires a collection type, got '{}'",
+                            modifier, self.type_name(outer_type)),
+                        position.clone()
+                    );
+                    None
+                }
+            }
+            Moved => {
+                // Require ordered collection (array)
+                if matches!(outer_type, Type::DynamicArray(_) | Type::FixedArray(_, _)) {
+                    Some(Type::DynamicArray(Box::new(Type::Tuple(vec![Type::Usize, Type::Usize]))))
+                } else {
+                    self.add_error(
+                        format!("(moved) modifier requires an ordered collection type (array), got '{}'",
+                            self.type_name(outer_type)),
+                        position.clone()
+                    );
+                    None
+                }
+            }
+        }
+    }
+
+    fn check_no_return_with_value(&mut self, block: &Block, error_position: Position) {
+        for statement in &block.statements {
+            self.check_no_return_with_value_statement(statement, &error_position);
+        }
+    }
+
+    fn check_no_return_with_value_statement(&mut self, statement: &Statement, error_position: &Position) {
+        match statement {
+            Statement::Return(return_stmt) => {
+                if return_stmt.value.is_some() {
+                    self.add_error(
+                        "watcher body cannot return a value (use bare 'return;' for early exit)".to_string(),
+                        return_stmt.position.clone()
+                    );
+                }
+            }
+            Statement::If(if_stmt) => {
+                self.check_no_return_with_value(&if_stmt.then_block, error_position.clone());
+                if let Some(ref else_block) = if_stmt.else_block {
+                    self.check_no_return_with_value(else_block, error_position.clone());
+                }
+            }
+            Statement::While(while_stmt) => {
+                self.check_no_return_with_value(&while_stmt.body, error_position.clone());
+            }
+            Statement::Loop(loop_stmt) => {
+                self.check_no_return_with_value(&loop_stmt.body, error_position.clone());
+            }
+            Statement::ForIn(for_stmt) => {
+                self.check_no_return_with_value(&for_stmt.body, error_position.clone());
+            }
+            // Other statement types don't contain nested blocks with returns
+            _ => {}
+        }
+    }
+
+    fn lookup_variable_type(&self, name: &str) -> Option<Type> {
+        // First, check for type refinements from innermost to outermost
+        for refinement_scope in self.refinement_scopes.iter().rev() {
+            if let Some(refined_type) = refinement_scope.lookup(name) {
+                return Some(refined_type.clone());
+            }
+        }
+
+        // Second, check for persistent refinements
+        if let Some(refined_type) = self.persistent_refinements.get(name) {
+            return Some(refined_type.clone());
+        }
+
+        // Then search regular scopes from innermost to outermost
+        for scope in self.scopes.iter().rev() {
+            if let Some(symbol) = scope.lookup(name) {
+                return Some(symbol.ty.clone());
+            }
+        }
+
+        None
+    }
+
+    fn is_primitive_type(&self, ty: &Type) -> bool {
+        matches!(ty,
+            Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+            Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
+            Type::F32 | Type::F64 | Type::Usize | Type::Isize |
+            Type::Bool | Type::String | Type::Nothing | Type::UnknownType |
+            Type::Time | Type::Duration | Type::Money | Type::MoneyOf(_)
+        )
+    }
+
+    fn collection_element_type(&self, ty: &Type) -> Option<Type> {
+        match ty {
+            Type::DynamicArray(element_type) => Some((**element_type).clone()),
+            Type::FixedArray(element_type, _) => Some((**element_type).clone()),
+            _ => None
+        }
+    }
+
+    fn type_name(&self, ty: &Type) -> String {
+        format!("{}", ty)
+    }
+
     fn check_program_body(&mut self, body: &ProgramBody) {
         // Enter program body scope
         self.enter_scope();
@@ -487,10 +678,7 @@ impl TypeChecker {
                 BlockItem::Statement(statement) => self.check_statement(statement),
                 BlockItem::Function(function) => self.check_function(function),
                 BlockItem::Watcher(watcher) => {
-                    self.add_error(
-                        "watchers are not yet implemented; Phase 10-α implements parsing only, type checking comes in Phase 10-β".to_string(),
-                        watcher.position.clone()
-                    );
+                    self.check_watcher(watcher);
                 }
             }
         }
@@ -988,11 +1176,7 @@ impl TypeChecker {
                 }
             },
             Expression::WatcherExpr(watcher_expr) => {
-                self.add_error(
-                    "watchers are not yet implemented; Phase 10-α implements parsing only, type checking comes in Phase 10-β".to_string(),
-                    watcher_expr.position.clone()
-                );
-                Type::Unknown
+                self.check_watcher_expression(watcher_expr)
             },
         }
     }
@@ -2400,6 +2584,21 @@ impl TypeChecker {
 
         // Return the function type
         Type::Function(param_types, Box::new(return_type))
+    }
+
+    fn check_watcher_expression(&mut self, watcher_expr: &WatcherExpr) -> Type {
+        self.enter_scope();
+
+        for sub in &watcher_expr.subscriptions {
+            self.check_subscription_and_bind(sub, &watcher_expr.position);
+        }
+
+        self.check_block(&watcher_expr.body);
+        self.check_no_return_with_value(&watcher_expr.body, watcher_expr.position.clone());
+
+        self.exit_function_scope();
+
+        Type::Watcher
     }
 
     fn check_for_captures_in_statement(&mut self, statement: &Statement, outer_scope_depth: usize) {

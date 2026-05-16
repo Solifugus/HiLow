@@ -37,6 +37,9 @@ pub enum Type {
     /// Function type
     Function(Vec<Type>, Box<Type>), // parameter types, return type
 
+    /// Watcher type
+    Watcher,  // The type of a watcher value (returned by WatcherExpr, or referenced via declared name).
+
     /// Tuple type
     Tuple(Vec<Type>), // element types
 
@@ -203,6 +206,7 @@ impl Type {
                 let ast_param_types = param_types.iter().map(|t| t.to_ast_type()).collect();
                 ast::Type::Function(ast_param_types, Box::new(return_type.to_ast_type()))
             },
+            Type::Watcher => ast::Type::Unknown, // Watchers don't have an AST type representation yet
             Type::Tuple(element_types) => {
                 ast::Type::Tuple(element_types.iter().map(|t| t.to_ast_type()).collect())
             },
@@ -262,6 +266,7 @@ impl std::fmt::Display for Type {
                 }
                 write!(f, "): {}", return_type)
             },
+            Type::Watcher => write!(f, "watcher"),
             Type::Tuple(element_types) => {
                 write!(f, "(")?;
                 for (i, elem_type) in element_types.iter().enumerate() {
