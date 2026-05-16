@@ -1,0 +1,20 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+
+    watcher onCounter((changed)counter) {
+        print("Watcher fired")
+    }
+
+    print(onCounter.isActive())  // Should print true
+
+    onCounter.pause()
+    print(onCounter.isActive())  // Should print false
+
+    onCounter.resume()
+    print(onCounter.isActive())  // Should print true
+
+    onCounter.end()
+    print(onCounter.isActive())  // Should print false
+
+    return 0
+}

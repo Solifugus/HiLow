@@ -124,6 +124,8 @@ pub struct CodeGenerator {
     watcher_bodies: String,
     /// Phase 10-γ: Counter for generating unique watcher IDs
     watcher_counter: usize,
+    /// Phase 10-γ-fixup: maps watcher names to their codegen IDs for method dispatch.
+    watcher_name_to_id: HashMap<String, usize>,
 }
 
 impl CodeGenerator {
@@ -156,6 +158,7 @@ impl CodeGenerator {
             watcher_subscribers: HashMap::new(),
             watcher_bodies: String::new(),
             watcher_counter: 0,
+            watcher_name_to_id: HashMap::new(),
         }
     }
 
@@ -1393,15 +1396,33 @@ impl CodeGenerator {
                                 match subscriber.modifier {
                                     SubscriptionModifier::Changed => {
                                         self.output.push_str(&format!("    if ({} != {}) {{\n", old_var, var_name));
-                                        self.output.push_str(&format!("        {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                        self.output.push_str(");\n");
+                                        // Phase 10-γ-fixup: Check active flag before calling watcher
+                                        if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
+                                            self.output.push_str(&format!("        if (hilow_watcher_{}_active) {{\n", watcher_id));
+                                            self.output.push_str(&format!("            {}(", subscriber.fn_name));
+                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                            self.output.push_str(");\n");
+                                            self.output.push_str("        }\n");
+                                        } else {
+                                            self.output.push_str(&format!("        {}(", subscriber.fn_name));
+                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                            self.output.push_str(");\n");
+                                        }
                                         self.output.push_str("    }\n");
                                     }
                                     SubscriptionModifier::Assigned => {
-                                        self.output.push_str(&format!("    {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                        self.output.push_str(");\n");
+                                        // Phase 10-γ-fixup: Check active flag before calling watcher
+                                        if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
+                                            self.output.push_str(&format!("    if (hilow_watcher_{}_active) {{\n", watcher_id));
+                                            self.output.push_str(&format!("        {}(", subscriber.fn_name));
+                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                            self.output.push_str(");\n");
+                                            self.output.push_str("    }\n");
+                                        } else {
+                                            self.output.push_str(&format!("    {}(", subscriber.fn_name));
+                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                            self.output.push_str(");\n");
+                                        }
                                     }
                                     _ => {} // Other modifiers already validated earlier
                                 }
@@ -1417,9 +1438,18 @@ impl CodeGenerator {
                             // Emit notifications for assigned watchers
                             for subscriber in subscribers {
                                 if subscriber.modifier == SubscriptionModifier::Assigned {
-                                    self.output.push_str(&format!("  {}(", subscriber.fn_name));
-                                    self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                    self.output.push_str(");\n");
+                                    // Phase 10-γ-fixup: Check active flag before calling watcher
+                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
+                                        self.output.push_str(&format!("  if (hilow_watcher_{}_active) {{\n", watcher_id));
+                                        self.output.push_str(&format!("    {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                        self.output.push_str("  }\n");
+                                    } else {
+                                        self.output.push_str(&format!("  {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                    }
                                 }
                             }
                         }
@@ -2129,6 +2159,29 @@ impl CodeGenerator {
                 if name == "time" {
                     // Built-in time method calls
                     return self.generate_member_function_call(call, member_access, type_checker);
+                }
+
+                // Phase 10-γ-fixup: Watcher method calls
+                if let Some(watcher_id) = self.watcher_name_to_id.get(name).copied() {
+                    match member_access.member.as_str() {
+                        "pause" => {
+                            self.output.push_str(&format!("hilow_watcher_{}_pause()", watcher_id));
+                            return Ok(());
+                        }
+                        "resume" => {
+                            self.output.push_str(&format!("hilow_watcher_{}_resume()", watcher_id));
+                            return Ok(());
+                        }
+                        "end" => {
+                            self.output.push_str(&format!("hilow_watcher_{}_end()", watcher_id));
+                            return Ok(());
+                        }
+                        "isActive" => {
+                            self.output.push_str(&format!("hilow_watcher_{}_isActive()", watcher_id));
+                            return Ok(());
+                        }
+                        _ => unreachable!("type checker should have caught invalid watcher method"),
+                    }
                 }
             }
         }
@@ -2979,6 +3032,13 @@ impl CodeGenerator {
                             match member_access.member.as_str() {
                                 "parse" => Type::Optional(Box::new(Type::Time)),
                                 "now" => Type::Time,
+                                _ => Type::I32
+                            }
+                        } else if self.watcher_name_to_id.contains_key(name) {
+                            // Phase 10-γ-fixup: Handle watcher method calls
+                            match member_access.member.as_str() {
+                                "pause" | "resume" | "end" => Type::Nothing,
+                                "isActive" => Type::Bool,
                                 _ => Type::I32
                             }
                         } else {
@@ -4798,9 +4858,52 @@ impl CodeGenerator {
         self.watcher_bodies.push_str(&self.output);
         self.watcher_bodies.push_str("}\n\n");
 
+        // Phase 10-γ-fixup: Add watcher name to ID mapping for method dispatch
+        self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
+
+        // Phase 10-γ-fixup: Emit static state variables and helper functions
+        self.watcher_bodies.push_str(&format!(
+            "static bool hilow_watcher_{}_active = true;\n", watcher_id
+        ));
+        self.watcher_bodies.push_str(&format!(
+            "static bool hilow_watcher_{}_ended = false;\n\n", watcher_id
+        ));
+
+        // Emit the four helper functions
+        self.watcher_bodies.push_str(&format!(
+            "static void hilow_watcher_{}_pause(void) {{ hilow_watcher_{}_active = false; }}\n",
+            watcher_id, watcher_id
+        ));
+        self.watcher_bodies.push_str(&format!(
+            "static void hilow_watcher_{}_resume(void) {{ \n  if (!hilow_watcher_{}_ended) hilow_watcher_{}_active = true; \n}}\n",
+            watcher_id, watcher_id, watcher_id
+        ));
+        self.watcher_bodies.push_str(&format!(
+            "static void hilow_watcher_{}_end(void) {{ \n  hilow_watcher_{}_ended = true; \n  hilow_watcher_{}_active = false; \n}}\n",
+            watcher_id, watcher_id, watcher_id
+        ));
+        self.watcher_bodies.push_str(&format!(
+            "static bool hilow_watcher_{}_isActive(void) {{ return hilow_watcher_{}_active; }}\n\n",
+            watcher_id, watcher_id
+        ));
+
         self.output = saved_output;
 
         Ok(func_name)
+    }
+
+    /// Phase 10-γ-fixup: Extract watcher ID from function name for active flag check
+    fn extract_watcher_id(&self, func_name: &str) -> Option<usize> {
+        // Function name format: "hilow_watcher_{id}_{name}"
+        if let Some(prefix_end) = func_name.find("hilow_watcher_") {
+            let after_prefix = &func_name[prefix_end + "hilow_watcher_".len()..];
+            if let Some(id_end) = after_prefix.find('_') {
+                if let Ok(id) = after_prefix[..id_end].parse::<usize>() {
+                    return Some(id);
+                }
+            }
+        }
+        None
     }
 
     /// Phase 10-γ: Register a watcher as a subscriber to its variables

@@ -1,0 +1,22 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+
+    watcher onCounter((changed)counter) {
+        print(f"Counter changed to {counter}")
+    }
+
+    counter = 1  // Should fire
+    counter = 2  // Should fire
+
+    onCounter.pause()
+
+    counter = 3  // Should NOT fire (paused)
+    counter = 4  // Should NOT fire (paused)
+
+    onCounter.resume()
+
+    counter = 5  // Should fire (resumed)
+    counter = 6  // Should fire (resumed)
+
+    return 0
+}

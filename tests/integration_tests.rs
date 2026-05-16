@@ -2529,3 +2529,63 @@ fn test_watcher_changed_multiple_subscriptions() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_watcher_pause_resume() {
+    let executable = compile_program("tests/programs/watcher/pause_resume/main.hl")
+        .expect("Failed to compile watcher/pause_resume/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher pause_resume test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/pause_resume.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_end_is_permanent() {
+    let executable = compile_program("tests/programs/watcher/end_is_permanent/main.hl")
+        .expect("Failed to compile watcher/end_is_permanent/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher end_is_permanent test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/end_is_permanent.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_isactive_query() {
+    let executable = compile_program("tests/programs/watcher/isactive_query/main.hl")
+        .expect("Failed to compile watcher/isactive_query/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher isactive_query test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/isactive_query.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}

@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 10-β — Type Checking for Watchers  
-**Status:** Phase 10-β complete; watcher type checking implemented including modifier-variable compatibility, alias types committed for mutation modifiers; codegen guard rails preserved (one was missing at program-body level, added during a session-side fixup)
+**Phase:** Phase 10-γ — Codegen for Watcher Firing on Numeric/Bool Types  
+**Status:** Phase 10-γ complete; watcher codegen for (changed)/(assigned) modifiers on numeric/bool types; watcher methods (.pause(), .resume(), .end(), .isActive()) deferred to follow-on phase
 **Branch:** main
-**Last commit:** Phase 10-β: type checking for watcher declarations, expressions, and subscription modifiers
+**Last commit:** Phase 10-γ: codegen for watcher firing on (changed)/(assigned) modifiers over numeric/bool types
 
 ---
 
@@ -24,6 +24,78 @@
 ---
 
 ## Recent sessions
+
+### 2026-05-16 — Phase 10-γ: Codegen for Watcher Firing on Numeric/Bool Types
+
+- **Pre-change verification ritual.**
+  ```
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 125 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.32s
+  test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Post-change verification ritual.**
+  ```
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 128 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.30s
+  test result: ok. 110 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 57 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  ```
+
+- **Integration test count**: 128 (125 + 3 new watcher tests).
+
+- **CodeGenerator additions**: Added `WatcherSubscription` struct, `watcher_subscribers: HashMap<String, Vec<WatcherSubscription>>`, `watcher_bodies: String`, `watcher_counter: usize` fields. Added `generate_watcher()`, `register_watcher_subscriptions()`, `emit_watcher_call_args()` methods and `is_type_watchable_in_phase_10g()` helper.
+
+- **Watcher body codegen**: Replaced Phase 10-α/β guard rails for `BlockItem::Watcher` (program-body and module-body) with real codegen. Watchers emitted as C functions `hilow_watcher_<id>_<name>(<params>)` with parameters for each subscription. Function signature uses type from `variable_types` populated during first-pass variable declaration processing. Body generated with parameters in scope.
+
+- **Assignment notification emission**: Modified `generate_assign_statement` to check `watcher_subscribers` for target variable. For `(changed)` modifiers: wraps assignment with old-value capture and `if (old != new)` comparison. For `(assigned)` modifiers: fires unconditionally after assignment. Emits calls to watcher functions with current values of all subscribed variables.
+
+- **Generated C inspection** for `test_watcher_changed_on_i32_fires_on_change`:
+  ```c
+  void hilow_watcher_0_onCounter(int32_t counter) {
+  ({ char* __inline_fstr = ({ char* __fstring_buf = malloc(4096); hl_alloc_count++; __fstring_buf[0] = '\0'; strcat(__fstring_buf, "Counter changed to "); { char __tmp_buf[32]; sprintf(__tmp_buf, "%d", (int)counter); strcat(__fstring_buf, __tmp_buf); } __fstring_buf; }); print_str(__inline_fstr); free(__inline_fstr); hl_free_count++; });
+  }
+  
+  // In main:
+  {
+    int32_t __hl_old_0 = counter;
+    counter = 0;
+    if (__hl_old_0 != counter) {
+        hilow_watcher_0_onCounter(counter);
+    }
+  }
+  ```
+
+- **Out-of-scope rejection tests**: String watching: `Unsupported feature 'watching value of type string' - will be implemented in future phase (string and composite watching)`. Compound assignment: `Unsupported feature 'compound assignment of watched variable' - will be implemented in not yet implemented in Phase 10-γ`.
+
+- **Three new integration tests**: `test_watcher_changed_on_i32_fires_on_change` (fires only on actual value changes), `test_watcher_assigned_fires_every_assignment` (fires on every assignment regardless of value), `test_watcher_changed_multiple_subscriptions` (watcher with two subscriptions, fires when either changes).
+
+- **Deferred work**: Watcher methods (`.pause()`, `.resume()`, `.end()`, `.isActive()`) deliberately deferred to follow-on phase; mutation modifiers (`(deep)`, `(added)`, `(removed)`, `(moved)`); string and composite type watching; watcher expressions; compound assignment on watched variables; watchers inside function bodies; escape analysis.
 
 ### 2026-05-16 — Phase 10-β: Type Checking for Watchers
 

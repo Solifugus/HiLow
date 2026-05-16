@@ -465,6 +465,9 @@ impl TypeChecker {
     }
 
     fn check_watcher(&mut self, watcher: &Watcher) {
+        // Phase 10-γ-fixup: Register the watcher's name in the outer scope for method calls
+        self.declare_variable(&watcher.name, Type::Watcher, watcher.position.clone());
+
         self.enter_scope();
 
         // Check each subscription, registering body bindings as we go
@@ -1078,6 +1081,12 @@ impl TypeChecker {
             Expression::MoneyLit(_, currency, _) => Type::MoneyOf(currency.clone()),
             Expression::Nothing(_) => Type::Nothing,
             Expression::Ident { name, position, .. } => {
+                // Special handling for builtin identifiers
+                if name == "time" {
+                    // time is a builtin namespace with methods
+                    return Type::Object(vec![]); // Empty object type for namespace access
+                }
+
                 // Look up variable in symbol table with refinement support
                 let declared_type = self.lookup_variable(name, position.clone());
 
@@ -1645,6 +1654,14 @@ impl TypeChecker {
             }
         }
 
+        // Phase 10-γ-fixup: Check for watcher method calls
+        if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
+            let object_type = self.check_expression(&member_access.object);
+            if matches!(object_type, Type::Watcher) {
+                return self.check_watcher_method_call(call, member_access);
+            }
+        }
+
         // Type check the callee
         let callee_type = self.check_expression(&call.callee);
 
@@ -1745,6 +1762,40 @@ impl TypeChecker {
 
         // print() returns i32 for now (will be nothing in Phase 9)
         Type::I32
+    }
+
+    /// Phase 10-γ-fixup: Special handling for watcher method calls
+    fn check_watcher_method_call(&mut self, call: &Call, member_access: &MemberAccess) -> Type {
+        // Validate that the method is one of the four valid watcher methods
+        match member_access.member.as_str() {
+            "pause" | "resume" | "end" => {
+                // These methods return nothing and take no arguments
+                if !call.args.is_empty() {
+                    self.add_error(
+                        format!("watcher method '{}' takes no arguments, got {}", member_access.member, call.args.len()),
+                        call.position.clone()
+                    );
+                }
+                Type::Nothing
+            }
+            "isActive" => {
+                // This method returns bool and takes no arguments
+                if !call.args.is_empty() {
+                    self.add_error(
+                        format!("watcher method 'isActive' takes no arguments, got {}", call.args.len()),
+                        call.position.clone()
+                    );
+                }
+                Type::Bool
+            }
+            _ => {
+                self.add_error(
+                    format!("watcher has no method '{}'; valid methods are 'pause', 'resume', 'end', 'isActive'", member_access.member),
+                    call.position.clone()
+                );
+                Type::Unknown
+            }
+        }
     }
 
     // Scope management
