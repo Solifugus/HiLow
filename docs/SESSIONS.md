@@ -6,6 +6,15 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-17 (afternoon) — Phase 10-θ-fixup: Nested Watcher Codegen
+
+- **Commit:** 74288ed
+- **Tests:** 132 → 135 integration (+3)
+- **Summary:** Closed the nested-watcher gap from Phase 10-θ. Added `resolved_var_type` and `resolved_alias_type` RefCells to Subscription AST node, populated by type checker, read by codegen at watcher emission time. This solves the function-local variable type lookup problem at C file-scope emission. Static initializers flipped from `true` to `false`; activation emitted at declaration position (not block entry — caught and corrected mid-implementation). Deactivation emitted at scope exit. Misleading "Phase 10-γ variable resolution" error message removed.
+- **Three new integration tests:** watcher-in-function-body-scope-bounded, watcher-in-if-branch-scope-bounded, pre-declaration-assignment-does-not-fire.
+- **Issues caught in spot-verification:** (1) Scope-exit deactivation emits after `return` in functions, making it unreachable. Doesn't cause incorrect behavior for current patterns but is dead code — tracked as code-quality item for 10-δ. (2) Activation loop duplicated between two block walkers — small extraction opportunity, not blocking.
+- **Baked time:** 18m 9s — closer to typical range (11-16 min) than the 25m of Phase 10-θ. The judgment-call disclosures in the debrief (activation-at-block-entry initially, corrected to declaration-position; type conversion approach; error message replacement) suggest the iteration was honest about what happened.
+
 ### 2026-05-17 — Phase 10-θ: Nested Declarations in Blocks (partial)
 
 - **Commit:** 325af86 (also 1e15ae0, db7fc76, d222238)

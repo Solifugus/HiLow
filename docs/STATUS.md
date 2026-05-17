@@ -6,12 +6,12 @@
 
 ## Current state
 
-**Phase:** Phase 10-θ — Nested Declarations in Blocks (partial)
-**Status:** Structural change landed: `Block.statements` → `Block.items` with `BlockItem` dispatch; nested function declarations work end-to-end. Watcher half (scope-bounded activation for nested watchers) did NOT land — failed at codegen due to function-local variable type lookup gap. Needs a 10-θ-fixup phase. The "Phase 10 deferred work" entry below reflects this split.
+**Phase:** Phase 10-θ-fixup — Nested Watcher Codegen
+**Status:** Complete. Nested watcher declarations now compile and run correctly with scope-bounded activation. Phase 10-δ next (escape analysis and factory pattern for watcher expressions).
 **Branch:** main
-**Last commit:** Phase 10-θ: nested declarations in blocks + scope-bounded watcher activation (commit message overpromises the watcher half — see SESSIONS.md for details)
+**Last commit:** Phase 10-θ-fixup: nested watcher codegen with scope-bounded activation
 
-**Tests:** 132 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
+**Tests:** 135 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
 
 ---
 
@@ -23,21 +23,25 @@
 
 ## Active deferred work
 
+### Code quality items pending
+
+- **Scope-exit deactivation is unreachable in functions with early returns.** Phase 10-θ-fixup emits `hilow_watcher_<id>_end();` at block exit (after the last statement), but if the function returns earlier, the deactivation never runs. In practice this doesn't cause incorrect behavior for nested watchers — the watched variable is function-local and doesn't exist between calls, so no spurious firing can happen. But the dead-code emission is wrong on its face and will become a real issue when Phase 10-δ introduces escaping watchers whose state outlives their declaration scope. Address as part of 10-δ or earlier if a use case surfaces.
+
+- **Activation logic is duplicated** between `generate_block` and `generate_block_with_parameter_context`. Both block walkers contain the same Phase 4 activation loop. Small extraction opportunity. Not blocking.
+
 ### Phase 10 watcher system (in progress)
 
-**Resolved by Phase 10-θ:** Nested function declarations inside ordinary blocks now parse, typecheck, and codegen correctly with proper hoisting. The architectural restriction in `Block.statements: Vec<Statement>` was removed by generalizing to `Block.items: Vec<BlockItem>` with `statements_iter()` helper for walkers that only need statement-level traversal.
-
-**Still pending — Phase 10-θ-fixup:** Nested watcher declarations. Phase 10-θ parses and typechecks them, but codegen fails when the watcher subscribes to a function-local variable. Root cause: watcher bodies emit at C file scope (needed for the notification call site), but codegen needs to know subscribed variable types at emission time. Variables declared inside a function body aren't in codegen's `variable_types` map at file-scope emission. Likely fix: query the type checker's per-function info from codegen, or defer watcher body emission until the enclosing function is being walked. The scope-bounded activation/deactivation hooks and the static initializer flip from `true` to `false` were also not implemented in 10-θ — tied to the same problem.
+**Resolved by Phase 10-θ and 10-θ-fixup:** Nested function and watcher declarations inside ordinary blocks now parse, typecheck, and codegen correctly. The `Block.statements: Vec<Statement>` architectural restriction was removed by generalizing to `Block.items: Vec<BlockItem>` with `statements_iter()` helper. Nested watchers have correct scope-bounded firing semantics: activation at declaration position, deactivation at scope exit. Subscription AST nodes carry resolved variable and alias types via `RefCell<Option<Type>>` fields, populated by the type checker and read by codegen during watcher body emission.
 
 **Still pending — Phase 10-δ:** Escape analysis and factory pattern. Watchers returned from functions (`let w = watcher(x) {...}; return w;`) require the reachability rule (subscribed variables must be reachable from the new scope) plus heap-allocated watcher state (so state can travel with the value rather than live as file-scope statics).
 
-**Still pending — Phase 10-ε:** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers (`changed`, `assigned`, `deep`, `added`, `removed`, `moved`); codegen currently rejects the four mutation-tracking modifiers. Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers. Probably the trickiest single piece of the watcher system. Could split into 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
+**Still pending — Phase 10-ε:** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen currently rejects the four mutation-tracking modifiers (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers. Probably the trickiest single piece of the watcher system.
 
-**Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables. Inter-process notification mechanism.
+**Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 
-**Still pending — string and composite type watching:** Phase 10-γ restricted watching to numeric and bool primitive types. Strings (because of heap-allocated reference vs value semantics) and composite types (objects, arrays, tuples) require their own equality semantics and a design pass.
+**Still pending — string and composite type watching:** Phase 10-γ restricted to numeric and bool primitives. Strings and composite types need their own equality semantics design.
 
-**Still pending — stealth blocks:** Spec'd in `hilow-design.md` (a block within which watcher firing is suppressed). Separate construct from the core watcher work.
+**Still pending — stealth blocks:** Spec'd construct for suppressing watcher firing within a code region.
 
 ### Other deferred behavior
 
