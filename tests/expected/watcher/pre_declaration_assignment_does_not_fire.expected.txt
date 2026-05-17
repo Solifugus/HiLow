@@ -1,0 +1,5 @@
+Setting y before watcher declaration
+Setting y after watcher declaration
+Y changed to 3
+Y changed to 4
+Function returned: 4

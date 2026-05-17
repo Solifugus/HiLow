@@ -1,0 +1,24 @@
+high program(args: [string]): i32 {
+    let x: i32 = 0
+
+    print("Setting x to 5 before if statement")
+    x = 5  // Should NOT fire (no watcher yet)
+
+    if (x > 0) {
+        print("Inside if branch")
+
+        watcher ifWatcher((changed)x) {
+            print(f"X changed to {x} inside if")
+        }
+
+        x = 10  // Should fire (watcher is active)
+        x = 15  // Should fire
+    } else {
+        print("In else branch (should not happen)")
+    }
+
+    print("After if statement")
+    x = 20  // Should NOT fire (watcher is ended)
+
+    return 0
+}

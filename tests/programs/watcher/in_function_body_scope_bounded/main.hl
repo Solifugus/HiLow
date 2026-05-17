@@ -1,0 +1,24 @@
+high program(args: [string]): i32 {
+    function testScope(): i32 {
+        let local: i32 = 0
+
+        watcher localWatcher((changed)local) {
+            print(f"Local changed to {local}")
+        }
+
+        local = 5   // Should fire
+        local = 10  // Should fire
+
+        return local
+    }
+
+    print("Calling testScope first time")
+    let result1 = testScope()
+
+    print("Calling testScope second time")
+    let result2 = testScope()
+
+    print(f"Results: {result1}, {result2}")
+
+    return 0
+}

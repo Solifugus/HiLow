@@ -1,0 +1,5 @@
+Setting x to 5 before if statement
+Inside if branch
+X changed to 10 inside if
+X changed to 15 inside if
+After if statement

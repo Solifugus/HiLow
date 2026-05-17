@@ -247,6 +247,8 @@ pub struct Subscription {
     pub modifier: SubscriptionModifier,  // defaults to Changed when no parens present
     pub alias: Option<String>,           // the `alias=` part if present
     pub position: Position,
+    pub resolved_var_type: RefCell<Option<Type>>,   // outer variable's type at type-check time
+    pub resolved_alias_type: RefCell<Option<Type>>, // alias's type (None if no alias)
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,0 +1,24 @@
+high program(args: [string]): i32 {
+    function testFunc(): i32 {
+        let y: i32 = 0
+
+        print("Setting y before watcher declaration")
+        y = 1   // Should NOT fire (no watcher yet)
+        y = 2   // Should NOT fire (no watcher yet)
+
+        watcher yWatcher((changed)y) {
+            print(f"Y changed to {y}")
+        }
+
+        print("Setting y after watcher declaration")
+        y = 3   // Should fire
+        y = 4   // Should fire
+
+        return y
+    }
+
+    let result = testFunc()
+    print(f"Function returned: {result}")
+
+    return 0
+}

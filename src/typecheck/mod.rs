@@ -536,6 +536,12 @@ impl TypeChecker {
         // 3. Validate modifier-type compatibility (per the rules above)
         let alias_type = self.validate_subscription_modifier(&sub.modifier, &outer_type, &sub.position);
 
+        // 3.1. Store resolved types in the subscription for codegen access
+        sub.resolved_var_type.borrow_mut().replace(outer_type.to_ast_type());
+        if let Some(ref at) = alias_type {
+            sub.resolved_alias_type.borrow_mut().replace(at.to_ast_type());
+        }
+
         // 4. Register the body-scope binding for the variable name (always the outer type)
         self.declare_variable(&sub.variable_name, outer_type.clone(), sub.position.clone());
 

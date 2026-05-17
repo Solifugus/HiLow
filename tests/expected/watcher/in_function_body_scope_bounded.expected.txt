@@ -1,0 +1,7 @@
+Calling testScope first time
+Local changed to 5
+Local changed to 10
+Calling testScope second time
+Local changed to 5
+Local changed to 10
+Results: 10, 10

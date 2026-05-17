@@ -580,6 +580,8 @@ impl Parser {
             modifier,
             alias,
             position: start_pos,
+            resolved_var_type: RefCell::new(None),
+            resolved_alias_type: RefCell::new(None),
         })
     }
 

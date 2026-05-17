@@ -616,25 +616,27 @@ impl CodeGenerator {
             if let BlockItem::Watcher(w) = item {
                 let watcher_id = self.watcher_counter;
                 self.watcher_counter += 1;
-                let _watcher_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                let func_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                self.register_watcher_subscriptions(w, func_name);
                 self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
             }
         }
 
-        // Phase 4: emit statements + scope-entry activations for any nested watchers
-        // Emit activation for each nested watcher declared in this block (scope entry)
+        // Phase 4: emit statements and watcher activations in source order
         for item in &block.items {
-            if let BlockItem::Watcher(w) = item {
-                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
-                self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
-                self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
-            }
-        }
-
-        // Emit statements in source order
-        for item in &block.items {
-            if let BlockItem::Statement(s) = item {
-                self.generate_statement(s, type_checker)?;
+            match item {
+                BlockItem::Statement(s) => {
+                    self.generate_statement(s, type_checker)?;
+                }
+                BlockItem::Watcher(w) => {
+                    // Activate the watcher when its declaration is reached
+                    let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                    self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
+                    self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+                }
+                BlockItem::Function(_) => {
+                    // Function already emitted in Phase 2
+                }
             }
         }
 
@@ -680,25 +682,27 @@ impl CodeGenerator {
             if let BlockItem::Watcher(w) = item {
                 let watcher_id = self.watcher_counter;
                 self.watcher_counter += 1;
-                let _watcher_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                let func_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                self.register_watcher_subscriptions(w, func_name);
                 self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
             }
         }
 
-        // Phase 4: emit statements + scope-entry activations for any nested watchers
-        // Emit activation for each nested watcher declared in this block (scope entry)
+        // Phase 4: emit statements and watcher activations in source order
         for item in &block.items {
-            if let BlockItem::Watcher(w) = item {
-                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
-                self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
-                self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
-            }
-        }
-
-        // Emit statements in source order
-        for item in &block.items {
-            if let BlockItem::Statement(s) = item {
-                self.generate_statement(s, type_checker)?;
+            match item {
+                BlockItem::Statement(s) => {
+                    self.generate_statement(s, type_checker)?;
+                }
+                BlockItem::Watcher(w) => {
+                    // Activate the watcher when its declaration is reached
+                    let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                    self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
+                    self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+                }
+                BlockItem::Function(_) => {
+                    // Function already emitted in Phase 2
+                }
             }
         }
 
@@ -2573,6 +2577,41 @@ impl CodeGenerator {
             Type::Unknown => "void".to_string(),
             Type::UnknownType => "HiLowUnknown*".to_string(), // Unknown type with reason and options
             Type::Optional(_) => "HiLowOptional*".to_string(), // T? types with wrapper struct (Phase 9b fix 3a)
+        }
+    }
+
+    fn ast_type_to_c(&self, hilow_type: &crate::ast::Type) -> String {
+        use crate::ast::{Type as AstType, PrimitiveType};
+        match hilow_type {
+            AstType::Primitive(PrimitiveType::I8) => "int8_t".to_string(),
+            AstType::Primitive(PrimitiveType::I16) => "int16_t".to_string(),
+            AstType::Primitive(PrimitiveType::I32) => "int32_t".to_string(),
+            AstType::Primitive(PrimitiveType::I64) => "int64_t".to_string(),
+            AstType::Primitive(PrimitiveType::I128) => "int64_t".to_string(), // Fall back to 64-bit
+            AstType::Primitive(PrimitiveType::U8) => "uint8_t".to_string(),
+            AstType::Primitive(PrimitiveType::U16) => "uint16_t".to_string(),
+            AstType::Primitive(PrimitiveType::U32) => "uint32_t".to_string(),
+            AstType::Primitive(PrimitiveType::U64) => "uint64_t".to_string(),
+            AstType::Primitive(PrimitiveType::U128) => "uint64_t".to_string(), // Fall back to 64-bit
+            AstType::Primitive(PrimitiveType::F32) => "float".to_string(),
+            AstType::Primitive(PrimitiveType::F64) => "double".to_string(),
+            AstType::Primitive(PrimitiveType::Bool) => "bool".to_string(),
+            AstType::Primitive(PrimitiveType::String) => "const char*".to_string(),
+            AstType::Primitive(PrimitiveType::Usize) => "size_t".to_string(),
+            AstType::Primitive(PrimitiveType::Isize) => "ssize_t".to_string(),
+            AstType::Primitive(PrimitiveType::Nothing) => "void*".to_string(),
+            AstType::Primitive(PrimitiveType::Time) => "HiLowTime".to_string(),
+            AstType::Primitive(PrimitiveType::Duration) => "HiLowDuration".to_string(),
+            AstType::Primitive(PrimitiveType::Money) => "HiLowMoney".to_string(),
+            AstType::Primitive(PrimitiveType::Unknown) => "HiLowUnknown*".to_string(),
+            AstType::MoneyOf(_) => "HiLowMoney".to_string(),
+            AstType::FixedArray(_, _) => "void*".to_string(), // Placeholder
+            AstType::DynamicArray(_) => "void*".to_string(), // Placeholder
+            AstType::Object(_) => "void*".to_string(), // Placeholder
+            AstType::Function(_, _) => "void*".to_string(), // Placeholder
+            AstType::Unknown => "void".to_string(),
+            AstType::Optional(_) => "HiLowOptional*".to_string(),
+            AstType::Tuple(_) => "void*".to_string(), // Placeholder
         }
     }
 
@@ -4900,23 +4939,36 @@ impl CodeGenerator {
         )
     }
 
+    fn is_ast_type_watchable_in_phase_10g(&self, ty: &crate::ast::Type) -> bool {
+        use crate::ast::{Type as AstType, PrimitiveType};
+        matches!(ty,
+            AstType::Primitive(PrimitiveType::I8) | AstType::Primitive(PrimitiveType::I16) |
+            AstType::Primitive(PrimitiveType::I32) | AstType::Primitive(PrimitiveType::I64) |
+            AstType::Primitive(PrimitiveType::I128) | AstType::Primitive(PrimitiveType::U8) |
+            AstType::Primitive(PrimitiveType::U16) | AstType::Primitive(PrimitiveType::U32) |
+            AstType::Primitive(PrimitiveType::U64) | AstType::Primitive(PrimitiveType::U128) |
+            AstType::Primitive(PrimitiveType::F32) | AstType::Primitive(PrimitiveType::F64) |
+            AstType::Primitive(PrimitiveType::Bool)
+        )
+    }
+
     /// Phase 10-γ: Generate a watcher body as a C function
     fn generate_watcher(&mut self, watcher: &Watcher, watcher_id: usize, type_checker: &TypeChecker) -> Result<String, CodegenError> {
         // Validate all subscribed variable types are allowed in Phase 10-γ
         for subscription in &watcher.subscriptions {
             let var_name = &subscription.variable_name;
-            // Get variable type from variable_types map (populated during first pass)
-            if let Some(var_type) = self.variable_types.get(var_name) {
-                if !self.is_type_watchable_in_phase_10g(var_type) {
+            // Get variable type from resolved type on subscription (populated by type checker)
+            if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                if !self.is_ast_type_watchable_in_phase_10g(var_type) {
                     return Err(CodegenError::UnsupportedFeature {
-                        feature: format!("watching value of type {}", var_type),
+                        feature: format!("watching value of type {:?}", var_type),
                         phase: "future phase (string and composite watching)".to_string(),
                     });
                 }
             } else {
                 return Err(CodegenError::UnsupportedFeature {
-                    feature: format!("watching undefined variable '{}'", var_name),
-                    phase: "Phase 10-γ variable resolution".to_string(),
+                    feature: format!("subscription to '{}' with no resolved type", var_name),
+                    phase: "internal error - type checker should have populated this".to_string(),
                 });
             }
         }
@@ -4952,9 +5004,9 @@ impl CodeGenerator {
             let var_name = &subscription.variable_name;
             let param_name = subscription.alias.as_ref().unwrap_or(var_name);
 
-            // Get the variable type from variable_types map
-            if let Some(var_type) = self.variable_types.get(var_name) {
-                let c_type = self.hilow_type_to_c(var_type);
+            // Get the variable type from resolved type on subscription
+            if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                let c_type = self.ast_type_to_c(var_type);
                 self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
             }
         }
@@ -4971,9 +5023,10 @@ impl CodeGenerator {
             let var_name = &subscription.variable_name;
             let param_name = subscription.alias.as_ref().unwrap_or(var_name);
 
-            // Get the variable type from variable_types map
-            if let Some(var_type) = old_variable_types.get(var_name) {
-                self.variable_types.insert(param_name.clone(), var_type.clone());
+            // Get the variable type from resolved type on subscription
+            if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                let types_var_type = Type::from_ast_type(ast_var_type);
+                self.variable_types.insert(param_name.clone(), types_var_type);
             }
         }
 

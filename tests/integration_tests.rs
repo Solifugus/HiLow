@@ -2612,5 +2612,62 @@ fn test_nested_function_in_block() {
     let _ = fs::remove_file(&executable);
 }
 
-// Additional Phase 10-θ tests for scope-bounded watcher activation are deferred
-// due to complex variable resolution requirements that may need future phase support.
+#[test]
+fn test_watcher_in_function_body_scope_bounded() {
+    let executable = compile_program("tests/programs/watcher/in_function_body_scope_bounded/main.hl")
+        .expect("Failed to compile watcher/in_function_body_scope_bounded/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher in_function_body_scope_bounded test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/in_function_body_scope_bounded.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_in_if_branch_scope_bounded() {
+    let executable = compile_program("tests/programs/watcher/in_if_branch_scope_bounded/main.hl")
+        .expect("Failed to compile watcher/in_if_branch_scope_bounded/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher in_if_branch_scope_bounded test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/in_if_branch_scope_bounded.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_pre_declaration_assignment_does_not_fire() {
+    let executable = compile_program("tests/programs/watcher/pre_declaration_assignment_does_not_fire/main.hl")
+        .expect("Failed to compile watcher/pre_declaration_assignment_does_not_fire/main.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher pre_declaration_assignment_does_not_fire test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/pre_declaration_assignment_does_not_fire.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
