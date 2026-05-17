@@ -594,8 +594,56 @@ impl CodeGenerator {
         // Set up environment for captured locals (Phase 7c-δ)
         self.setup_environment_for_block(block)?;
 
-        for statement in &block.statements {
-            self.generate_statement(statement, type_checker)?;
+        // Phase 1: register nested function signatures (for forward calls within block)
+        for item in &block.items {
+            if let BlockItem::Function(f) = item {
+                // Register f's signature in self.functions
+                let return_type = Type::from_ast_type(&f.return_type);
+                self.functions.insert(f.name.clone(), return_type);
+            }
+        }
+
+        // Phase 2: emit nested function bodies (as top-level C functions)
+        for item in &block.items {
+            if let BlockItem::Function(f) = item {
+                self.generate_function(f, type_checker)?;
+            }
+        }
+
+        // Phase 3: emit nested watcher bodies and helpers (as file-scope C)
+        // PLUS register their state and activation/deactivation hooks
+        for item in &block.items {
+            if let BlockItem::Watcher(w) = item {
+                let watcher_id = self.watcher_counter;
+                self.watcher_counter += 1;
+                let _watcher_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
+            }
+        }
+
+        // Phase 4: emit statements + scope-entry activations for any nested watchers
+        // Emit activation for each nested watcher declared in this block (scope entry)
+        for item in &block.items {
+            if let BlockItem::Watcher(w) = item {
+                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
+                self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+            }
+        }
+
+        // Emit statements in source order
+        for item in &block.items {
+            if let BlockItem::Statement(s) = item {
+                self.generate_statement(s, type_checker)?;
+            }
+        }
+
+        // Phase 5: emit scope-exit deactivations for all nested watchers in this block
+        for item in &block.items {
+            if let BlockItem::Watcher(w) = item {
+                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                self.output.push_str(&format!("  hilow_watcher_{}_end();\n", id));
+            }
         }
 
         // Phase 8a: Exit scope and emit cleanup
@@ -610,8 +658,56 @@ impl CodeGenerator {
         // Set up environment for captured locals (Phase 7c-δ)
         self.setup_environment_for_block_with_params(block, params)?;
 
-        for statement in &block.statements {
-            self.generate_statement(statement, type_checker)?;
+        // Phase 1: register nested function signatures (for forward calls within block)
+        for item in &block.items {
+            if let BlockItem::Function(f) = item {
+                // Register f's signature in self.functions
+                let return_type = Type::from_ast_type(&f.return_type);
+                self.functions.insert(f.name.clone(), return_type);
+            }
+        }
+
+        // Phase 2: emit nested function bodies (as top-level C functions)
+        for item in &block.items {
+            if let BlockItem::Function(f) = item {
+                self.generate_function(f, type_checker)?;
+            }
+        }
+
+        // Phase 3: emit nested watcher bodies and helpers (as file-scope C)
+        // PLUS register their state and activation/deactivation hooks
+        for item in &block.items {
+            if let BlockItem::Watcher(w) = item {
+                let watcher_id = self.watcher_counter;
+                self.watcher_counter += 1;
+                let _watcher_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
+            }
+        }
+
+        // Phase 4: emit statements + scope-entry activations for any nested watchers
+        // Emit activation for each nested watcher declared in this block (scope entry)
+        for item in &block.items {
+            if let BlockItem::Watcher(w) = item {
+                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
+                self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+            }
+        }
+
+        // Emit statements in source order
+        for item in &block.items {
+            if let BlockItem::Statement(s) = item {
+                self.generate_statement(s, type_checker)?;
+            }
+        }
+
+        // Phase 5: emit scope-exit deactivations for all nested watchers in this block
+        for item in &block.items {
+            if let BlockItem::Watcher(w) = item {
+                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                self.output.push_str(&format!("  hilow_watcher_{}_end();\n", id));
+            }
         }
 
         // Phase 8a: Exit scope and emit cleanup
@@ -657,8 +753,10 @@ impl CodeGenerator {
 
         // Now generate the deferred watchers
         for watcher in deferred_watchers {
-            let func_name = self.generate_watcher(watcher, self.watcher_counter, type_checker)?;
+            let watcher_id = self.watcher_counter;
+            let func_name = self.generate_watcher(watcher, watcher_id, type_checker)?;
             self.register_watcher_subscriptions(watcher, func_name);
+            self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
             self.watcher_counter += 1;
         }
 
@@ -684,7 +782,7 @@ impl CodeGenerator {
             })
             .collect();
         let synthetic_block = Block {
-            statements,
+            items: statements.into_iter().map(|s| BlockItem::Statement(s)).collect(),
             position: Position { line: 0, column: 0 }
         };
 
@@ -3951,7 +4049,7 @@ impl CodeGenerator {
         // Generate function body (not in main program context)
         let old_in_main_program = self.in_main_program;
         self.in_main_program = false;
-        for stmt in &func_expr.body.statements {
+        for stmt in func_expr.body.statements_iter() {
             self.generate_statement(stmt, type_checker)?;
         }
         self.in_main_program = old_in_main_program;
@@ -4227,7 +4325,10 @@ impl CodeGenerator {
         let mut captured_locals = HashMap::new();
 
         // Find all function expressions in this block and collect their captures
-        self.collect_captures_from_statements(&block.statements, &mut captured_locals);
+        let statements_vec: Vec<&Statement> = block.statements_iter().collect();
+        for stmt in statements_vec {
+            self.collect_captures_from_statement(stmt, &mut captured_locals);
+        }
 
         captured_locals
     }
@@ -4235,43 +4336,55 @@ impl CodeGenerator {
     /// Recursively collect captures from all function expressions in statements
     fn collect_captures_from_statements(&self, statements: &[Statement], captured_locals: &mut HashMap<String, Type>) {
         for stmt in statements {
-            match stmt {
-                Statement::Let(let_stmt) => {
-                    if let Some(init) = &let_stmt.initializer {
-                        self.collect_captures_from_expression(init, captured_locals);
-                    }
+            self.collect_captures_from_statement(stmt, captured_locals);
+        }
+    }
+
+    fn collect_captures_from_statement(&self, stmt: &Statement, captured_locals: &mut HashMap<String, Type>) {
+        match stmt {
+            Statement::Let(let_stmt) => {
+                if let Some(init) = &let_stmt.initializer {
+                    self.collect_captures_from_expression(init, captured_locals);
                 }
-                Statement::Return(return_stmt) => {
-                    if let Some(expr) = &return_stmt.value {
-                        self.collect_captures_from_expression(expr, captured_locals);
-                    }
-                }
-                Statement::If(if_stmt) => {
-                    self.collect_captures_from_expression(&if_stmt.condition, captured_locals);
-                    self.collect_captures_from_statements(&if_stmt.then_block.statements, captured_locals);
-                    if let Some(else_block) = &if_stmt.else_block {
-                        self.collect_captures_from_statements(&else_block.statements, captured_locals);
-                    }
-                }
-                Statement::While(while_stmt) => {
-                    self.collect_captures_from_expression(&while_stmt.condition, captured_locals);
-                    self.collect_captures_from_statements(&while_stmt.body.statements, captured_locals);
-                }
-                Statement::Loop(loop_stmt) => {
-                    self.collect_captures_from_statements(&loop_stmt.body.statements, captured_locals);
-                }
-                Statement::Assign(assign_stmt) => {
-                    self.collect_captures_from_expression(&assign_stmt.value, captured_locals);
-                }
-                Statement::ExprStatement(expr) => {
+            }
+            Statement::Return(return_stmt) => {
+                if let Some(expr) = &return_stmt.value {
                     self.collect_captures_from_expression(expr, captured_locals);
                 }
-                Statement::QualifiedOp(qualified_op) => {
-                    self.collect_captures_from_expression(&qualified_op.lhs, captured_locals);
-                    self.collect_captures_from_expression(&qualified_op.rhs, captured_locals);
-                }
-                _ => {} // Break, Continue don't contain expressions
             }
+            Statement::If(if_stmt) => {
+                self.collect_captures_from_expression(&if_stmt.condition, captured_locals);
+                for stmt in if_stmt.then_block.statements_iter() {
+                    self.collect_captures_from_statement(stmt, captured_locals);
+                }
+                if let Some(else_block) = &if_stmt.else_block {
+                    for stmt in else_block.statements_iter() {
+                        self.collect_captures_from_statement(stmt, captured_locals);
+                    }
+                }
+            }
+            Statement::While(while_stmt) => {
+                self.collect_captures_from_expression(&while_stmt.condition, captured_locals);
+                for stmt in while_stmt.body.statements_iter() {
+                    self.collect_captures_from_statement(stmt, captured_locals);
+                }
+            }
+            Statement::Loop(loop_stmt) => {
+                for stmt in loop_stmt.body.statements_iter() {
+                    self.collect_captures_from_statement(stmt, captured_locals);
+                }
+            }
+            Statement::Assign(assign_stmt) => {
+                self.collect_captures_from_expression(&assign_stmt.value, captured_locals);
+            }
+            Statement::ExprStatement(expr) => {
+                self.collect_captures_from_expression(expr, captured_locals);
+            }
+            Statement::QualifiedOp(qualified_op) => {
+                self.collect_captures_from_expression(&qualified_op.lhs, captured_locals);
+                self.collect_captures_from_expression(&qualified_op.rhs, captured_locals);
+            }
+            _ => {} // Break, Continue don't contain expressions
         }
     }
 
@@ -4287,7 +4400,9 @@ impl CodeGenerator {
                 }
 
                 // Also recursively check for nested function expressions in the body
-                self.collect_captures_from_statements(&func_expr.body.statements, captured_locals);
+                for stmt in func_expr.body.statements_iter() {
+                    self.collect_captures_from_statement(stmt, captured_locals);
+                }
             }
             Expression::BinaryOp(binary_op) => {
                 self.collect_captures_from_expression(&binary_op.lhs, captured_locals);
@@ -4333,7 +4448,9 @@ impl CodeGenerator {
                             self.collect_captures_from_expression(expr, captured_locals);
                         }
                         MatchBody::Block(block) => {
-                            self.collect_captures_from_statements(&block.statements, captured_locals);
+                            for stmt in block.statements_iter() {
+                                self.collect_captures_from_statement(stmt, captured_locals);
+                            }
                         }
                     }
                 }
@@ -4412,7 +4529,7 @@ impl CodeGenerator {
                 }
                 MatchBody::Block(block) => {
                     // Generate block statements with proper indentation
-                    for stmt in &block.statements {
+                    for stmt in block.statements_iter() {
                         self.output.push_str("        ");
                         self.generate_statement(stmt, type_checker)?;
                     }
@@ -4637,6 +4754,16 @@ impl CodeGenerator {
             // Mark that we're in the main program
             self.in_main_program = true;
             self.scope_depth = 1; // Main program starts at scope 1
+
+            // Phase 10-θ: Activate all program-body watchers at program start
+            for item in &body.items {
+                if let BlockItem::Watcher(w) = item {
+                    if let Some(&id) = self.watcher_name_to_id.get(&w.name) {
+                        self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
+                        self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+                    }
+                }
+            }
 
             // Generate program body statements
             self.generate_program_body_statements(body, type_checker)?;
@@ -4863,7 +4990,7 @@ impl CodeGenerator {
 
         // Phase 10-γ-fixup: Emit static state variables and helper functions
         self.watcher_bodies.push_str(&format!(
-            "static bool hilow_watcher_{}_active = true;\n", watcher_id
+            "static bool hilow_watcher_{}_active = false;\n", watcher_id
         ));
         self.watcher_bodies.push_str(&format!(
             "static bool hilow_watcher_{}_ended = false;\n\n", watcher_id

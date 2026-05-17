@@ -836,20 +836,54 @@ impl Parser {
         let start_token = self.expect_token(TokenKind::LeftBrace, "Expected '{'")?;
         let position = start_token.position;
 
-        let mut statements = Vec::new();
+        let mut items = Vec::new();
 
         // Skip any leading semicolons
         self.skip_semicolons();
 
         while !self.check(&TokenKind::RightBrace) && !self.is_at_end() {
-            statements.push(self.parse_statement()?);
-            // Skip any trailing semicolons after each statement
+            match &self.peek()?.kind {
+                TokenKind::Function => {
+                    // Parse nested function definition (default to High mode for now)
+                    let function = self.parse_function_signature(Mode::High)?;
+                    items.push(BlockItem::Function(function));
+                }
+                TokenKind::Watcher => {
+                    // Parse nested watcher definition (default to High mode for now)
+                    let watcher = self.parse_watcher_signature(Mode::High)?;
+                    items.push(BlockItem::Watcher(watcher));
+                }
+                TokenKind::High | TokenKind::Low => {
+                    // Peek ahead to see if it's followed by function or watcher
+                    match self.peek_ahead(1)?.kind {
+                        TokenKind::Function => {
+                            let function = self.parse_function_signature(Mode::High)?;
+                            items.push(BlockItem::Function(function));
+                        }
+                        TokenKind::Watcher => {
+                            let watcher = self.parse_watcher_signature(Mode::High)?;
+                            items.push(BlockItem::Watcher(watcher));
+                        }
+                        _ => {
+                            // Not a function or watcher, treat as statement
+                            let statement = self.parse_statement()?;
+                            items.push(BlockItem::Statement(statement));
+                        }
+                    }
+                }
+                _ => {
+                    // Parse statement
+                    let statement = self.parse_statement()?;
+                    items.push(BlockItem::Statement(statement));
+                }
+            }
+            // Skip any trailing semicolons after each item
             self.skip_semicolons();
         }
 
         self.expect_token(TokenKind::RightBrace, "Expected '}'")?;
 
-        Ok(Block { statements, position })
+        Ok(Block { items, position })
     }
 
     fn parse_program_body(&mut self, mode: Mode) -> Result<ProgramBody, ParseError> {
@@ -1006,7 +1040,7 @@ impl Parser {
                 let if_stmt = self.parse_if_statement()?;
                 if let Statement::If(if_stmt) = if_stmt {
                     Some(Block {
-                        statements: vec![Statement::If(if_stmt)],
+                        items: vec![BlockItem::Statement(Statement::If(if_stmt))],
                         position: start_pos.clone(),
                     })
                 } else {

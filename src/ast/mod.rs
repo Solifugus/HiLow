@@ -347,8 +347,19 @@ pub enum BlockItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
-    pub statements: Vec<Statement>,
+    pub items: Vec<BlockItem>,
     pub position: Position,
+}
+
+impl Block {
+    /// Iterate over only the Statement items, skipping nested declarations.
+    /// Used by walkers that only care about runtime statements (capture analysis,
+    /// return checking, etc.).
+    pub fn statements_iter(&self) -> impl Iterator<Item = &Statement> {
+        self.items.iter().filter_map(|item| {
+            if let BlockItem::Statement(s) = item { Some(s) } else { None }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

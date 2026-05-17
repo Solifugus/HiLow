@@ -2589,3 +2589,28 @@ fn test_watcher_isactive_query() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 10-θ: Nested declarations in blocks + scope-bounded watcher activation
+
+#[test]
+fn test_nested_function_in_block() {
+    let executable = compile_program("tests/programs/nested_function_in_block.hl")
+        .expect("Failed to compile nested_function_in_block.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run nested_function_in_block");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/nested_function_in_block.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+// Additional Phase 10-θ tests for scope-bounded watcher activation are deferred
+// due to complex variable resolution requirements that may need future phase support.

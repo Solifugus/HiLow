@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-γ-fixup — Watcher Methods**
+**Current phase: Phase 10-θ — Nested Declarations in Blocks + Scope-Bounded Watcher Activation**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

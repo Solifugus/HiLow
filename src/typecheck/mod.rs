@@ -455,9 +455,34 @@ impl TypeChecker {
         // Enter block scope
         self.enter_scope();
 
-        // Check each statement
-        for statement in &block.statements {
-            self.check_statement(statement);
+        // Phase 1: register all nested function and watcher names in scope
+        // (so they can refer to each other forward and not collide with let bindings)
+        for item in &block.items {
+            match item {
+                BlockItem::Function(function) => {
+                    // Add function to symbol table with full function type for call-site argument checking
+                    let param_types: Vec<Type> = function.params.iter()
+                        .map(|p| Type::from_ast_type(&p.ty))
+                        .collect();
+                    let return_type = Type::from_ast_type(&function.return_type);
+                    let func_type = Type::Function(param_types, Box::new(return_type));
+                    self.declare_variable(&function.name, func_type, function.position.clone());
+                }
+                BlockItem::Watcher(watcher) => {
+                    // Register the watcher's name in scope for method calls
+                    self.declare_variable(&watcher.name, Type::Watcher, watcher.position.clone());
+                }
+                BlockItem::Statement(_) => { /* skip */ }
+            }
+        }
+
+        // Phase 2: check each item in source order
+        for item in &block.items {
+            match item {
+                BlockItem::Statement(s) => self.check_statement(s),
+                BlockItem::Function(f) => self.check_function(f),
+                BlockItem::Watcher(w) => self.check_watcher(w),
+            }
         }
 
         // Exit block scope
@@ -576,7 +601,7 @@ impl TypeChecker {
     }
 
     fn check_no_return_with_value(&mut self, block: &Block, error_position: Position) {
-        for statement in &block.statements {
+        for statement in block.statements_iter() {
             self.check_no_return_with_value_statement(statement, &error_position);
         }
     }
@@ -1884,8 +1909,10 @@ impl TypeChecker {
     }
 
     fn write_refinements_to_block(&self, block: &mut Block) {
-        for stmt in &mut block.statements {
-            self.write_refinements_to_statement(stmt);
+        for item in &mut block.items {
+            if let BlockItem::Statement(stmt) = item {
+                self.write_refinements_to_statement(stmt);
+            }
         }
     }
 
@@ -2142,7 +2169,8 @@ impl TypeChecker {
 
     /// Check if a block always exits (ends with return, break, or continue)
     fn block_always_exits(&self, block: &Block) -> bool {
-        if let Some(last_stmt) = block.statements.last() {
+        // Find the last statement (skipping nested function/watcher declarations)
+        if let Some(last_stmt) = block.statements_iter().last() {
             matches!(last_stmt,
                 Statement::Return(_) |
                 Statement::Break(_) |
@@ -2608,7 +2636,7 @@ impl TypeChecker {
 
         // Phase 7c-γ: Collect capture metadata before checking for errors
         let mut captures = Vec::new();
-        for statement in &func_expr.body.statements {
+        for statement in func_expr.body.statements_iter() {
             self.collect_captures_in_statement(statement, outer_scope_depth, &mut captures);
         }
 
@@ -2623,7 +2651,7 @@ impl TypeChecker {
         // Phase 7c-δ: Captures are now supported!
 
         // Type-check the function body
-        for statement in &func_expr.body.statements {
+        for statement in func_expr.body.statements_iter() {
             self.check_statement(statement);
         }
 
@@ -2666,29 +2694,29 @@ impl TypeChecker {
             }
             Statement::If(if_stmt) => {
                 self.check_for_captures_in_expression(&if_stmt.condition, outer_scope_depth);
-                for stmt in &if_stmt.then_block.statements {
+                for stmt in if_stmt.then_block.statements_iter() {
                     self.check_for_captures_in_statement(stmt, outer_scope_depth);
                 }
                 if let Some(else_block) = &if_stmt.else_block {
-                    for stmt in &else_block.statements {
+                    for stmt in else_block.statements_iter() {
                         self.check_for_captures_in_statement(stmt, outer_scope_depth);
                     }
                 }
             }
             Statement::While(while_stmt) => {
                 self.check_for_captures_in_expression(&while_stmt.condition, outer_scope_depth);
-                for stmt in &while_stmt.body.statements {
+                for stmt in while_stmt.body.statements_iter() {
                     self.check_for_captures_in_statement(stmt, outer_scope_depth);
                 }
             }
             Statement::Loop(loop_stmt) => {
-                for stmt in &loop_stmt.body.statements {
+                for stmt in loop_stmt.body.statements_iter() {
                     self.check_for_captures_in_statement(stmt, outer_scope_depth);
                 }
             }
             Statement::ForIn(for_in_stmt) => {
                 self.check_for_captures_in_expression(&for_in_stmt.iterable, outer_scope_depth);
-                for stmt in &for_in_stmt.body.statements {
+                for stmt in for_in_stmt.body.statements_iter() {
                     self.check_for_captures_in_statement(stmt, outer_scope_depth);
                 }
             }
@@ -2781,7 +2809,7 @@ impl TypeChecker {
                             self.check_for_captures_in_expression(expr, outer_scope_depth);
                         }
                         MatchBody::Block(block) => {
-                            for stmt in &block.statements {
+                            for stmt in block.statements_iter() {
                                 self.check_for_captures_in_statement(stmt, outer_scope_depth);
                             }
                         }
@@ -2847,29 +2875,29 @@ impl TypeChecker {
             }
             Statement::If(if_stmt) => {
                 self.collect_captures_in_expression(&if_stmt.condition, outer_scope_depth, captures);
-                for stmt in &if_stmt.then_block.statements {
+                for stmt in if_stmt.then_block.statements_iter() {
                     self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }
                 if let Some(else_block) = &if_stmt.else_block {
-                    for stmt in &else_block.statements {
+                    for stmt in else_block.statements_iter() {
                         self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                     }
                 }
             }
             Statement::While(while_stmt) => {
                 self.collect_captures_in_expression(&while_stmt.condition, outer_scope_depth, captures);
-                for stmt in &while_stmt.body.statements {
+                for stmt in while_stmt.body.statements_iter() {
                     self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }
             }
             Statement::Loop(loop_stmt) => {
-                for stmt in &loop_stmt.body.statements {
+                for stmt in loop_stmt.body.statements_iter() {
                     self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }
             }
             Statement::ForIn(for_in_stmt) => {
                 self.collect_captures_in_expression(&for_in_stmt.iterable, outer_scope_depth, captures);
-                for stmt in &for_in_stmt.body.statements {
+                for stmt in for_in_stmt.body.statements_iter() {
                     self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }
             }
@@ -2962,7 +2990,7 @@ impl TypeChecker {
                             self.collect_captures_in_expression(expr, outer_scope_depth, captures);
                         }
                         MatchBody::Block(block) => {
-                            for stmt in &block.statements {
+                            for stmt in block.statements_iter() {
                                 self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                             }
                         }

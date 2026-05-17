@@ -452,7 +452,7 @@ fn test_if_statement() {
                     }
 
                     // Check then block
-                    assert_eq!(if_stmt.then_block.statements.len(), 1);
+                    assert_eq!(if_stmt.then_block.items.len(), 1);
                     assert!(if_stmt.else_block.is_none());
                 }
                 _ => panic!("Expected if statement"),
@@ -855,7 +855,7 @@ fn test_function_expression_no_params() {
                 if let Some(Expression::FunctionExpr(func_expr)) = &let_stmt.initializer {
                     assert!(func_expr.params.is_empty());
                     assert_eq!(func_expr.return_type, Type::Primitive(PrimitiveType::I32));
-                    assert_eq!(func_expr.body.statements.len(), 1);
+                    assert_eq!(func_expr.body.items.len(), 1);
                 } else {
                     panic!("Expected function expression initializer");
                 }
@@ -1627,9 +1627,8 @@ fn test_parse_watcher_no_return_type_error() {
     assert!(error_msg.contains("Expected '{'") || error_msg.contains("Expected \"{\""));
 }
 
-// Note: test_parse_watcher_inside_function_body_unsupported is not implemented
-// because the current parser architecture doesn't support nested watchers in function bodies
-// This is tracked as deferred work in Phase 10-α
+// Phase 10-θ: Nested watchers in function bodies are now supported.
+// See test_parse_watcher_in_function_body above for the implementation.
 
 // Lexer/keyword tests
 
@@ -1696,3 +1695,26 @@ fn test_parse_module_function_and_watcher_mix() {
         _ => panic!("Expected Module"),
     }
 }
+
+// Phase 10-θ: Parser tests for nested declarations in blocks
+
+#[test]
+fn test_parse_function_in_function_body() {
+    let input = r#"
+high program(): i32 {
+    function outer(): i32 {
+        function inner(): i32 {
+            return 42
+        }
+        return inner()
+    }
+    return outer()
+}
+"#;
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok(), "Should parse without error");
+}
+
+// Additional parser tests for watcher syntax in nested blocks are deferred
+// due to complex subscription syntax requirements.

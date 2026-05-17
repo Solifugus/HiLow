@@ -1,0 +1,11 @@
+high program(): i32 {
+    function outer(x: i32): i32 {
+        function inner(y: i32): i32 {
+            return y * 2
+        }
+        return inner(x) + 1
+    }
+    let result = outer(5)
+    print(result)
+    return 0
+}
