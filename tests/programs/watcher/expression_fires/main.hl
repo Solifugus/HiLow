@@ -1,0 +1,14 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+    let w = watcher(counter) {
+        print(counter)
+    }
+
+    // Test that watcher fires on change
+    counter = 1
+    counter = 2
+    counter = 2  // Same value - should not fire (changed modifier)
+    counter = 3
+
+    return 0
+}

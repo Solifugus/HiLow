@@ -1,0 +1,8 @@
+declaration:
+5
+heap:
+5
+declaration:
+10
+heap:
+10

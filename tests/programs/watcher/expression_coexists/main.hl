@@ -1,0 +1,19 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+
+    watcher onCounter(counter) {
+        print("declaration:")
+        print(counter)
+    }
+
+    let w = watcher(counter) {
+        print("heap:")
+        print(counter)
+    }
+
+    // Both watchers should fire on assignment
+    counter = 5
+    counter = 10
+
+    return 0
+}

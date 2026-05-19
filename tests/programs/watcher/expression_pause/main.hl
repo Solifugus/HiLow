@@ -1,0 +1,24 @@
+high program(args: [string]): i32 {
+    let counter: i32 = 0
+    let w = watcher(counter) {
+        print(counter)
+    }
+
+    // Should fire
+    counter = 1
+
+    // Pause the watcher
+    w.pause()
+
+    // Should not fire (paused)
+    counter = 2
+    counter = 3
+
+    // Resume the watcher
+    w.resume()
+
+    // Should fire again
+    counter = 4
+
+    return 0
+}
