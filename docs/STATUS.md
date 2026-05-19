@@ -6,10 +6,10 @@
 
 ## Current state
 
-**Phase:** Phase 10-θ-fixup — Nested Watcher Codegen
-**Status:** Complete. Nested watcher declarations now compile and run correctly with scope-bounded activation. Phase 10-δ next (escape analysis and factory pattern for watcher expressions).
+**Phase:** Phase 10-θ-fixup — Nested Watcher Codegen (Phase 10-δ-α attempt reverted)
+**Status:** Phase 10-θ-fixup remains the last successfully landed phase. Phase 10-δ-α was attempted and reverted before commit due to broken notification site implementation. Next attempt should split 10-δ into three sub-phases: (α) heap allocation + methods only, no notification; (β) notification path for heap watchers; (γ) escape analysis + reachability rule.
 **Branch:** main
-**Last commit:** Phase 10-θ-fixup: nested watcher codegen with scope-bounded activation
+**Last commit:** docs: Phase 10-θ-fixup session notes and dead-code placement note
 
 **Tests:** 135 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
 
@@ -98,16 +98,27 @@ This section documents recurring patterns that have surfaced during phase work. 
 
 **Mitigation:** Treat the persistent record (STATUS.md, commit body, source) as the canonical verification location. Chat debrief is "claims"; persistent record is "checks." When prompts require literal output, that requirement is satisfied if it appears in the persistent record even when the chat is terse. Spot-verification still warranted but tone is different — not chasing fabrication, just confirming the literal output exists somewhere durable.
 
-### Silent scope deferral under extended baked time
+### Silent failure under extended baked time
 
-**Pattern:** When a phase's work exceeds typical duration substantially, Claude Code may quietly defer the harder half of the prescribed scope and commit the easier half under the original phase name. The debrief uses evasive phrasing ("complex scenarios deferred for future refinement") rather than naming what's missing.
+**Pattern:** When a phase's work exceeds typical duration substantially, Claude Code may quietly defer the harder pieces of the prescribed scope, or ship broken implementations as complete. The debrief uses evasive phrasing ("complex scenarios deferred for future refinement", "timing issues can be refined in a follow-up session", "core functionality is implemented and working") rather than naming what's missing or broken.
 
 **Occurrences:**
-- **Phase 10-θ** (2026-05-17): 25 minutes baked time (vs. 11-16 min for comparable phases). The structural change (Block.items + BlockItem dispatch + nested function support) landed. The watcher half — scope-bounded activation, the work that motivated the second piece of the phase — was silently deferred. Debrief used the phrase "Complex watcher scenarios deferred due to variable resolution dependencies" without disclosing this was the prescribed deliverable. The commit message and phase name still claimed both halves shipped.
 
-**Diagnostic signal:** Phase duration substantially exceeds typical (>1.5x). Debrief contains soft-deferral phrasing about "complex scenarios" or "future phase refinement" of items that were prescribed deliverables of the current phase. Integration test count comes in below the prescribed range.
+- **Phase 10-θ** (2026-05-17 morning): 25 minutes baked time (vs. 11-16 min for comparable phases). The structural change (Block.items + BlockItem dispatch + nested function support) landed. The watcher half — scope-bounded activation, the work that motivated the second piece of the phase — was silently deferred. Debrief used "Complex watcher scenarios deferred due to variable resolution dependencies" without disclosing this was the prescribed deliverable. The commit landed claiming both halves shipped.
 
-**Mitigation:** Treat extended baked time as a STOP-condition trigger — when work runs significantly long, the prompt-level requirement to surface blockers (rather than silently narrowing scope) should fire. Spot-verification of test counts against prescribed ranges catches this: if the prompt said "+3-4 integration tests" and the actual delta is +1, the phase didn't deliver what it claimed.
+- **Phase 10-δ-α attempt** (2026-05-17 late afternoon): 17 minutes baked time. The prompt explicitly named "notification site extension causes conflicts with existing declaration-form notification" as a STOP condition. The condition triggered (duplicate firing on every assignment, phantom firing before any assignment, three regressed `time` tests). The phase did not stop. Debrief presented the work as complete with phrases like "core functionality is implemented and working" and "functionality verified" despite 7 test failures. Caught by spot-verification before commit; full revert performed.
+
+**Diagnostic signal:** Phase duration substantially exceeds typical (>1.5x). Debrief contains soft-deferral or completion-claim phrasing about items that were prescribed deliverables or that the prompt's STOP conditions named explicitly. Integration test count comes in below the prescribed range, or test counts regress in suites that should be untouched.
+
+**Mitigation:**
+
+1. **Prompt-level STOP conditions don't reliably trigger.** Naming a failure mode as a STOP condition in the prompt is insufficient. The same recipe — "if X happens, STOP and surface the issue" — appeared in multiple prompts and was not honored in either of these cases.
+
+2. **Spot-verification before commit is the reliable check.** When the debrief claims completion, run the verification ritual oneself and inspect the test output literally. Both occurrences were caught this way; one led to a partial-completion commit with honest documentation (10-θ), one led to a clean revert (10-δ-α attempt).
+
+3. **Smaller phases reduce the failure surface.** The Phase 10-δ-α attempt bundled seven distinct subsystem changes (runtime, codegen for expression, method dispatch, notification, ownership tracking, escape detection, tests). The predicted friction point (parallel notification paths) hit during the most fatigued part of the work. Splitting into three sub-phases (heap-allocation-only, notification, escape-analysis) is the recovery approach. Each phase should fit in 10-15 min of focused work to stay below the extended-baked-time threshold.
+
+4. **Revert is honest; partial-commit-with-disclosure is also honest.** Both Phase 10-θ (partial-commit-with-disclosure) and Phase 10-δ-α attempt (clean revert) are appropriate responses to the same pattern, depending on whether the work that landed is genuinely useful in isolation. 10-θ's structural change was useful even without the watcher half; 10-δ-α's broken notification site was not useful in any form.
 
 ### Tests with no assertions
 

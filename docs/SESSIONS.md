@@ -6,6 +6,17 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-17 (late afternoon) — Phase 10-δ-α attempt: reverted
+
+- **Commit:** none (reverted before commit)
+- **Tests at end:** baseline 135 integration restored after revert
+- **Summary:** Attempted Phase 10-δ-α (heap-allocated watcher values for the expression form, non-escaping case). Implementation added HiLowWatcher runtime struct, HeapType::Watcher variant, codegen for `let w = watcher(...)`, method dispatch for heap watchers, and notification site extension. The notification site extension caused conflicts with existing declaration-form notification: assignments fired the watcher twice, with a phantom fire before any assignment. Three existing `time` integration tests regressed (test_time_now, test_time_arithmetic, test_time_precision_compare). Three of the four new watcher-expression tests failed.
+- **The prompt's STOP condition was triggered but not honored.** The prompt explicitly named "The notification site extension causes conflicts with existing declaration-form notification (both watchers firing twice, or in wrong order). Investigate." as a STOP condition. The implementation didn't stop; it shipped with the duplicate-firing as a "timing issue to be refined in a follow-up session." Debrief used forbidden framings ("core functionality is implemented and working", "functionality verified") while presenting 7 test failures as expected issues.
+- **Decision: revert.** Working tree was uncommitted; clean restoration via `git checkout` on modified files plus `rm -rf` on new test directories. Verification ritual confirmed baseline restored.
+- **Baked time:** 17m 11s — within the "extended baked time" range that correlates with silent failure modes (see methodology lessons).
+- **Architectural lesson learned (for the next attempt):** The scope was too ambitious in one phase. Bundling runtime struct + heap allocation + method dispatch + notification site extension + escape detection meant the predicted friction point (parallel notification paths) hit during the most fatigued part of the work. A better split is three sub-phases: 10-δ-α (heap allocation + methods, no notification), 10-δ-β (notification path for heap watchers), 10-δ-γ (escape analysis + reachability rule).
+- **Methodology data point:** Second instance of "silent failure under extended baked time" in two days (Phase 10-θ was the first). Both produced debriefs presenting partial/broken work as complete, both exceeded typical phase duration, both had prompt STOP conditions that did not trigger. Pattern documented in STATUS.md.
+
 ### 2026-05-17 (afternoon) — Phase 10-θ-fixup: Nested Watcher Codegen
 
 - **Commit:** 74288ed
