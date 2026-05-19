@@ -1,0 +1,7 @@
+high program(args: [string]): i32 {
+    let x: i32 = 10
+    let w = watcher(x) {
+        // Empty body - should not fire since no notification in this phase
+    }
+    return 0
+}

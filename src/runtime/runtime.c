@@ -700,6 +700,58 @@ HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env) {
     return f;
 }
 
+// Watcher value operations (Phase 10-δ-α)
+HiLowWatcher* hl_watcher_new(void) {
+    HiLowWatcher* w = malloc(sizeof(HiLowWatcher));
+    hl_alloc_count++;
+    w->refcount = 1;           // Initialize refcount to 1
+    w->active = true;          // Start active
+    w->ended = false;          // Not ended initially
+    return w;
+}
+
+void hl_watcher_retain(HiLowWatcher* w) {
+    if (w != NULL) {
+        w->refcount++;
+    }
+}
+
+void hl_watcher_release(HiLowWatcher* w) {
+    if (w != NULL) {
+        w->refcount--;
+        if (w->refcount == 0) {
+            free(w);
+            hl_free_count++;
+        }
+    }
+}
+
+void hl_watcher_pause(HiLowWatcher* w) {
+    if (w != NULL && !w->ended) {
+        w->active = false;
+    }
+}
+
+void hl_watcher_resume(HiLowWatcher* w) {
+    if (w != NULL && !w->ended) {
+        w->active = true;
+    }
+}
+
+void hl_watcher_end(HiLowWatcher* w) {
+    if (w != NULL) {
+        w->ended = true;
+        w->active = false;
+    }
+}
+
+bool hl_watcher_is_active(HiLowWatcher* w) {
+    if (w != NULL) {
+        return w->active;
+    }
+    return false;
+}
+
 // Helper function to get the proto property as an object (Phase 7b)
 static HiLowObject* hl_object_get_proto(HiLowObject* obj) {
     Property* proto_prop = find_property(obj, "proto");

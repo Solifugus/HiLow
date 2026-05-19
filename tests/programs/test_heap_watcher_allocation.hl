@@ -1,0 +1,8 @@
+high program(args: [string]): i32 {
+    let x: i32 = 42
+    let w = watcher(x) {
+        print("body should not fire")
+    }
+    print("allocation test complete")
+    return 0
+}

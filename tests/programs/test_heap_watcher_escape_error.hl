@@ -1,0 +1,10 @@
+high program(args: [string]): i32 {
+    function makeWatcher(x: i32): nothing {
+        return watcher(x) {
+            print("should not compile")
+        }
+    }
+
+    let w = makeWatcher(5)
+    return 0
+}

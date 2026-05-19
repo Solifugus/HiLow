@@ -26,6 +26,7 @@ pub enum HeapType {
     FStringBuffer,  // char* from f-string
     Unknown,        // HiLowUnknown*
     Optional,       // T? - may contain unknown or success value
+    Watcher,        // HiLowWatcher*
 }
 
 /// Context for function expression generation to detect escaping closures (Phase 8a)
@@ -957,6 +958,9 @@ impl CodeGenerator {
                 Expression::Unknown(_) => {
                     self.track_heap_owner(name, HeapType::Unknown);
                 }
+                Expression::WatcherExpr(_) => {
+                    self.track_heap_owner(name, HeapType::Watcher);
+                }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
                     let return_type = if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
@@ -1778,11 +1782,12 @@ impl CodeGenerator {
                 self.generate_expression(tuple_expr, type_checker)?;
                 self.output.push_str(&format!("._{}", index));
             }
-            Expression::WatcherExpr(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "watcher expressions".to_string(),
-                    phase: "Phase 10-γ".to_string(),
-                });
+            Expression::WatcherExpr(watcher_expr) => {
+                // Phase 10-δ-α: Emit heap watcher creation (no notification yet)
+                self.output.push_str("hl_watcher_new()");
+
+                // TODO Phase 10-δ-β: Emit watcher body function and set up notification
+                // For now, create empty heap watcher struct only
             }
         }
         Ok(())
@@ -2263,7 +2268,7 @@ impl CodeGenerator {
                     return self.generate_member_function_call(call, member_access, type_checker);
                 }
 
-                // Phase 10-γ-fixup: Watcher method calls
+                // Phase 10-γ-fixup: Declaration-form watcher method calls
                 if let Some(watcher_id) = self.watcher_name_to_id.get(name).copied() {
                     match member_access.member.as_str() {
                         "pause" => {
@@ -2280,6 +2285,29 @@ impl CodeGenerator {
                         }
                         "isActive" => {
                             self.output.push_str(&format!("hilow_watcher_{}_isActive()", watcher_id));
+                            return Ok(());
+                        }
+                        _ => unreachable!("type checker should have caught invalid watcher method"),
+                    }
+                }
+
+                // Phase 10-δ-α: Expression-form heap watcher method calls
+                if let Some(Type::Watcher) = self.variable_types.get(name) {
+                    match member_access.member.as_str() {
+                        "pause" => {
+                            self.output.push_str(&format!("hl_watcher_pause({})", name));
+                            return Ok(());
+                        }
+                        "resume" => {
+                            self.output.push_str(&format!("hl_watcher_resume({})", name));
+                            return Ok(());
+                        }
+                        "end" => {
+                            self.output.push_str(&format!("hl_watcher_end({})", name));
+                            return Ok(());
+                        }
+                        "isActive" => {
+                            self.output.push_str(&format!("hl_watcher_is_active({})", name));
                             return Ok(());
                         }
                         _ => unreachable!("type checker should have caught invalid watcher method"),
@@ -2571,7 +2599,7 @@ impl CodeGenerator {
             Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
             Type::Object(_) => "HiLowObject*".to_string(),
             Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
-            Type::Watcher => "void*".to_string(), // Placeholder - codegen for watchers comes in Phase 10-γ
+            Type::Watcher => "HiLowWatcher*".to_string(), // Heap-allocated watcher value (Phase 10-δ-α)
             Type::Tuple(element_types) => self.get_tuple_type_name(element_types),
             Type::ObjectIterValue => "void*".to_string(), // Runtime-dispatched iteration value
             Type::Unknown => "void".to_string(),
@@ -3245,6 +3273,7 @@ impl CodeGenerator {
                     Type::Unknown
                 }
             }
+            Expression::WatcherExpr(_) => Type::Watcher,
             _ => Type::Unknown
         }
     }
@@ -4716,6 +4745,9 @@ impl CodeGenerator {
                         // Release optional wrapper struct - handles inner unknown release automatically
                         self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
                     }
+                    HeapType::Watcher => {
+                        self.output.push_str(&format!("    hl_watcher_release({});\n", c_var_name));
+                    }
                 }
             }
         }
@@ -4761,6 +4793,9 @@ impl CodeGenerator {
                     HeapType::Optional => {
                         // Release optional wrapper struct - handles inner unknown release automatically
                         self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
+                    }
+                    HeapType::Watcher => {
+                        self.output.push_str(&format!("    hl_watcher_release({});\n", c_var_name));
                     }
                 }
             }

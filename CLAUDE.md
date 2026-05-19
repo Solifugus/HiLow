@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-θ-fixup — Nested Watcher Codegen + Scope-Bounded Activation**
+**Current phase: Phase 10-δ-α (take 2) — Heap-Allocated Watcher Values Without Notification**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

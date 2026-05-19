@@ -1,0 +1,5 @@
+initial: active
+after pause: inactive
+after resume: active
+after end: inactive
+resume after end: still inactive

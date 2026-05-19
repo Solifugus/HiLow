@@ -867,6 +867,15 @@ impl TypeChecker {
 
     fn check_return_statement(&mut self, return_stmt: &ReturnStmt) {
         if let Some(value) = &return_stmt.value {
+            // Phase 10-δ-α: Check for escaping watcher expressions
+            if let Expression::WatcherExpr(_) = value {
+                self.errors.push(TypeError::new(
+                    "watcher expressions cannot escape their declaration scope; the factory pattern is Phase 10-δ-γ",
+                    return_stmt.position.clone()
+                ));
+                return;
+            }
+
             self.check_expression(value);
         }
         // TODO: Check that return type matches function return type

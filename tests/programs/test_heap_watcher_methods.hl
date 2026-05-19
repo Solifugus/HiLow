@@ -1,0 +1,37 @@
+high program(args: [string]): i32 {
+    let x: i32 = 5
+    let w = watcher(x) {
+        print("should not fire")
+    }
+
+    // Test initial state - should be active
+    if (w.isActive()) {
+        print("initial: active")
+    }
+
+    // Test pause
+    w.pause()
+    if (not w.isActive()) {
+        print("after pause: inactive")
+    }
+
+    // Test resume
+    w.resume()
+    if (w.isActive()) {
+        print("after resume: active")
+    }
+
+    // Test end
+    w.end()
+    if (not w.isActive()) {
+        print("after end: inactive")
+    }
+
+    // Test resume after end (should stay inactive)
+    w.resume()
+    if (not w.isActive()) {
+        print("resume after end: still inactive")
+    }
+
+    return 0
+}

@@ -2671,3 +2671,79 @@ fn test_watcher_pre_declaration_assignment_does_not_fire() {
     // Clean up
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 10-δ-α: Heap-allocated watcher tests
+
+#[test]
+fn test_heap_watcher_allocation_integration() {
+    let executable = compile_program("tests/programs/test_heap_watcher_allocation.hl")
+        .expect("Failed to compile test_heap_watcher_allocation.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run heap watcher allocation test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/test_heap_watcher_allocation.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_heap_watcher_methods_integration() {
+    let executable = compile_program("tests/programs/test_heap_watcher_methods.hl")
+        .expect("Failed to compile test_heap_watcher_methods.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run heap watcher methods test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/test_heap_watcher_methods.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_heap_watcher_cleanup_integration() {
+    let executable = compile_program("tests/programs/test_heap_watcher_cleanup.hl")
+        .expect("Failed to compile test_heap_watcher_cleanup.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run heap watcher cleanup test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/test_heap_watcher_cleanup.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_heap_watcher_escape_error_integration() {
+    let result = compile_program("tests/programs/test_heap_watcher_escape_error.hl");
+
+    // This should fail to compile
+    assert!(result.is_err(), "Expected compilation to fail for escaping watcher expression");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("watcher expressions cannot escape their declaration scope") &&
+            error_message.contains("factory pattern is Phase 10-δ-γ"),
+            "Error should mention escape restriction and Phase 10-δ-γ, got: {}", error_message);
+}
+

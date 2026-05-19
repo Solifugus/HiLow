@@ -146,6 +146,13 @@ typedef struct HiLowFunction {
     void* env;             // captured environment; NULL for non-closures
 } HiLowFunction;
 
+// Watcher value support (Phase 10-δ-α)
+typedef struct HiLowWatcher {
+    int refcount;          // Reference count for memory management
+    bool active;           // Whether the watcher is currently active
+    bool ended;            // Whether the watcher has been permanently ended
+} HiLowWatcher;
+
 // Object support (Phase 7a)
 // Tagged union for all HiLow values that can be stored as object properties
 typedef enum {
@@ -232,6 +239,15 @@ HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key);
 // Function value operations (Phase 7c-β)
 HiLowFunction* hl_function_new(void* fn_ptr);
 HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env);
+
+// Watcher value operations (Phase 10-δ-α)
+HiLowWatcher* hl_watcher_new(void);
+void hl_watcher_retain(HiLowWatcher* w);
+void hl_watcher_release(HiLowWatcher* w);
+void hl_watcher_pause(HiLowWatcher* w);
+void hl_watcher_resume(HiLowWatcher* w);
+void hl_watcher_end(HiLowWatcher* w);
+bool hl_watcher_is_active(HiLowWatcher* w);
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);
