@@ -2675,8 +2675,8 @@ fn test_watcher_pre_declaration_assignment_does_not_fire() {
 // Phase 10-δ-α: Heap-allocated watcher tests
 
 #[test]
-fn test_heap_watcher_allocation_integration() {
-    let executable = compile_program("tests/programs/test_heap_watcher_allocation.hl")
+fn test_watcher_expression_basic() {
+    let executable = compile_program("tests/programs/watcher/expression_basic/main.hl")
         .expect("Failed to compile test_heap_watcher_allocation.hl");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
@@ -2685,7 +2685,7 @@ fn test_heap_watcher_allocation_integration() {
     assert_eq!(exit_code, 0, "Program should exit with code 0");
     assert!(stderr.is_empty(), "No stderr output expected");
 
-    let expected = fs::read_to_string("tests/expected/test_heap_watcher_allocation.expected.txt")
+    let expected = fs::read_to_string("tests/expected/watcher/expression_basic.expected.txt")
         .expect("Failed to read expected output");
 
     assert_eq!(stdout.trim(), expected.trim());
@@ -2695,8 +2695,8 @@ fn test_heap_watcher_allocation_integration() {
 }
 
 #[test]
-fn test_heap_watcher_methods_integration() {
-    let executable = compile_program("tests/programs/test_heap_watcher_methods.hl")
+fn test_watcher_expression_methods() {
+    let executable = compile_program("tests/programs/watcher/expression_methods/main.hl")
         .expect("Failed to compile test_heap_watcher_methods.hl");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
@@ -2705,7 +2705,7 @@ fn test_heap_watcher_methods_integration() {
     assert_eq!(exit_code, 0, "Program should exit with code 0");
     assert!(stderr.is_empty(), "No stderr output expected");
 
-    let expected = fs::read_to_string("tests/expected/test_heap_watcher_methods.expected.txt")
+    let expected = fs::read_to_string("tests/expected/watcher/expression_methods.expected.txt")
         .expect("Failed to read expected output");
 
     assert_eq!(stdout.trim(), expected.trim());
@@ -2715,8 +2715,8 @@ fn test_heap_watcher_methods_integration() {
 }
 
 #[test]
-fn test_heap_watcher_cleanup_integration() {
-    let executable = compile_program("tests/programs/test_heap_watcher_cleanup.hl")
+fn test_watcher_expression_scope_release() {
+    let executable = compile_program("tests/programs/watcher/expression_scope/main.hl")
         .expect("Failed to compile test_heap_watcher_cleanup.hl");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
@@ -2725,7 +2725,7 @@ fn test_heap_watcher_cleanup_integration() {
     assert_eq!(exit_code, 0, "Program should exit with code 0");
     assert!(stderr.is_empty(), "No stderr output expected");
 
-    let expected = fs::read_to_string("tests/expected/test_heap_watcher_cleanup.expected.txt")
+    let expected = fs::read_to_string("tests/expected/watcher/expression_scope.expected.txt")
         .expect("Failed to read expected output");
 
     assert_eq!(stdout.trim(), expected.trim());
@@ -2735,8 +2735,8 @@ fn test_heap_watcher_cleanup_integration() {
 }
 
 #[test]
-fn test_heap_watcher_escape_error_integration() {
-    let result = compile_program("tests/programs/test_heap_watcher_escape_error.hl");
+fn test_watcher_expression_return_rejected() {
+    let result = compile_program("tests/programs/watcher/expression_return_rejected/main.hl");
 
     // This should fail to compile
     assert!(result.is_err(), "Expected compilation to fail for escaping watcher expression");
