@@ -2747,3 +2747,63 @@ fn test_watcher_expression_return_rejected() {
             "Error should mention escape restriction and Phase 10-δ-γ, got: {}", error_message);
 }
 
+#[test]
+fn test_watcher_expression_fires_on_change() {
+    let executable = compile_program("tests/programs/watcher/expression_fires/main.hl")
+        .expect("Failed to compile test_watcher_expression_fires_on_change.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher expression fires test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/expression_fires.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_expression_pause_blocks_firing() {
+    let executable = compile_program("tests/programs/watcher/expression_pause/main.hl")
+        .expect("Failed to compile test_watcher_expression_pause_blocks_firing.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher expression pause test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/expression_pause.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_expression_coexists_with_declaration_form() {
+    let executable = compile_program("tests/programs/watcher/expression_coexists/main.hl")
+        .expect("Failed to compile test_watcher_expression_coexists_with_declaration_form.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher expression coexistence test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/expression_coexists.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+

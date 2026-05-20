@@ -17,6 +17,20 @@ struct WatcherSubscription {
     all_subscriptions: Vec<(String, String)>,
 }
 
+/// Phase 10-δ-β: Subscription information for heap-allocated watchers
+#[derive(Debug, Clone)]
+struct HeapWatcherSubscription {
+    /// The C variable name holding the HiLowWatcher* pointer
+    watcher_var: String,
+    /// The body function name (emitted as a top-level C function)
+    body_fn_name: String,
+    /// The modifier (Changed or Assigned for this phase)
+    modifier: SubscriptionModifier,
+    /// All subscribed variable names for this watcher, in declaration order
+    /// (used to build the arg list for the body call)
+    all_subscriptions: Vec<String>,
+}
+
 /// Types of heap allocations for ownership tracking (Phase 8a)
 #[derive(Debug, Clone, PartialEq)]
 pub enum HeapType {
@@ -127,6 +141,15 @@ pub struct CodeGenerator {
     watcher_counter: usize,
     /// Phase 10-γ-fixup: maps watcher names to their codegen IDs for method dispatch.
     watcher_name_to_id: HashMap<String, usize>,
+    /// Phase 10-δ-β: maps subscribed variable names to lists of heap watcher
+    /// C-variable-names that captured the variable. Parallel to watcher_subscribers
+    /// (which tracks declaration-form watchers).
+    heap_watcher_subscribers: HashMap<String, Vec<HeapWatcherSubscription>>,
+    /// Phase 10-δ-β: temporary storage for body function name during WatcherExpr generation
+    /// so let statement can access it for heap subscription registration
+    temp_watcher_expr_body_fn: Option<String>,
+    /// Phase 10-δ-β: temporary storage for WatcherExpr subscriptions during generation
+    temp_watcher_expr_subscriptions: Vec<Subscription>,
 }
 
 impl CodeGenerator {
@@ -160,6 +183,9 @@ impl CodeGenerator {
             watcher_bodies: String::new(),
             watcher_counter: 0,
             watcher_name_to_id: HashMap::new(),
+            heap_watcher_subscribers: HashMap::new(),
+            temp_watcher_expr_body_fn: None,
+            temp_watcher_expr_subscriptions: Vec::new(),
         }
     }
 
@@ -960,6 +986,29 @@ impl CodeGenerator {
                 }
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
+
+                    // Phase 10-δ-β: Register heap watcher subscriptions
+                    if let (Some(body_fn_name), subscriptions) = (
+                        self.temp_watcher_expr_body_fn.take(),
+                        std::mem::take(&mut self.temp_watcher_expr_subscriptions)
+                    ) {
+                        let c_var_name = self.mangle_variable_name(name);
+                        let all_subscriptions: Vec<String> = subscriptions.iter()
+                            .map(|s| s.variable_name.clone())
+                            .collect();
+
+                        for subscription in subscriptions {
+                            self.heap_watcher_subscribers
+                                .entry(subscription.variable_name.clone())
+                                .or_insert_with(Vec::new)
+                                .push(HeapWatcherSubscription {
+                                    watcher_var: c_var_name.clone(),
+                                    body_fn_name: body_fn_name.clone(),
+                                    modifier: subscription.modifier.clone(),
+                                    all_subscriptions: all_subscriptions.clone(),
+                                });
+                        }
+                    }
                 }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
@@ -1474,17 +1523,19 @@ impl CodeGenerator {
                 }
             }
 
-            // Phase 10-γ: Handle watcher notifications for simple assignment
+            // Phase 10-δ-β: Handle watcher notifications for simple assignment (combined path)
             if assign_stmt.op == AssignOpKind::Assign {
                 if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
-                    if let Some(subscribers_ref) = self.watcher_subscribers.get(var_name) {
-                        // Clone subscribers to avoid borrow conflicts
-                        let subscribers = subscribers_ref.clone();
-                        // We have watchers subscribed to this variable
-                        let has_changed_watchers = subscribers.iter().any(|s| s.modifier == SubscriptionModifier::Changed);
+                    let decl_subs = self.watcher_subscribers.get(var_name).cloned().unwrap_or_default();
+                    let heap_subs = self.heap_watcher_subscribers.get(var_name).cloned().unwrap_or_default();
 
-                        if has_changed_watchers {
-                            // Wrap assignment with old-vs-new comparison for (changed) watchers
+                    if !decl_subs.is_empty() || !heap_subs.is_empty() {
+                        // Combined emission path
+                        let has_changed = decl_subs.iter().any(|s| s.modifier == SubscriptionModifier::Changed)
+                                        || heap_subs.iter().any(|s| s.modifier == SubscriptionModifier::Changed);
+
+                        if has_changed {
+                            // Old-vs-new wrapping path for changed modifiers
                             let var_type = self.variable_types.get(var_name).cloned()
                                 .unwrap_or(Type::I32); // Fallback type
                             let c_type = self.hilow_type_to_c(&var_type);
@@ -1497,54 +1548,83 @@ impl CodeGenerator {
                             self.generate_expression(&assign_stmt.value, type_checker)?;
                             self.output.push_str(";\n");
 
-                            // Emit notifications for each subscriber
-                            for subscriber in subscribers {
-                                match subscriber.modifier {
-                                    SubscriptionModifier::Changed => {
-                                        self.output.push_str(&format!("    if ({} != {}) {{\n", old_var, var_name));
-                                        // Phase 10-γ-fixup: Check active flag before calling watcher
-                                        if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
-                                            self.output.push_str(&format!("        if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                            self.output.push_str(&format!("            {}(", subscriber.fn_name));
-                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                            self.output.push_str(");\n");
-                                            self.output.push_str("        }\n");
-                                        } else {
-                                            self.output.push_str(&format!("        {}(", subscriber.fn_name));
-                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                            self.output.push_str(");\n");
-                                        }
-                                        self.output.push_str("    }\n");
+                            // Emit notifications inside the changed check
+                            self.output.push_str(&format!("    if ({} != {}) {{\n", old_var, var_name));
+
+                            // Declaration-form watchers (changed modifier only)
+                            for subscriber in &decl_subs {
+                                if subscriber.modifier == SubscriptionModifier::Changed {
+                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
+                                        self.output.push_str(&format!("        if (hilow_watcher_{}_active) {{\n", watcher_id));
+                                        self.output.push_str(&format!("            {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                        self.output.push_str("        }\n");
+                                    } else {
+                                        self.output.push_str(&format!("        {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
                                     }
-                                    SubscriptionModifier::Assigned => {
-                                        // Phase 10-γ-fixup: Check active flag before calling watcher
-                                        if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
-                                            self.output.push_str(&format!("    if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                            self.output.push_str(&format!("        {}(", subscriber.fn_name));
-                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                            self.output.push_str(");\n");
-                                            self.output.push_str("    }\n");
-                                        } else {
-                                            self.output.push_str(&format!("    {}(", subscriber.fn_name));
-                                            self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                            self.output.push_str(");\n");
-                                        }
-                                    }
-                                    _ => {} // Other modifiers already validated earlier
                                 }
                             }
+
+                            // Heap watchers (changed modifier only)
+                            for heap_sub in &heap_subs {
+                                if heap_sub.modifier == SubscriptionModifier::Changed {
+                                    self.output.push_str(&format!(
+                                        "        if ({} != NULL && {}->active && !{}->ended) {{\n",
+                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
+                                    ));
+                                    self.output.push_str(&format!("            {}(", heap_sub.body_fn_name));
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.output.push_str(");\n");
+                                    self.output.push_str("        }\n");
+                                }
+                            }
+
+                            self.output.push_str("    }\n");
+
+                            // Emit assigned notifications outside the changed check
+                            for subscriber in &decl_subs {
+                                if subscriber.modifier == SubscriptionModifier::Assigned {
+                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
+                                        self.output.push_str(&format!("    if (hilow_watcher_{}_active) {{\n", watcher_id));
+                                        self.output.push_str(&format!("        {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                        self.output.push_str("    }\n");
+                                    } else {
+                                        self.output.push_str(&format!("    {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                    }
+                                }
+                            }
+
+                            for heap_sub in &heap_subs {
+                                if heap_sub.modifier == SubscriptionModifier::Assigned {
+                                    self.output.push_str(&format!(
+                                        "    if ({} != NULL && {}->active && !{}->ended) {{\n",
+                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
+                                    ));
+                                    self.output.push_str(&format!("        {}(", heap_sub.body_fn_name));
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.output.push_str(");\n");
+                                    self.output.push_str("    }\n");
+                                }
+                            }
+
                             self.output.push_str("}\n");
                         } else {
-                            // Only (assigned) watchers - no need for old value tracking
+                            // Assigned-only path - no old value tracking needed
                             self.generate_expression(&assign_stmt.target, type_checker)?;
                             self.output.push_str(" = ");
                             self.generate_expression(&assign_stmt.value, type_checker)?;
                             self.output.push_str(";\n");
 
-                            // Emit notifications for assigned watchers
-                            for subscriber in subscribers {
+                            // Declaration-form notifications (assigned only)
+                            for subscriber in &decl_subs {
                                 if subscriber.modifier == SubscriptionModifier::Assigned {
-                                    // Phase 10-γ-fixup: Check active flag before calling watcher
                                     if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
                                         self.output.push_str(&format!("  if (hilow_watcher_{}_active) {{\n", watcher_id));
                                         self.output.push_str(&format!("    {}(", subscriber.fn_name));
@@ -1556,6 +1636,20 @@ impl CodeGenerator {
                                         self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
                                         self.output.push_str(");\n");
                                     }
+                                }
+                            }
+
+                            // Heap watcher notifications (assigned only)
+                            for heap_sub in &heap_subs {
+                                if heap_sub.modifier == SubscriptionModifier::Assigned {
+                                    self.output.push_str(&format!(
+                                        "  if ({} != NULL && {}->active && !{}->ended) {{\n",
+                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
+                                    ));
+                                    self.output.push_str(&format!("    {}(", heap_sub.body_fn_name));
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.output.push_str(");\n");
+                                    self.output.push_str("  }\n");
                                 }
                             }
                         }
@@ -1783,11 +1877,97 @@ impl CodeGenerator {
                 self.output.push_str(&format!("._{}", index));
             }
             Expression::WatcherExpr(watcher_expr) => {
-                // Phase 10-δ-α: Emit heap watcher creation (no notification yet)
+                // Phase 10-δ-β: Validate subscribed variable types (same rules as declaration-form)
+                for subscription in &watcher_expr.subscriptions {
+                    let var_name = &subscription.variable_name;
+                    if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                        if !self.is_ast_type_watchable_in_phase_10g(var_type) {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("watching value of type {:?}", var_type),
+                                phase: "future phase (string and composite watching)".to_string(),
+                            });
+                        }
+                    } else {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("subscription to '{}' with no resolved type", var_name),
+                            phase: "internal error - type checker should have populated this".to_string(),
+                        });
+                    }
+                }
+
+                // Validate modifiers
+                for subscription in &watcher_expr.subscriptions {
+                    match subscription.modifier {
+                        SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
+                            // These are supported
+                        }
+                        SubscriptionModifier::Deep | SubscriptionModifier::Added |
+                        SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("watcher modifier {:?}", subscription.modifier),
+                                phase: "future phase: mutation-modifier semantics".to_string(),
+                            });
+                        }
+                    }
+                }
+
+                // Generate unique body function name
+                let body_fn_name = format!("hilow_watcher_expr_{}_body", self.watcher_counter);
+                self.watcher_counter += 1;
+
+                // Generate function signature
+                self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
+
+                // Add parameters for each subscription, in declaration order
+                for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
+                    if i > 0 {
+                        self.watcher_bodies.push_str(", ");
+                    }
+
+                    let var_name = &subscription.variable_name;
+                    let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+
+                    // Get the variable type from resolved type on subscription
+                    if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                        let c_type = self.ast_type_to_c(var_type);
+                        self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
+                    }
+                }
+
+                self.watcher_bodies.push_str(") {\n");
+
+                // Generate the watcher body
+                let saved_output = self.output.clone();
+                self.output.clear();
+
+                // Save current variable_types and add watcher parameters to scope
+                let old_variable_types = self.variable_types.clone();
+                for subscription in &watcher_expr.subscriptions {
+                    let var_name = &subscription.variable_name;
+                    let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+
+                    // Get the variable type from resolved type on subscription
+                    if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                        let types_var_type = Type::from_ast_type(ast_var_type);
+                        self.variable_types.insert(param_name.clone(), types_var_type);
+                    }
+                }
+
+                self.generate_block(&watcher_expr.body, type_checker)?;
+
+                // Restore original variable_types
+                self.variable_types = old_variable_types;
+
+                self.watcher_bodies.push_str(&self.output);
+                self.watcher_bodies.push_str("}\n\n");
+
+                // Restore output and emit the heap watcher creation
+                self.output = saved_output;
                 self.output.push_str("hl_watcher_new()");
 
-                // TODO Phase 10-δ-β: Emit watcher body function and set up notification
-                // For now, create empty heap watcher struct only
+                // Store function name and subscriptions for let statement to register
+                self.temp_watcher_expr_body_fn = Some(body_fn_name);
+                self.temp_watcher_expr_subscriptions = watcher_expr.subscriptions.clone();
             }
         }
         Ok(())
@@ -5149,6 +5329,17 @@ impl CodeGenerator {
     }
 
     /// Phase 10-γ: Emit arguments for a watcher function call (current values of all subscribed variables)
+    /// Phase 10-δ-β: Emit arguments for heap watcher body calls from variable names
+    fn emit_watcher_call_args_from_names(&mut self, var_names: &[String]) -> Result<(), CodegenError> {
+        for (i, var_name) in var_names.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.output.push_str(var_name);
+        }
+        Ok(())
+    }
+
     fn emit_watcher_call_args(&mut self, all_subscriptions: &[(String, String)]) -> Result<(), CodegenError> {
         for (i, (var_name, _param_name)) in all_subscriptions.iter().enumerate() {
             if i > 0 {
