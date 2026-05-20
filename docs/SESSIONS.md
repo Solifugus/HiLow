@@ -16,6 +16,7 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 - **Architecture:** Split approach from original 10-δ-α worked. Body function emission in WatcherExpr generation with subscription registration deferred to let statement handling (where both variable name and initializer type are known). Combined notification gate check supports both subscriber types cleanly.
 - **Critical checkpoints passed:** All existing tests including `time` canary tests passed throughout. No regression in notification site logic. STOP conditions honored when coexistence test initially failed (scope issue); fixed and verified before declaring complete.
 - **Baked time:** ~12 minutes — within typical range, no extended-time failure pattern.
+- **Methodology note — partial commit / completion mismatch.** The original Phase 10-δ-β commit (a7ca1f1) contained only the 6 test files (70 lines), not the actual implementation (~299 lines). The debrief claimed "Phase 10-δ-β complete" and the verification ritual showed 142 tests passing — both true, but only because `cargo test` builds from the working tree, not from HEAD. The committed state would not have built. Caught by `git status` showing uncommitted changes after the supposed-completion commit. Repaired by adding the code as a separate commit (042d294) rather than rewriting history. Working tree is now consistent with git log.
 
 ### 2026-05-17 (late afternoon) — Phase 10-δ-α attempt: reverted
 

@@ -122,6 +122,26 @@ This section documents recurring patterns that have surfaced during phase work. 
 
 4. **Revert is honest; partial-commit-with-disclosure is also honest.** Both Phase 10-θ (partial-commit-with-disclosure) and Phase 10-δ-α attempt (clean revert) are appropriate responses to the same pattern, depending on whether the work that landed is genuinely useful in isolation. 10-θ's structural change was useful even without the watcher half; 10-δ-α's broken notification site was not useful in any form.
 
+### Partial commit / completion mismatch
+
+**Pattern:** Claude Code claims phase completion. Verification ritual confirms test counts. Code changes appear correct in the working tree. But `git show` of the supposed completion commit reveals that only some of the work was actually committed — typically the test files, not the implementation, or vice versa. Tests pass because `cargo test` runs against the working tree, not against HEAD. The committed state would not have built.
+
+**Occurrences:**
+
+- **Phase 10-δ-β** (2026-05-19 evening): Commit a7ca1f1 was labeled "Phase 10-δ-β: notification path for heap watchers" with a detailed body describing the implementation. Actual commit contents: 6 test files (70 insertions). The implementation in src/codegen/mod.rs (287-line diff) and test functions in tests/integration_tests.rs (60 lines) were on disk but not staged. The debrief described the work as committed; git status would have revealed the discrepancy. Caught by routine spot-verification after the debrief. Repaired by adding the missing code as commit 042d294 rather than rewriting history.
+
+**Diagnostic signal:** After a phase debrief claims commit completion, `git status` shows modified files that should logically have been part of the commit. The supposed commit's `git show --stat` reveals fewer files than the prompt's deliverables would suggest. Test pass counts match expected, but only because tests run against working tree.
+
+**Mitigation:**
+
+1. **Routine `git status` after commit claims.** A clean working tree confirms the commit captured what the debrief described. A modified working tree after a supposed-completion commit is the diagnostic signal.
+
+2. **`git show --stat` of the claimed commit.** Compare to the prompt's expected files-modified list. If the commit is missing implementation files, the debrief's "complete" claim is wrong even if tests pass.
+
+3. **Repair via separate follow-up commit.** Don't rewrite history (interactive rebase is brittle, especially when tired); add a follow-up commit with an honest message describing what happened. The historical record stays accurate.
+
+4. **For future prompts: explicit verification of commit contents in the debrief.** Asking for `git show --stat HEAD` after the commit catches this pattern. Worth adding to the debrief requirements for code phases.
+
 ### Tests with no assertions
 
 **Pattern:** Integration or unit tests included as "deliverables" but containing no assertions — they pass by not panicking, providing no actual coverage.
