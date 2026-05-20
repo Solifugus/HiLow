@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-δ-α (take 2) — Heap-Allocated Watcher Values Without Notification**
+**Current phase: Phase 10-δ-β — Notification Path for Heap Watchers**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

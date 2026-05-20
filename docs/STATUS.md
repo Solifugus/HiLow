@@ -6,12 +6,12 @@
 
 ## Current state
 
-**Phase:** Phase 10-θ-fixup — Nested Watcher Codegen (Phase 10-δ-α attempt reverted)
-**Status:** Phase 10-θ-fixup remains the last successfully landed phase. Phase 10-δ-α was attempted and reverted before commit due to broken notification site implementation. Next attempt should split 10-δ into three sub-phases: (α) heap allocation + methods only, no notification; (β) notification path for heap watchers; (γ) escape analysis + reachability rule.
+**Phase:** Phase 10-δ-β — Notification Path for Heap Watchers (complete)
+**Status:** Phase 10-δ-β complete; heap watcher notification working; Phase 10-δ-γ next (escape analysis and reachability rule).
 **Branch:** main
-**Last commit:** docs: Phase 10-θ-fixup session notes and dead-code placement note
+**Last commit:** Phase 10-δ-β: notification path for heap watchers
 
-**Tests:** 135 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
+**Tests:** 142 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
 
 ---
 
@@ -33,7 +33,9 @@
 
 **Resolved by Phase 10-θ and 10-θ-fixup:** Nested function and watcher declarations inside ordinary blocks now parse, typecheck, and codegen correctly. The `Block.statements: Vec<Statement>` architectural restriction was removed by generalizing to `Block.items: Vec<BlockItem>` with `statements_iter()` helper. Nested watchers have correct scope-bounded firing semantics: activation at declaration position, deactivation at scope exit. Subscription AST nodes carry resolved variable and alias types via `RefCell<Option<Type>>` fields, populated by the type checker and read by codegen during watcher body emission.
 
-**Still pending — Phase 10-δ:** Escape analysis and factory pattern. Watchers returned from functions (`let w = watcher(x) {...}; return w;`) require the reachability rule (subscribed variables must be reachable from the new scope) plus heap-allocated watcher state (so state can travel with the value rather than live as file-scope statics).
+**Resolved by Phase 10-δ-α (take 2) and 10-δ-β:** Heap-allocated watcher values for expression form (`let w = watcher(x) {...}`) now work with methods (`.pause()`, `.resume()`, `.end()`, `.isActive()`) and firing on assignments. HeapWatcherSubscription tracking parallel to declaration-form watchers. Combined notification site fires both types correctly with proper gate conditions and ordering.
+
+**Still pending — Phase 10-δ-γ:** Escape analysis and reachability rule. Watchers returned from functions (`let w = watcher(x) {...}; return w;`) require the reachability rule (subscribed variables must be reachable from the new scope) to prevent subscriptions to function-local variables that won't exist in the target scope.
 
 **Still pending — Phase 10-ε:** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen currently rejects the four mutation-tracking modifiers (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers. Probably the trickiest single piece of the watcher system.
 

@@ -6,6 +6,17 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-19 — Phase 10-δ-β: Notification Path for Heap Watchers
+
+- **Commit:** a7ca1f1
+- **Tests:** 139 → 142 integration (+3)
+- **Summary:** Successful implementation of the notification path for heap watchers after the 10-δ-α revert. Added `HeapWatcherSubscription` struct and `heap_watcher_subscribers` map parallel to existing declaration-form tracking. WatcherExpr codegen emits body function at file scope and registers heap subscriptions during let statement processing. Assignment notification site generalized to combined gate check: fires both declaration-form and heap watchers inside the same changed-detection wrap or assigned-only block. Heap watchers gated on `w != NULL && w->active && !w->ended` before calling.
+- **Three new integration tests:** expression_fires (basic change-detection firing), expression_pause (pause/resume blocks firing correctly), expression_coexists (both declaration-form and heap watchers fire in correct order on same variable).
+- **Manual generated-C verification:** Coexistence test shows both notification paths appearing once per assignment inside `if (__hl_old != counter)` block: declaration-form first (`hilow_watcher_0_onCounter`), then heap (`hilow_watcher_expr_1_body`). No duplicate firing, correct gate conditions.
+- **Architecture:** Split approach from original 10-δ-α worked. Body function emission in WatcherExpr generation with subscription registration deferred to let statement handling (where both variable name and initializer type are known). Combined notification gate check supports both subscriber types cleanly.
+- **Critical checkpoints passed:** All existing tests including `time` canary tests passed throughout. No regression in notification site logic. STOP conditions honored when coexistence test initially failed (scope issue); fixed and verified before declaring complete.
+- **Baked time:** ~12 minutes — within typical range, no extended-time failure pattern.
+
 ### 2026-05-17 (late afternoon) — Phase 10-δ-α attempt: reverted
 
 - **Commit:** none (reverted before commit)
