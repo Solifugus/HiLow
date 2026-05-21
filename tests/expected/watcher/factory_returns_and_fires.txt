@@ -1,0 +1,3 @@
+setting counter to 5
+watcher fired
+5

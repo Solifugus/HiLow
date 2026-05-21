@@ -77,6 +77,11 @@ pub struct TypeChecker {
     switch_depth: usize, // Track nested switch depth for break validation
     qualifier_registry: QualifierRegistry,
     method_context: Option<Type>, // Track the receiver object type when inside a method
+    /// Phase 10-δ-γ: Scope depth at which the currently checking function's body
+    /// begins. Used by escape analysis to determine which subscribed variables
+    /// are function-local (depth >= this value) vs reachable from the caller
+    /// (depth < this value).
+    current_function_scope_depth: Option<usize>,
     /// Cross-module export tables, keyed by module path. Populated during pass 1 of check_graph.
     /// Empty during single-file `check`.
     module_exports: HashMap<String, ExportTable>,
@@ -94,6 +99,7 @@ impl TypeChecker {
             switch_depth: 0,
             qualifier_registry: QualifierRegistry::new(),
             method_context: None,
+            current_function_scope_depth: None,
             module_exports: HashMap::new(),
         }
     }
@@ -436,6 +442,10 @@ impl TypeChecker {
         // Enter function scope
         self.enter_scope();
 
+        // Phase 10-δ-γ: Track function scope depth for escape analysis
+        let saved_depth = self.current_function_scope_depth;
+        self.current_function_scope_depth = Some(self.scopes.len() - 1);
+
         // Add parameters to scope
         for param in &function.params {
             let param_type = Type::from_ast_type(&param.ty);
@@ -446,6 +456,9 @@ impl TypeChecker {
         if let Some(body) = &function.body {
             self.check_block(body);
         }
+
+        // Restore previous function scope depth
+        self.current_function_scope_depth = saved_depth;
 
         // Exit function scope
         self.exit_function_scope();
@@ -665,6 +678,43 @@ impl TypeChecker {
         None
     }
 
+    /// Phase 10-δ-γ: Look up a variable and return both its type and the
+    /// scope index (depth) at which it was found. Used by escape analysis
+    /// to determine reachability of subscribed variables.
+    fn lookup_variable_with_depth(&self, name: &str) -> Option<(Type, usize)> {
+        // First, check for type refinements from innermost to outermost
+        for (depth, refinement_scope) in self.refinement_scopes.iter().enumerate().rev() {
+            if let Some(refined_type) = refinement_scope.lookup(name) {
+                // For refined types, use the regular scope depth where the variable was declared
+                // Find it in regular scopes to get the proper depth
+                for (scope_depth, scope) in self.scopes.iter().enumerate().rev() {
+                    if scope.lookup(name).is_some() {
+                        return Some((refined_type.clone(), scope_depth));
+                    }
+                }
+            }
+        }
+
+        // Second, check for persistent refinements
+        if let Some(refined_type) = self.persistent_refinements.get(name) {
+            // For persistent refinements, find the variable in regular scopes to get depth
+            for (scope_depth, scope) in self.scopes.iter().enumerate().rev() {
+                if scope.lookup(name).is_some() {
+                    return Some((refined_type.clone(), scope_depth));
+                }
+            }
+        }
+
+        // Then search regular scopes from innermost to outermost
+        for (depth, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(symbol) = scope.lookup(name) {
+                return Some((symbol.ty.clone(), depth));
+            }
+        }
+
+        None
+    }
+
     fn is_primitive_type(&self, ty: &Type) -> bool {
         matches!(ty,
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
@@ -867,19 +917,55 @@ impl TypeChecker {
 
     fn check_return_statement(&mut self, return_stmt: &ReturnStmt) {
         if let Some(value) = &return_stmt.value {
-            // Phase 10-δ-α: Check for escaping watcher expressions
-            if let Expression::WatcherExpr(_) = value {
-                self.errors.push(TypeError::new(
-                    "watcher expressions cannot escape their declaration scope; the factory pattern is Phase 10-δ-γ",
-                    return_stmt.position.clone()
-                ));
-                return;
+            // Phase 10-δ-γ: Validate reachability of subscribed variables for escaping watcher expressions
+            if let Expression::WatcherExpr(watcher_expr) = value {
+                self.check_watcher_escape_reachability(watcher_expr, &return_stmt.position);
             }
 
             self.check_expression(value);
         }
         // TODO: Check that return type matches function return type
         // For now, just type check the expression
+    }
+
+    fn check_watcher_escape_reachability(&mut self, watcher_expr: &WatcherExpr, return_position: &Position) {
+        let function_depth = match self.current_function_scope_depth {
+            Some(d) => d,
+            None => {
+                // Not inside a function — shouldn't happen for a return statement, but
+                // belt-and-suspenders.
+                self.errors.push(TypeError::new(
+                    "watcher expression in return statement outside function context",
+                    return_position.clone()
+                ));
+                return;
+            }
+        };
+
+        for sub in &watcher_expr.subscriptions {
+            match self.lookup_variable_with_depth(&sub.variable_name) {
+                None => {
+                    self.errors.push(TypeError::new(
+                        &format!("subscribed variable '{}' is not in scope", sub.variable_name),
+                        sub.position.clone()
+                    ));
+                }
+                Some((_, var_depth)) => {
+                    if var_depth >= function_depth {
+                        // Variable is at function-local depth or deeper — not reachable from caller
+                        self.errors.push(TypeError::new(
+                            &format!(
+                                "subscribed variable '{}' is not reachable from the function's caller; \
+                                 the watcher cannot escape this scope because '{}' is declared inside the function. \
+                                 Move the variable declaration to an enclosing scope to allow the watcher to escape.",
+                                sub.variable_name, sub.variable_name
+                            ),
+                            sub.position.clone()
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     fn check_if_statement(&mut self, if_stmt: &IfStmt) {
@@ -2641,6 +2727,10 @@ impl TypeChecker {
         // Create a new scope for the function body
         self.enter_scope();
 
+        // Phase 10-δ-γ: Track function scope depth for escape analysis
+        let saved_depth = self.current_function_scope_depth;
+        self.current_function_scope_depth = Some(self.scopes.len() - 1);
+
         // Add parameters to the scope
         let mut param_types = Vec::new();
         for param in &func_expr.params {
@@ -2673,6 +2763,9 @@ impl TypeChecker {
         // TODO: Validate return statements match the declared return type
         // For now, just convert the return type from AST to type system
         let return_type = Type::from_ast_type(&func_expr.return_type);
+
+        // Restore previous function scope depth
+        self.current_function_scope_depth = saved_depth;
 
         self.exit_function_scope();
 

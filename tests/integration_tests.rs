@@ -2742,9 +2742,9 @@ fn test_watcher_expression_return_rejected() {
     assert!(result.is_err(), "Expected compilation to fail for escaping watcher expression");
 
     let error_message = result.unwrap_err();
-    assert!(error_message.contains("watcher expressions cannot escape their declaration scope") &&
-            error_message.contains("factory pattern is Phase 10-δ-γ"),
-            "Error should mention escape restriction and Phase 10-δ-γ, got: {}", error_message);
+    assert!(error_message.contains("subscribed variable 'localCounter' is not reachable from the function's caller") &&
+            error_message.contains("declared inside the function"),
+            "Error should mention reachability restriction for function-local variable, got: {}", error_message);
 }
 
 #[test]
@@ -2805,5 +2805,59 @@ fn test_watcher_expression_coexists_with_declaration_form() {
 
     // Clean up
     let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_factory_returns_and_fires() {
+    let executable = compile_program("tests/programs/watcher/factory_returns_and_fires/main.hl")
+        .expect("Failed to compile watcher factory test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher factory test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/factory_returns_and_fires.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_factory_with_methods() {
+    let executable = compile_program("tests/programs/watcher/factory_with_methods/main.hl")
+        .expect("Failed to compile watcher factory with methods test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher factory with methods test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/factory_with_methods.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_watcher_escape_function_local_rejected() {
+    let result = compile_program("tests/programs/watcher/escape_function_local_rejected/main.hl");
+
+    // This should fail to compile
+    assert!(result.is_err(), "Expected compilation to fail for watcher capturing function-local variable");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("subscribed variable") &&
+            error_message.contains("not reachable from the function's caller") &&
+            error_message.contains("declared inside the function"),
+            "Error should mention reachability restriction, got: {}", error_message);
 }
 

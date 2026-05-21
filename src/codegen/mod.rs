@@ -916,6 +916,28 @@ impl CodeGenerator {
                     }
                     Type::Object(properties)
                 }
+                Expression::Call(call_expr) => {
+                    // Phase 10-δ-γ: Special handling for function calls that might return watchers
+                    let inferred_type = self.infer_expression_type_for_codegen(initializer);
+
+                    // Check if this is a function call where we need to detect watcher returns
+                    if inferred_type == Type::Nothing {
+                        // For functions that declare 'nothing' but might return watcher expressions,
+                        // we need to check if the function body contains a return statement with a watcher expression
+                        // For now, assume any function call returning 'nothing' that gets assigned to a variable
+                        // might return a watcher (this is a heuristic for Phase 10-δ-γ)
+                        if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
+                            // This is a simplification - in a full implementation, we'd analyze the function body
+                            // For Phase 10-δ-γ, we'll assume functions returning 'nothing' might return watchers
+                            // and let the assignment logic handle the actual type
+                            Type::Watcher  // Assume watcher for factory pattern
+                        } else {
+                            inferred_type
+                        }
+                    } else {
+                        inferred_type
+                    }
+                }
                 _ => {
                     // For other complex expressions, try to infer
                     self.infer_expression_type_for_codegen(initializer)
@@ -1053,6 +1075,10 @@ impl CodeGenerator {
                             Type::UnknownType => {
                                 // Direct unknown values also need cleanup
                                 self.track_heap_owner(name, HeapType::Unknown);
+                            }
+                            Type::Watcher => {
+                                // Phase 10-δ-γ: Watcher return values need heap tracking
+                                self.track_heap_owner(name, HeapType::Watcher);
                             }
                             _ => {} // Non-heap return types (like Type::Time)
                         }

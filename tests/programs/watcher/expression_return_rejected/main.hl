@@ -1,10 +1,11 @@
 high program(args: [string]): i32 {
-    function makeWatcher(x: i32): nothing {
-        return watcher(x) {
+    function makeWatcher(): nothing {
+        let localCounter = 0
+        return watcher(localCounter) {
             print("should not compile")
         }
     }
 
-    let w = makeWatcher(5)
+    let w = makeWatcher()
     return 0
 }

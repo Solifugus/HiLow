@@ -1,0 +1,17 @@
+high program(args: [string]): i32 {
+    let counter = 0
+
+    function makeWatcher(): nothing {
+        let w = watcher(counter) {
+            print("watcher fired")
+            print(counter)
+        }
+        return w
+    }
+
+    let w = makeWatcher()
+    print("setting counter to 5")
+    counter = 5
+
+    return 0
+}

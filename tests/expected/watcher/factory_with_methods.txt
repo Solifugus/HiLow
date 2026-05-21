@@ -1,0 +1,9 @@
+setting counter to 3
+watcher fired
+3
+pausing watcher
+setting counter to 7 (should not fire)
+resuming watcher
+setting counter to 9
+watcher fired
+9
