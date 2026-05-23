@@ -1,0 +1,6 @@
+high program(): i32 {
+    let vals = [1.5, 2.5, 3.5]
+    print(vals[1])
+    print(vals.length)
+    return 0
+}

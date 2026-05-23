@@ -1613,3 +1613,63 @@ bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs) {
     }
     return lhs.amount >= rhs.amount;
 }
+
+// Array support (Array Phase A)
+
+HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity) {
+    HiLowArray* arr = malloc(sizeof(HiLowArray));
+    hl_alloc_count++;
+
+    arr->refcount = 1;
+    arr->length = 0;
+    arr->capacity = initial_capacity;
+    arr->elem_size = elem_size;
+    arr->data = malloc(elem_size * initial_capacity);
+
+    return arr;
+}
+
+void hl_array_retain(HiLowArray* arr) {
+    if (arr) {
+        arr->refcount++;
+    }
+}
+
+void hl_array_release(HiLowArray* arr) {
+    if (!arr) return;
+
+    arr->refcount--;
+    if (arr->refcount == 0) {
+        free(arr->data);
+        free(arr);
+        hl_free_count++;
+    }
+}
+
+void hl_array_push(HiLowArray* arr, void* elem) {
+    // Grow if needed
+    if (arr->length == arr->capacity) {
+        arr->capacity *= 2;
+        arr->data = realloc(arr->data, arr->elem_size * arr->capacity);
+    }
+
+    // Copy element into array
+    void* dest = (char*)arr->data + (arr->length * arr->elem_size);
+    memcpy(dest, elem, arr->elem_size);
+    arr->length++;
+}
+
+void* hl_array_get(HiLowArray* arr, size_t index) {
+    // Optional bounds check - encouraged but not required
+    if (index >= arr->length) {
+        fprintf(stderr, "Runtime error: array index %zu out of bounds (length %zu)\n",
+                index, arr->length);
+        exit(1);
+    }
+
+    return (char*)arr->data + (index * arr->elem_size);
+}
+
+size_t hl_array_len(HiLowArray* arr) {
+    return arr->length;
+}

@@ -1,0 +1,5 @@
+high program(): i32 {
+    let bad = [1, true]
+    print(bad[0])
+    return 0
+}

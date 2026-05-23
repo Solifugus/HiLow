@@ -1,0 +1,7 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+    print(nums[0])
+    print(nums[2])
+    print(nums.length)
+    return 0
+}

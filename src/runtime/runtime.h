@@ -249,6 +249,22 @@ void hl_watcher_resume(HiLowWatcher* w);
 void hl_watcher_end(HiLowWatcher* w);
 bool hl_watcher_is_active(HiLowWatcher* w);
 
+// Array support (Array Phase A)
+typedef struct HiLowArray {
+    int refcount;
+    size_t length;
+    size_t capacity;
+    size_t elem_size;
+    void* data;
+} HiLowArray;
+
+HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity);
+void hl_array_retain(HiLowArray* arr);
+void hl_array_release(HiLowArray* arr);
+void hl_array_push(HiLowArray* arr, void* elem);   // copies elem_size bytes from elem into the buffer, growing if needed
+void* hl_array_get(HiLowArray* arr, size_t index); // returns pointer to element slot (caller casts and dereferences)
+size_t hl_array_len(HiLowArray* arr);
+
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);
 

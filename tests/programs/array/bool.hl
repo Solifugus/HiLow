@@ -1,0 +1,7 @@
+high program(): i32 {
+    let flags = [true, false, true]
+    print(flags[0])
+    print(flags[1])
+    print(flags.length)
+    return 0
+}

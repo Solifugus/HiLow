@@ -41,6 +41,7 @@ pub enum HeapType {
     Unknown,        // HiLowUnknown*
     Optional,       // T? - may contain unknown or success value
     Watcher,        // HiLowWatcher*
+    Array,          // HiLowArray*
 }
 
 /// Context for function expression generation to detect escaping closures (Phase 8a)
@@ -1003,6 +1004,9 @@ impl CodeGenerator {
                 Expression::Unknown(_) => {
                     self.track_heap_owner(name, HeapType::Unknown);
                 }
+                Expression::ArrayLit(_, _) => {
+                    self.track_heap_owner(name, HeapType::Array);
+                }
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
 
@@ -1077,6 +1081,10 @@ impl CodeGenerator {
                                 // Phase 10-δ-γ: Watcher return values need heap tracking
                                 self.track_heap_owner(name, HeapType::Watcher);
                             }
+                            Type::DynamicArray(_) => {
+                                // Array Phase A: Array return values need heap tracking
+                                self.track_heap_owner(name, HeapType::Array);
+                            }
                             _ => {} // Non-heap return types (like Type::Time)
                         }
                     }
@@ -1097,6 +1105,10 @@ impl CodeGenerator {
                             HeapType::Unknown => {
                                 let c_var_name = self.mangle_variable_name(name);
                                 self.output.push_str(&format!(";\n  hl_unknown_retain({});", c_var_name));
+                            }
+                            HeapType::Array => {
+                                let c_var_name = self.mangle_variable_name(name);
+                                self.output.push_str(&format!(";\n  hl_array_retain({});", c_var_name));
                             }
                             _ => {} // Other heap types don't have specific retain functions yet
                         }
@@ -1836,11 +1848,27 @@ impl CodeGenerator {
             Expression::MemberAccess(member_access) => {
                 self.generate_member_access(member_access, type_checker)?;
             }
-            Expression::IndexAccess(_) => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: "index access".to_string(),
-                    phase: "Phase 6 (arrays)".to_string(),
-                });
+            Expression::IndexAccess(index_access) => {
+                // Infer element type from the array type
+                let array_type = self.infer_expression_type_for_codegen(&index_access.object);
+                let elem_type = match array_type {
+                    Type::DynamicArray(inner) => *inner,
+                    _ => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: "index access on non-array types".to_string(),
+                            phase: "only arrays supported in Array Phase A".to_string(),
+                        });
+                    }
+                };
+
+                let elem_c_type = self.hilow_type_to_c(&elem_type);
+
+                // Generate (*(ELEM_C_TYPE*)hl_array_get(arr_expr, index_expr))
+                self.output.push_str(&format!("(*({}*)hl_array_get(", elem_c_type));
+                self.generate_expression(&index_access.object, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&index_access.index, type_checker)?;
+                self.output.push_str("))");
             }
             Expression::IsCheck(is_check) => {
                 self.generate_is_check(is_check, type_checker)?;
@@ -1991,6 +2019,33 @@ impl CodeGenerator {
                 // Store function name and subscriptions for let statement to register
                 self.temp_watcher_expr_body_fn = Some(body_fn_name);
                 self.temp_watcher_expr_subscriptions = watcher_expr.subscriptions.clone();
+            }
+            Expression::ArrayLit(elements, _) => {
+                // Infer element type from first element
+                let elem_type = if !elements.is_empty() {
+                    self.infer_expression_type_for_codegen(&elements[0])
+                } else {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: "empty array literals".to_string(),
+                        phase: "not yet supported in Array Phase A".to_string(),
+                    });
+                };
+
+                let elem_c_type = self.hilow_type_to_c(&elem_type);
+                let elem_size = format!("sizeof({})", elem_c_type);
+                let initial_capacity = elements.len();
+
+                // Use GCC statement-expression for inline array construction
+                self.output.push_str(&format!("({{ HiLowArray* __arr = hl_array_new({}, {});\n", elem_size, initial_capacity));
+
+                // Push each element
+                for (i, element) in elements.iter().enumerate() {
+                    self.output.push_str(&format!("     {} __e{} = ", elem_c_type, i));
+                    self.generate_expression(element, type_checker)?;
+                    self.output.push_str(&format!("; hl_array_push(__arr, &__e{});\n", i));
+                }
+
+                self.output.push_str("     __arr; })");
             }
         }
         Ok(())
@@ -2646,6 +2701,12 @@ impl CodeGenerator {
             // Regular argument - no special cleanup needed
             self.output.push_str(runtime_func);
             self.output.push_str("(");
+
+            // Special case: Usize needs to be cast to uint32_t for print_u32
+            if matches!(arg_type, Type::Usize) {
+                self.output.push_str("(uint32_t)");
+            }
+
             self.generate_expression(arg, type_checker)?;
             self.output.push_str(")");
         }
@@ -2799,7 +2860,7 @@ impl CodeGenerator {
             Type::Money => "HiLowMoney".to_string(),
             Type::MoneyOf(_) => "HiLowMoney".to_string(),
             Type::FixedArray(_, _) => "void*".to_string(), // Placeholder for Phase 6
-            Type::DynamicArray(_) => "void*".to_string(), // Placeholder for Phase 6
+            Type::DynamicArray(_) => "HiLowArray*".to_string(), // Array Phase A
             Type::Object(_) => "HiLowObject*".to_string(),
             Type::Function(_, _) => "HiLowFunction*".to_string(), // Function value type (Phase 7c-β)
             Type::Watcher => "HiLowWatcher*".to_string(), // Heap-allocated watcher value (Phase 10-δ-α)
@@ -3236,6 +3297,13 @@ impl CodeGenerator {
                             _ => Type::Nothing, // Unknown properties return nothing
                         }
                     }
+                    Type::DynamicArray(_) => {
+                        // Arrays have .length property
+                        match member_access.member.as_str() {
+                            "length" => Type::Usize,
+                            _ => Type::Unknown,
+                        }
+                    }
                     _ => Type::Unknown
                 }
             }
@@ -3475,6 +3543,23 @@ impl CodeGenerator {
                     element_types.get(*index).cloned().unwrap_or(Type::Unknown)
                 } else {
                     Type::Unknown
+                }
+            }
+            Expression::ArrayLit(elements, _) => {
+                // Infer array type from first element
+                if !elements.is_empty() {
+                    let elem_type = self.infer_expression_type_for_codegen(&elements[0]);
+                    Type::DynamicArray(Box::new(elem_type))
+                } else {
+                    Type::Unknown
+                }
+            }
+            Expression::IndexAccess(index_access) => {
+                // Infer element type from array type
+                let array_type = self.infer_expression_type_for_codegen(&index_access.object);
+                match array_type {
+                    Type::DynamicArray(elem_type) => *elem_type,
+                    _ => Type::Unknown,
                 }
             }
             Expression::WatcherExpr(_) => Type::Watcher,
@@ -4134,6 +4219,13 @@ impl CodeGenerator {
                     _ => Type::Nothing, // Unknown properties return nothing
                 }
             }
+            Type::DynamicArray(_) => {
+                // Arrays have .length property
+                match member_access.member.as_str() {
+                    "length" => Type::Usize,
+                    _ => Type::Nothing,
+                }
+            }
             Type::Optional(_) => {
                 // Check if this might be a narrowed unknown value accessing unknown properties
                 if matches!(member_access.member.as_str(), "reason" | "options") {
@@ -4153,6 +4245,14 @@ impl CodeGenerator {
             }
             _ => Type::Unknown
         };
+
+        // Special case: array .length property
+        if matches!(object_type, Type::DynamicArray(_)) && member_access.member == "length" {
+            self.output.push_str("hl_array_len(");
+            self.generate_expression(&member_access.object, type_checker)?;
+            self.output.push_str(")");
+            return Ok(());
+        }
 
         // Special case: property access on unknown types or narrowed unknown values
         let treat_as_unknown = matches!(object_type, Type::UnknownType) ||
@@ -4952,6 +5052,9 @@ impl CodeGenerator {
                     HeapType::Watcher => {
                         self.output.push_str(&format!("    hl_watcher_release({});\n", c_var_name));
                     }
+                    HeapType::Array => {
+                        self.output.push_str(&format!("    hl_array_release({});\n", c_var_name));
+                    }
                 }
             }
         }
@@ -5000,6 +5103,9 @@ impl CodeGenerator {
                     }
                     HeapType::Watcher => {
                         self.output.push_str(&format!("    hl_watcher_release({});\n", c_var_name));
+                    }
+                    HeapType::Array => {
+                        self.output.push_str(&format!("    hl_array_release({});\n", c_var_name));
                     }
                 }
             }

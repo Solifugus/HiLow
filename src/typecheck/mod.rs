@@ -1238,9 +1238,31 @@ impl TypeChecker {
             Expression::UnaryOp(unary_op) => self.check_unary_op(unary_op),
             Expression::Call(call) => self.check_call(call),
             Expression::MemberAccess(member_access) => self.check_member_access(member_access),
-            Expression::IndexAccess(_) => {
-                // TODO: Implement index access type checking
-                Type::Unknown
+            Expression::IndexAccess(index_access) => {
+                let object_type = self.check_expression(&index_access.object);
+                let index_type = self.check_expression(&index_access.index);
+
+                // Validate index is an integer type
+                if !matches!(index_type, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
+                                       Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 | Type::Usize) {
+                    self.add_error(
+                        format!("array index must be an integer type, found {}", index_type),
+                        index_access.index.position()
+                    );
+                    return Type::Unknown;
+                }
+
+                // Check if object is an array
+                match object_type {
+                    Type::DynamicArray(elem_type) => *elem_type,
+                    _ => {
+                        self.add_error(
+                            format!("index access is only supported on arrays, found {}", object_type),
+                            index_access.object.position()
+                        );
+                        Type::Unknown
+                    }
+                }
             },
             Expression::IsCheck(is_check) => {
                 // is/is not always returns bool
@@ -1309,6 +1331,34 @@ impl TypeChecker {
                         Type::Unknown
                     }
                 }
+            },
+            Expression::ArrayLit(elements, pos) => {
+                if elements.is_empty() {
+                    // Empty arrays not supported yet
+                    self.add_error(
+                        "empty array literals require an explicit type annotation, not yet supported in Array Phase A".to_string(),
+                        pos.clone()
+                    );
+                    return Type::Unknown;
+                }
+
+                // Infer element type from the first element
+                let first_elem_type = self.check_expression(&elements[0]);
+
+                // Verify all elements have the same type
+                for (i, element) in elements.iter().enumerate().skip(1) {
+                    let elem_type = self.check_expression(element);
+                    if elem_type != first_elem_type {
+                        self.add_error(
+                            format!("array elements must all have the same type; found {} and {}",
+                                    first_elem_type, elem_type),
+                            element.position()
+                        );
+                        return Type::Unknown;
+                    }
+                }
+
+                Type::DynamicArray(Box::new(first_elem_type))
             },
             Expression::WatcherExpr(watcher_expr) => {
                 self.check_watcher_expression(watcher_expr)
@@ -2164,6 +2214,11 @@ impl TypeChecker {
             Expression::TupleAccess(tuple_expr, _, _) => {
                 self.write_refinements_to_expression(tuple_expr);
             }
+            Expression::ArrayLit(elements, _) => {
+                for element in elements {
+                    self.write_refinements_to_expression(element);
+                }
+            }
             Expression::WatcherExpr(watcher_expr) => {
                 self.write_refinements_to_block(&mut watcher_expr.body);
             }
@@ -2666,6 +2721,19 @@ impl TypeChecker {
                     _ => Type::Nothing, // Unknown properties return nothing (Phase 9a behavior)
                 }
             },
+            Type::DynamicArray(_) => {
+                // Arrays have .length property
+                match member_access.member.as_str() {
+                    "length" => Type::Usize,
+                    _ => {
+                        self.add_error(
+                            format!("Arrays do not have a property named '{}'", member_access.member),
+                            member_access.position.clone()
+                        );
+                        Type::Unknown
+                    }
+                }
+            },
             _ => {
                 self.add_error(
                     format!("Cannot access property '{}' on non-object type {}", member_access.member, object_type),
@@ -2943,6 +3011,11 @@ impl TypeChecker {
             Expression::TupleAccess(tuple_expr, _, _) => {
                 self.check_for_captures_in_expression(tuple_expr, outer_scope_depth);
             }
+            Expression::ArrayLit(elements, _) => {
+                for element in elements {
+                    self.check_for_captures_in_expression(element, outer_scope_depth);
+                }
+            }
             Expression::WatcherExpr(_) => {
                 // Watcher expressions are not yet implemented in Phase 10-α
                 // Skip capture checking
@@ -3123,6 +3196,11 @@ impl TypeChecker {
             }
             Expression::TupleAccess(tuple_expr, _, _) => {
                 self.collect_captures_in_expression(tuple_expr, outer_scope_depth, captures);
+            }
+            Expression::ArrayLit(elements, _) => {
+                for element in elements {
+                    self.collect_captures_in_expression(element, outer_scope_depth, captures);
+                }
             }
             Expression::WatcherExpr(_) => {
                 // Watcher expressions are not yet implemented in Phase 10-α
@@ -3305,6 +3383,7 @@ impl HasPosition for Expression {
             Expression::Unknown(unknown_construction) => unknown_construction.position.clone(),
             Expression::TupleLit(_, pos) => pos.clone(),
             Expression::TupleAccess(_, _, pos) => pos.clone(),
+            Expression::ArrayLit(_, pos) => pos.clone(),
             Expression::WatcherExpr(watcher_expr) => watcher_expr.position.clone(),
         }
     }

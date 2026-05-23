@@ -338,6 +338,7 @@ pub enum Expression {
     Unknown(UnknownConstruction),
     TupleLit(Vec<Expression>, Position), // tuple literal: (expr1, expr2, ...)
     TupleAccess(Box<Expression>, usize, Position), // tuple.0, tuple.1, etc.
+    ArrayLit(Vec<Expression>, Position), // array literal: [expr1, expr2, ...]
     WatcherExpr(WatcherExpr),
 }
 

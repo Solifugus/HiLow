@@ -2861,3 +2861,112 @@ fn test_watcher_escape_function_local_rejected() {
             "Error should mention reachability restriction, got: {}", error_message);
 }
 
+// Array Phase A integration tests
+
+#[test]
+fn test_array_literal_and_index() {
+    let executable = compile_program("tests/programs/array/literal_and_index.hl")
+        .expect("Failed to compile array literal and index test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array literal and index test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/literal_and_index.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_bool() {
+    let executable = compile_program("tests/programs/array/bool.hl")
+        .expect("Failed to compile array bool test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array bool test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/bool.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_float() {
+    let executable = compile_program("tests/programs/array/float.hl")
+        .expect("Failed to compile array float test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array float test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/float.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_index_variable() {
+    let executable = compile_program("tests/programs/array/index_variable.hl")
+        .expect("Failed to compile array index variable test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array index variable test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/index_variable.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_scope_cleanup() {
+    let executable = compile_program("tests/programs/array/scope_cleanup.hl")
+        .expect("Failed to compile array scope cleanup test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array scope cleanup test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no memory leaks)");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/scope_cleanup.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_element_type_mismatch_rejected() {
+    let result = compile_program("tests/programs/array/type_mismatch.hl");
+
+    // This should fail to compile
+    assert!(result.is_err(), "Expected compilation to fail for array element type mismatch");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("array elements must all have the same type"),
+            "Error should mention array element type mismatch, got: {}", error_message);
+}
+

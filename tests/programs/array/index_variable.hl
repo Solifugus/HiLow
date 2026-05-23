@@ -1,0 +1,6 @@
+high program(): i32 {
+    let i = 2
+    let nums = [5, 10, 15]
+    print(nums[i])
+    return 0
+}

@@ -1565,6 +1565,10 @@ impl Parser {
                 // Could be parenthesized expression (expr) or tuple literal (expr1, expr2, ...)
                 self.parse_tuple_or_parenthesized_expression(token.position)
             }
+            TokenKind::LeftBracket => {
+                // Array literal [expr1, expr2, ...]
+                self.parse_array_literal(token.position)
+            }
             TokenKind::LeftBrace => {
                 // Object literal (in expression position)
                 self.parse_object_literal(token.position)
@@ -1627,6 +1631,38 @@ impl Parser {
             self.expect_token(TokenKind::RightParen, "Expected ')' after expression")?;
             Ok(first_expr)
         }
+    }
+
+    fn parse_array_literal(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        let mut elements = Vec::new();
+
+        // Check for empty array (reject for now)
+        if self.check(&TokenKind::RightBracket) {
+            return Err(ParseError::UnsupportedFeature {
+                feature: "empty array literal".to_string(),
+                position: start_pos,
+                suggestion: "empty array literals require an explicit type annotation, not yet supported in Array Phase A".to_string(),
+            });
+        }
+
+        // Parse first element
+        elements.push(self.parse_expression()?);
+
+        // Parse remaining elements
+        while self.check(&TokenKind::Comma) {
+            self.advance()?; // consume ','
+
+            // Allow trailing comma
+            if self.check(&TokenKind::RightBracket) {
+                break;
+            }
+
+            elements.push(self.parse_expression()?);
+        }
+
+        self.expect_token(TokenKind::RightBracket, "Expected ']' after array literal")?;
+
+        Ok(Expression::ArrayLit(elements, start_pos))
     }
 
     fn get_binary_operator_info(&self, token_kind: &TokenKind) -> Option<(BinaryOpKind, u8, bool)> {
