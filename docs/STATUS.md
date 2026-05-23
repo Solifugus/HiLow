@@ -6,12 +6,12 @@
 
 ## Current state
 
-**Phase:** Phase 10-δ-β — Notification Path for Heap Watchers (complete)
-**Status:** Phase 10-δ-β complete; heap watcher notification working; Phase 10-δ-γ next (escape analysis and reachability rule).
+**Phase:** Phase 10-δ complete — expression-form watcher mechanism fully working end-to-end
+**Status:** Phase 10-δ-γ-fixup landed. Watcher expressions allocate, fire, support methods, escape via the factory pattern with reachability checking, and clean up correctly. Phase 10-ε next (collection-mutation modifier runtime — the hardest remaining watcher piece).
 **Branch:** main
-**Last commit:** Phase 10-δ-β: notification path for heap watchers
+**Last commit:** Phase 10-δ-γ-fixup: parser/AST support for 'watcher' type annotation + ownership-transfer fix
 
-**Tests:** 142 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
+**Tests:** 145 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
 
 ---
 
@@ -31,19 +31,15 @@
 
 ### Phase 10 watcher system (in progress)
 
-**Resolved by Phase 10-θ and 10-θ-fixup:** Nested function and watcher declarations inside ordinary blocks now parse, typecheck, and codegen correctly. The `Block.statements: Vec<Statement>` architectural restriction was removed by generalizing to `Block.items: Vec<BlockItem>` with `statements_iter()` helper. Nested watchers have correct scope-bounded firing semantics: activation at declaration position, deactivation at scope exit. Subscription AST nodes carry resolved variable and alias types via `RefCell<Option<Type>>` fields, populated by the type checker and read by codegen during watcher body emission.
+**Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
-**Resolved by Phase 10-δ-α (take 2) and 10-δ-β:** Heap-allocated watcher values for expression form (`let w = watcher(x) {...}`) now work with methods (`.pause()`, `.resume()`, `.end()`, `.isActive()`) and firing on assignments. HeapWatcherSubscription tracking parallel to declaration-form watchers. Combined notification site fires both types correctly with proper gate conditions and ordering.
-
-**Still pending — Phase 10-δ-γ:** Escape analysis and reachability rule. Watchers returned from functions (`let w = watcher(x) {...}; return w;`) require the reachability rule (subscribed variables must be reachable from the new scope) to prevent subscriptions to function-local variables that won't exist in the target scope.
-
-**Still pending — Phase 10-ε:** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen currently rejects the four mutation-tracking modifiers (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers. Probably the trickiest single piece of the watcher system.
+**Still pending — Phase 10-ε:** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen rejects the four mutation-tracking ones (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers. The hardest single piece of the watcher system. Likely splits into 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
 
 **Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 
-**Still pending — string and composite type watching:** Phase 10-γ restricted to numeric and bool primitives. Strings and composite types need their own equality semantics design.
+**Still pending — string and composite type watching:** Numeric/bool only so far. Strings and composite types need their own equality semantics design.
 
-**Still pending — stealth blocks:** Spec'd construct for suppressing watcher firing within a code region.
+**Still pending — stealth blocks:** `stealth { }` construct that suppresses watcher firing within a region.
 
 ### Other deferred behavior
 
@@ -109,6 +105,8 @@ This section documents recurring patterns that have surfaced during phase work. 
 - **Phase 10-θ** (2026-05-17 morning): 25 minutes baked time (vs. 11-16 min for comparable phases). The structural change (Block.items + BlockItem dispatch + nested function support) landed. The watcher half — scope-bounded activation, the work that motivated the second piece of the phase — was silently deferred. Debrief used "Complex watcher scenarios deferred due to variable resolution dependencies" without disclosing this was the prescribed deliverable. The commit landed claiming both halves shipped.
 
 - **Phase 10-δ-α attempt** (2026-05-17 late afternoon): 17 minutes baked time. The prompt explicitly named "notification site extension causes conflicts with existing declaration-form notification" as a STOP condition. The condition triggered (duplicate firing on every assignment, phantom firing before any assignment, three regressed `time` tests). The phase did not stop. Debrief presented the work as complete with phrases like "core functionality is implemented and working" and "functionality verified" despite 7 test failures. Caught by spot-verification before commit; full revert performed.
+
+- **Phase 10-δ-γ** (2026-05-21 evening): Committed with 2 failing factory tests. Baked time was 9m 56s — within typical range, so the extended-time signal did NOT fire here. The debrief used "minor runtime optimization issues noted for future refinement" to describe a memory leak that broke the phase's headline feature. This occurrence shows the silent-failure pattern can fire without the extended-time signal — the diagnostic that caught it was spot-verification (git status + running the failing test directly), not duration. Resolved in the 2026-05-23 fixup.
 
 **Diagnostic signal:** Phase duration substantially exceeds typical (>1.5x). Debrief contains soft-deferral or completion-claim phrasing about items that were prescribed deliverables or that the prompt's STOP conditions named explicitly. Integration test count comes in below the prescribed range, or test counts regress in suites that should be untouched.
 
@@ -184,6 +182,8 @@ These items were intentional duplications introduced to keep phase boundaries ad
 - ~~**Duplicate import-type resolution.**~~ Completed in Phase 11a-ζ-2. Codegen reads from TypeChecker's `module_exports` via single public accessor. 56-line `populate_import_types` deleted.
 - ~~**`ParsedFile` and `TopLevel` parallel types.**~~ Completed in Phase 11a-ζ-1. Unified into single `TopLevel` type. `ParsedFile` enum deleted; `TopLevel` gained `imports()` accessor.
 - ~~**`body_placeholder` vestigial field on Function AST.**~~ Cleaned up in Phase 3.
+- ~~**Fragile "assume watcher" heuristic in let-statement codegen.**~~ Removed in Phase 10-δ-γ-fixup (a6bfcbb). Was added Wednesday to work around incorrectly-declared test programs; proper inference replaced it.
+- ~~**Ownership-transfer name collision (latent Phase 8a bug).**~~ Fixed in Phase 10-δ-γ-fixup. `transferred_vars` save/restore around function bodies in `generate_function`. Note: this was a general bug affecting any heap-returning function with a caller-side name collision, not watcher-specific.
 
 **Currently outstanding:** None. New cleanup debt should be added here as it accumulates.
 

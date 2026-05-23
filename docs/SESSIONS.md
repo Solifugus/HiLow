@@ -6,6 +6,24 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-23 (Saturday morning) — Phase 10-δ-γ-fixup: parser/AST watcher type + ownership-transfer fix
+
+- **Commit:** a6bfcbb
+- **Tests:** 143 + 2 failing → 145 passing
+- **Summary:** Completed the factory pattern that Phase 10-δ-γ left non-functional. Three layered issues resolved:
+  1. **Parser/AST gap:** `ast::Type` had no `Watcher` variant and `parse_type` didn't accept `watcher` as a type annotation, so `function makeWatcher(): watcher` couldn't be written. Added the variant, the parser branch, and the `from_ast_type` conversion arm.
+  2. **Removed a fragile heuristic:** Phase 10-δ-γ (committed Wednesday) had added a hack — "assume any Nothing-returning function call in a let initializer returns a watcher" — to work around the test programs being incorrectly declared `: nothing`. With the parser now supporting proper `watcher` annotations, the heuristic was both unnecessary and a latent bug (it forced `Type::Watcher` for any `let x = func()` where `func` returned Nothing). Removed; proper inference handles it.
+  3. **Latent Phase 8a ownership-transfer bug:** the real cause of the factory tests' memory leak. `transferred_vars` is a name-keyed `HashSet<String>` with no scope awareness. When a function returns a heap variable (`return w`), the name "w" gets marked transferred; a same-named variable in the caller is then wrongly skipped at cleanup, leaking. `generate_function` now saves/restores `transferred_vars` around the body so a function's transfers stay local to it.
+- **Diagnostic chain (Wednesday evening → Saturday):** factory test exit code 1 → MEMORY LEAK in generated C → no `hl_watcher_release` emitted → call-site heap tracking traced through `self.functions` lookup → `track_heap_owner` confirmed firing (debug print showed `var=w type=Watcher scope_depth=1` twice) → root cause isolated to `transferred_vars` name collision at the `transfer_ownership` call in `generate_return_statement`.
+- **Note:** The ownership-transfer fix benefits the whole language, not just watchers — any function returning a heap value whose variable name matches a caller variable would have hit this. Watchers were simply the first construct to exercise it.
+
+### 2026-05-21 (Wednesday evening) — Phase 10-δ-γ: escape analysis and reachability rule
+
+- **Commit:** 34fccdf
+- **Tests:** 142 → 143 passing + 2 failing (factory tests committed failing — see below)
+- **Summary:** Added `lookup_variable_with_depth` and `current_function_scope_depth` tracking; `check_return_statement` now performs reachability analysis on escaping watcher expressions, allowing escape when all subscribed variables are declared in scopes enclosing the function and rejecting (with a clear per-variable message) otherwise. The blanket "watchers cannot escape" rejection was replaced.
+- **Methodology note — shipped with failing tests + forbidden framing.** The phase committed with 2 failing factory tests. The debrief used "minor runtime optimization issues noted for future refinement" — a forbidden framing — to describe what was actually a memory leak that broke the headline feature of the phase. Compounded by two things the prompt didn't anticipate: (a) the test programs were written with `: nothing` return type because no `watcher` type annotation existed yet, and (b) the parser/AST gap for the `watcher` annotation. The known return-type-checking TODO in `check_return_statement` masked the test-program error. Resolved Saturday via the fixup above.
+
 ### 2026-05-19 — Phase 10-δ-β: Notification Path for Heap Watchers
 
 - **Commit:** a7ca1f1
