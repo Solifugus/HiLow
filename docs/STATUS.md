@@ -6,12 +6,12 @@
 
 ## Current state
 
-**Phase:** Phase 10-δ complete — expression-form watcher mechanism fully working end-to-end
-**Status:** Phase 10-δ-γ-fixup landed. Watcher expressions allocate, fire, support methods, escape via the factory pattern with reachability checking, and clean up correctly. Phase 10-ε next (collection-mutation modifier runtime — the hardest remaining watcher piece).
+**Phase:** Array Phase A complete — foundational arrays (literals, indexing, length, primitives)
+**Status:** HiLow now has working arrays at the value level for the read path. Array Phase B next (mutation: push, index-assignment, remove) — the prerequisite that unblocks Phase 10-ε (watcher mutation modifiers).
 **Branch:** main
-**Last commit:** Phase 10-δ-γ-fixup: parser/AST support for 'watcher' type annotation + ownership-transfer fix
+**Last commit:** Array Phase A: foundational arrays (literals, indexing, length, primitives)
 
-**Tests:** 145 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
+**Tests:** 151 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
 
 ---
 
@@ -29,11 +29,25 @@
 
 - **Activation logic is duplicated** between `generate_block` and `generate_block_with_parameter_context`. Both block walkers contain the same Phase 4 activation loop. Small extraction opportunity. Not blocking.
 
+### Arrays (new track)
+
+**Resolved (Array Phase A):** Dynamic arrays of primitive element types — literals (`[1, 2, 3]`), indexing (`arr[i]`), `.length`, heap-allocated and refcount-cleaned-up. HiLowArray runtime struct.
+
+**Still pending — Array Phase B:** Mutation. `.push(x)` as a user-callable method, index-assignment (`arr[i] = x`), and `.pop()`/`.remove()`. This is the phase that unblocks Phase 10-ε. Design should account for where watcher-notification hooks will attach (see design notes when that phase is scoped).
+
+**Still pending — Array Phase C:** Heap element types — arrays of objects, strings, tuples, or nested arrays, with proper per-element retain/release on insert/remove.
+
+**Still pending — Array Phase D:** for-in iteration over arrays. (for-in currently works over objects only.)
+
+**Still pending — fixed arrays (`[T; N]`):** stack-allocatable, known-size. Currently `FixedArray` remains a `void*` placeholder.
+
+**Still pending — array niceties:** empty typed literals (`[]` with annotation), bounds-check semantics, equality, slicing, concatenation, comprehensions.
+
 ### Phase 10 watcher system (in progress)
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
-**Still pending — Phase 10-ε:** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen rejects the four mutation-tracking ones (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers. The hardest single piece of the watcher system. Likely splits into 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
+**Still pending — Phase 10-ε (BLOCKED on Array Phase B):** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen rejects the four mutation-tracking ones (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers — which requires mutable collections to exist first (Array Phase B). Likely splits into 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
 
 **Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 
@@ -184,6 +198,7 @@ These items were intentional duplications introduced to keep phase boundaries ad
 - ~~**`body_placeholder` vestigial field on Function AST.**~~ Cleaned up in Phase 3.
 - ~~**Fragile "assume watcher" heuristic in let-statement codegen.**~~ Removed in Phase 10-δ-γ-fixup (a6bfcbb). Was added Wednesday to work around incorrectly-declared test programs; proper inference replaced it.
 - ~~**Ownership-transfer name collision (latent Phase 8a bug).**~~ Fixed in Phase 10-δ-γ-fixup. `transferred_vars` save/restore around function bodies in `generate_function`. Note: this was a general bug affecting any heap-returning function with a caller-side name collision, not watcher-specific.
+- ~~**Array `void*` placeholder (deferred since Phase 6).**~~ Resolved for dynamic arrays of primitives in Array Phase A (56e0e09). DynamicArray now maps to HiLowArray*. FixedArray remains a placeholder (separate later phase).
 
 **Currently outstanding:** None. New cleanup debt should be added here as it accumulates.
 

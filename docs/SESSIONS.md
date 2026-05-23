@@ -6,6 +6,16 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-23 (Saturday midday) — Array Phase A: foundational arrays
+
+- **Commit:** 56e0e09
+- **Tests:** 145 → 151 integration (+6)
+- **Summary:** First working arrays in HiLow at the value level. Added HiLowArray runtime struct (refcount, length, capacity, elem_size, data buffer) with hl_array_new/push/get/len/retain/release. ArrayLit AST node + parser support in parse_primary_expression. Array literals codegen via hl_array_new + hl_array_push statement-expression. IndexAccess codegen replaced the long-standing "Phase 6 (arrays)" rejection with cast + hl_array_get. `.length` via hl_array_len. HeapType::Array integrates with scope cleanup. Typecheck infers `[T]` from homogeneous literals (rejects mixed-type with a clear error), validates index is integer, yields element type T. DynamicArray maps to HiLowArray* in C emission.
+- **Scope:** primitives only (i32/f64/bool/etc.); literals, indexing, length, read path. Mutation, heap element types, fixed arrays, for-in, and empty literals deferred to later phases.
+- **Background:** Arrays had been a `void*` placeholder since Phase 6 — parsed and typechecked as type annotations but with zero value-level support. They never got a dedicated implementation phase (Phase 9 built tuples but not arrays; Phase 16 was too far out). This phase fills that gap and is the prerequisite for Phase 10-ε (watcher mutation modifiers), which needs real mutable collections to instrument.
+- **Spot-verification beyond the debrief:** confirmed type-mismatch rejection fires; variable-index (not just literal) works; and — importantly — array cleanup works correctly in a nested function scope (the exact case where the watcher ownership machinery had bugs). All clean.
+- **Baked time:** 17m 19s — within the 25-min threshold set for a large vertical-slice phase.
+
 ### 2026-05-23 (Saturday morning) — Phase 10-δ-γ-fixup: parser/AST watcher type + ownership-transfer fix
 
 - **Commit:** a6bfcbb
