@@ -6,6 +6,21 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-23 (Saturday afternoon) — Array Phase B fix: use-after-free in heap-local-derived returns
+
+- Commit: 75634d2
+- Tests: 156 → 157 integration (+1 regression test)
+- Fixed a use-after-free surfaced by spot-verifying Array Phase B. The regular-function branch of generate_return_statement emitted scope cleanup BEFORE evaluating the return expression. For `return local[i]` where `local` is a heap array, this released the array then read freed memory — nondeterministic garbage (one run printed 1490387062). Fix: evaluate the return value into a temp (typed from the value's own inferred type), THEN cleanup, THEN return the temp — matching the main-program branch's correct ordering.
+- Also fixed a closure regression introduced mid-fix: typing the temp from current_function_return_type was wrong because that field is stale inside nested functions/closures. Resolved by typing the temp from the value's inferred type.
+- Why hidden: Phase B's mutation_scope_cleanup test had been "simplified" (judgment call #3, "to avoid parser issues with block statements") into returning a constant, dodging the heap-local-derived return. The cited parser issue was a misdiagnosis (real obstacle was the usize comparison bug, unrelated). Added a real regression test: return_element_from_scope.
+
+### 2026-05-23 (Saturday midday) — Array Phase B: mutation + watcher-list scaffolding
+
+- Commit: 7c21a91
+- Tests: 151 → 156 integration (+5), 57 → 58 typecheck (+1)
+- Array mutation: `.push(x)`, index-assignment (`arr[i] = x`), `.pop()`. HiLowArray gains a watcher-list head + HiLowArrayWatcher struct (scaffolding for 10-ε; list always empty in B). Each mutation runtime fn (push/pop/set) has a firing loop walking the empty list, documenting which modifiers it will fire (push→ADDED/CHANGED/DEEP, set→CHANGED/DEEP, pop→REMOVED/CHANGED/DEEP). Index-assignment routed through hl_array_set (not the lvalue-deref fall-through) so the future firing path stays consistent.
+- Architectural decision: watcher list lives on the HiLowArray itself, not keyed by variable name, so alias-routed mutations fire correctly (avoids the "backdoor bug" of silently missed mutations). Built notification-ready (gradation b): loops present, registration deferred to 10-ε.
+
 ### 2026-05-23 (Saturday midday) — Array Phase A: foundational arrays
 
 - **Commit:** 56e0e09

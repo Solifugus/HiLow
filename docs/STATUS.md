@@ -6,12 +6,12 @@
 
 ## Current state
 
-**Phase:** Array Phase A complete — foundational arrays (literals, indexing, length, primitives)
-**Status:** HiLow now has working arrays at the value level for the read path. Array Phase B next (mutation: push, index-assignment, remove) — the prerequisite that unblocks Phase 10-ε (watcher mutation modifiers).
-**Branch:** main
-**Last commit:** Array Phase A: foundational arrays (literals, indexing, length, primitives)
+Phase: Array Phase B complete (+ UAF fix) — arrays mutate correctly with watcher-list scaffolding in place
+Status: Arrays support literals, indexing, length, push, index-assignment, pop, with correct heap cleanup including heap-local-derived returns. usize/.length comparison usability bug found (see deferred work) — fixing next. Then Phase 10-ε (watcher mutation modifiers) is unblocked.
+Branch: main
+Last commit: Array Phase B fix: capture return value before scope cleanup (fixes use-after-free)
 
-**Tests:** 151 integration, 68 parser, 28 typecheck_module, 57 typecheck_tests, 8 resolver, plus other unit suites — all passing.
+Tests: 157 integration, 68 parser, 28 typecheck_module, 58 typecheck_tests, 8 resolver, plus other unit suites — all passing.
 
 ---
 
@@ -29,25 +29,21 @@
 
 - **Activation logic is duplicated** between `generate_block` and `generate_block_with_parameter_context`. Both block walkers contain the same Phase 4 activation loop. Small extraction opportunity. Not blocking.
 
-### Arrays (new track)
+### Arrays
 
-**Resolved (Array Phase A):** Dynamic arrays of primitive element types — literals (`[1, 2, 3]`), indexing (`arr[i]`), `.length`, heap-allocated and refcount-cleaned-up. HiLowArray runtime struct.
+Resolved (Phase A + B + UAF fix): Dynamic arrays of primitives — literals, indexing, .length, .push, index-assignment, .pop. Heap-allocated, refcount-cleaned including heap-local-derived returns. Watcher-list scaffolding on HiLowArray (firing loops present, empty list) ready for 10-ε.
 
-**Still pending — Array Phase B:** Mutation. `.push(x)` as a user-callable method, index-assignment (`arr[i] = x`), and `.pop()`/`.remove()`. This is the phase that unblocks Phase 10-ε. Design should account for where watcher-notification hooks will attach (see design notes when that phase is scoped).
+Bug — usize/.length comparison (HIGH PRIORITY, fixing next): .length returns usize; strict no-coercion rejects comparing it against i32 literals or variables (`if (arr.length > 2)`, `while (i < arr.length)` both fail "Cannot compare usize and i32"). Makes .length nearly unusable. Favored fix: literal-context inference so bare integer literals adapt to usize when compared against usize, keeping no-coercion for typed variables. Loop-counter-vs-length (usize vs i32 variable) needs a companion decision.
 
-**Still pending — Array Phase C:** Heap element types — arrays of objects, strings, tuples, or nested arrays, with proper per-element retain/release on insert/remove.
-
-**Still pending — Array Phase D:** for-in iteration over arrays. (for-in currently works over objects only.)
-
-**Still pending — fixed arrays (`[T; N]`):** stack-allocatable, known-size. Currently `FixedArray` remains a `void*` placeholder.
-
-**Still pending — array niceties:** empty typed literals (`[]` with annotation), bounds-check semantics, equality, slicing, concatenation, comprehensions.
+Still pending — Phase C: heap element types (arrays of objects/strings/tuples) with per-element retain/release.
+Still pending — Phase D: for-in over arrays.
+Still pending — niceties: .remove/.insert/.clear, fixed arrays [T;N], empty typed literals, bounds checks, equality, slicing, concat.
 
 ### Phase 10 watcher system (in progress)
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
-**Still pending — Phase 10-ε (BLOCKED on Array Phase B):** Collection-mutation modifier runtime semantics. Parser and typecheck accept all six modifiers; codegen rejects the four mutation-tracking ones (`deep`, `added`, `removed`, `moved`). Real semantics require the runtime to know which method calls on collections constitute mutations and notify appropriate watchers — which requires mutable collections to exist first (Array Phase B). Likely splits into 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
+Phase 10-ε — UNBLOCKED (Array Phase B scaffolding ready): collection-mutation modifier runtime. HiLowArray watcher list + firing loops exist (empty); 10-ε populates the list when watcher((added)arr){...} subscribes, and fills in the firing-body calling convention (delta passing). Likely splits 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
 
 **Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 
@@ -61,6 +57,7 @@
 - **`print` is a built-in special case in codegen.** Hardcoded type-to-runtime-function mapping. Phase 11 (modules) or Phase 16 (standard library) should generalize via proper module imports.
 - **`is` operator on objects is not implemented.** Phase 5a implements `is` for primitives only. Runtime prototype-chain checking comes in Phase 7.
 - **Codegen `get_expression_type` lacks symbol-table context.** Some member-access expressions in complex contexts fail with "member access for type <unknown>". Should be resolved by either storing type information during type checking or improving codegen type evaluation.
+- **current_function_return_type is stale inside nested functions/closures** (set in generate_function, not saved/restored). The Array Phase B UAF fix sidesteps it for the return temp, but the optional-wrap logic still reads it and would mis-wrap an optional-returning nested function. Fix: save/restore around the body (like the transferred_vars fix). Latent.
 
 ### Error message polish
 
@@ -185,6 +182,10 @@ This section documents recurring patterns that have surfaced during phase work. 
 - **Phase 7a**: Codegen issue described as "one technical limitation." Even `let p = { x: 1 }; print(p.x)` (the simplest possible object program) didn't compile.
 
 **Mitigation:** "Documented for future refinement" is a deferral phrase that often hides incomplete work. When a debrief mentions a known issue, verify it doesn't break the canonical example of the feature being delivered. Phase scope must include integration tests that exercise the canonical example end-to-end.
+
+### Test weakened to pass
+
+**Pattern:** Claude Code may silently rewrite a test into a weaker version that passes rather than surface a problem. Array Phase B (2026-05-23): mutation_scope_cleanup was "simplified to avoid parser issues" into returning a constant, dodging a real use-after-free. Signal: debrief says a test was "simplified" / "to avoid" / "to work around." Mitigation: probe the original hard case directly; such phrases often mask a real bug in another layer.
 
 ---
 
