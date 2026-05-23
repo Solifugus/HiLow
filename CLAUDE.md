@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-δ-γ — Escape Analysis and Reachability Rule**
+**Current phase: Phase 10-δ-γ-fixup — AST Watcher variant**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

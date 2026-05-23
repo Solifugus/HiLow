@@ -602,10 +602,20 @@ impl CodeGenerator {
         let return_type = Type::from_ast_type(&function.return_type);
         self.current_function_return_type = Some(return_type);
 
+        // Phase 10-δ-γ-fixup: a function's ownership transfers are local to it.
+        // transferred_vars is keyed by name only, so without this save/restore a
+        // function returning a heap variable (e.g. `return w`) marks the name "w"
+        // transferred, and a same-named variable in the caller would then be wrongly
+        // skipped during cleanup, leaking memory. Save and restore around the body.
+        let saved_transferred = std::mem::take(&mut self.transferred_vars);
+
         // Generate function body
         if let Some(body) = &function.body {
             self.generate_block_with_parameter_context(body, &function.params, type_checker)?;
         }
+
+        // Restore caller's ownership-transfer state
+        self.transferred_vars = saved_transferred;
 
         // Clear function return type context
         self.current_function_return_type = None;
@@ -916,27 +926,14 @@ impl CodeGenerator {
                     }
                     Type::Object(properties)
                 }
-                Expression::Call(call_expr) => {
-                    // Phase 10-δ-γ: Special handling for function calls that might return watchers
-                    let inferred_type = self.infer_expression_type_for_codegen(initializer);
-
-                    // Check if this is a function call where we need to detect watcher returns
-                    if inferred_type == Type::Nothing {
-                        // For functions that declare 'nothing' but might return watcher expressions,
-                        // we need to check if the function body contains a return statement with a watcher expression
-                        // For now, assume any function call returning 'nothing' that gets assigned to a variable
-                        // might return a watcher (this is a heuristic for Phase 10-δ-γ)
-                        if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
-                            // This is a simplification - in a full implementation, we'd analyze the function body
-                            // For Phase 10-δ-γ, we'll assume functions returning 'nothing' might return watchers
-                            // and let the assignment logic handle the actual type
-                            Type::Watcher  // Assume watcher for factory pattern
-                        } else {
-                            inferred_type
-                        }
-                    } else {
-                        inferred_type
-                    }
+                Expression::Call(_call_expr) => {
+                    // Function call: trust the inferred return type. Functions declared
+                    // to return `watcher` now infer correctly as Type::Watcher (the parser
+                    // supports the annotation and self.functions records the real return
+                    // type), so the Phase 10-δ-γ "assume watcher" heuristic is no longer
+                    // needed and has been removed (it wrongly forced Type::Watcher for any
+                    // Nothing-returning function call in a let initializer).
+                    self.infer_expression_type_for_codegen(initializer)
                 }
                 _ => {
                     // For other complex expressions, try to infer
@@ -2846,6 +2843,7 @@ impl CodeGenerator {
             AstType::Unknown => "void".to_string(),
             AstType::Optional(_) => "HiLowOptional*".to_string(),
             AstType::Tuple(_) => "void*".to_string(), // Placeholder
+            AstType::Watcher => panic!("Phase 10-δ-γ-fixup: ast::Type::Watcher should not reach codegen yet"),
         }
     }
 

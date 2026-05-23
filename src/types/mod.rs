@@ -161,6 +161,7 @@ impl Type {
             },
             ast::Type::MoneyOf(currency) => Type::MoneyOf(currency.clone()),
             ast::Type::Unknown => Type::Unknown,
+            ast::Type::Watcher => Type::Watcher,
         }
     }
 

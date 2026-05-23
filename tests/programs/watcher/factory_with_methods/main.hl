@@ -1,7 +1,7 @@
 high program(args: [string]): i32 {
     let counter = 0
 
-    function makeWatcher(): nothing {
+    function makeWatcher(): watcher {
         let w = watcher(counter) {
             print("watcher fired")
             print(counter)

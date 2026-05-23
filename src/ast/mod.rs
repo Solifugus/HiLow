@@ -43,6 +43,7 @@ pub enum Type {
     Optional(Box<Type>), // T? syntax for "T or unknown"
     MoneyOf(String), // parameterized money type: money<USD>, money<EUR>, etc.
     Tuple(Vec<Type>), // tuple types: (T, U), (T, U, V), etc.
+    Watcher,                    // NEW: Phase 10-δ-γ-fixup
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -666,6 +666,9 @@ impl Parser {
                 // Placeholder function type for backward compatibility
                 Type::Function(vec![], Box::new(Type::Primitive(PrimitiveType::Nothing)))
             }
+        } else if self.check(&TokenKind::Watcher) {
+               self.advance()?; // consume 'watcher'
+               Type::Watcher
         } else {
             self.parse_primitive_type()?
         };
