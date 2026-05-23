@@ -1625,6 +1625,7 @@ HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity) {
     arr->capacity = initial_capacity;
     arr->elem_size = elem_size;
     arr->data = malloc(elem_size * initial_capacity);
+    arr->watchers = NULL;  // Phase B scaffolding: watcher list always empty
 
     return arr;
 }
@@ -1657,6 +1658,17 @@ void hl_array_push(HiLowArray* arr, void* elem) {
     void* dest = (char*)arr->data + (arr->length * arr->elem_size);
     memcpy(dest, elem, arr->elem_size);
     arr->length++;
+
+    // Phase B scaffolding: fire watchers registered on this array. List is always
+    // empty in Phase B (registration is Phase 10-ε), so this loop never executes a body.
+    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+        // Phase 10-ε will: check modifier matches this operation, check
+        // w->watcher_state active/not-ended, then call w->body_fn(w->captured_vars)
+        // with the delta (e.g. the pushed element for ADDED). Convention finalized in 10-ε.
+        // For Phase B this loop body is intentionally empty beyond the modifier-relevance
+        // comment; document which modifiers THIS operation will fire:
+        //   push -> ADDED, CHANGED, DEEP
+    }
 }
 
 void* hl_array_get(HiLowArray* arr, size_t index) {
@@ -1672,4 +1684,55 @@ void* hl_array_get(HiLowArray* arr, size_t index) {
 
 size_t hl_array_len(HiLowArray* arr) {
     return arr->length;
+}
+
+void* hl_array_pop(HiLowArray* arr) {
+    // Bounds check - undefined behavior for empty arrays in Phase B
+    if (arr->length == 0) {
+        fprintf(stderr, "Runtime error: pop() on empty array\n");
+        exit(1);
+    }
+
+    // Decrement length (logically removing the last element)
+    arr->length--;
+
+    // Get pointer to the now-removed element slot
+    void* removed_slot = (char*)arr->data + (arr->length * arr->elem_size);
+
+    // Phase B scaffolding: fire watchers registered on this array. List is always
+    // empty in Phase B (registration is Phase 10-ε), so this loop never executes a body.
+    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+        // Phase 10-ε will: check modifier matches this operation, check
+        // w->watcher_state active/not-ended, then call w->body_fn(w->captured_vars)
+        // with the delta (e.g. the popped element for REMOVED). Convention finalized in 10-ε.
+        // For Phase B this loop body is intentionally empty beyond the modifier-relevance
+        // comment; document which modifiers THIS operation will fire:
+        //   pop -> REMOVED, CHANGED, DEEP
+    }
+
+    return removed_slot;
+}
+
+void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
+    // Optional bounds check - encouraged but not required in Phase B
+    if (index >= arr->length) {
+        fprintf(stderr, "Runtime error: array index %zu out of bounds for set (length %zu)\n",
+                index, arr->length);
+        exit(1);
+    }
+
+    // Overwrite element at index
+    void* dest = (char*)arr->data + (index * arr->elem_size);
+    memcpy(dest, elem, arr->elem_size);
+
+    // Phase B scaffolding: fire watchers registered on this array. List is always
+    // empty in Phase B (registration is Phase 10-ε), so this loop never executes a body.
+    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+        // Phase 10-ε will: check modifier matches this operation, check
+        // w->watcher_state active/not-ended, then call w->body_fn(w->captured_vars)
+        // with the delta (e.g. the modified element for CHANGED). Convention finalized in 10-ε.
+        // For Phase B this loop body is intentionally empty beyond the modifier-relevance
+        // comment; document which modifiers THIS operation will fire:
+        //   set (index) -> CHANGED, DEEP
+    }
 }

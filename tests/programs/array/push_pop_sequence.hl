@@ -1,0 +1,12 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+    nums.push(40)
+    nums[0] = 99
+    print(nums[0])
+    print(nums[3])
+    print(nums.length)
+    let last = nums.pop()
+    print(last)
+    print(nums.length)
+    return 0
+}

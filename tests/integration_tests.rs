@@ -2970,3 +2970,100 @@ fn test_array_element_type_mismatch_rejected() {
             "Error should mention array element type mismatch, got: {}", error_message);
 }
 
+// Array Phase B: Mutation tests
+
+#[test]
+fn test_array_push() {
+    let executable = compile_program("tests/programs/array/push.hl")
+        .expect("Failed to compile array push test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array push test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/push.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_index_assign() {
+    let executable = compile_program("tests/programs/array/index_assign.hl")
+        .expect("Failed to compile array index assign test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array index assign test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/index_assign.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_pop() {
+    let executable = compile_program("tests/programs/array/pop.hl")
+        .expect("Failed to compile array pop test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array pop test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/pop.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_push_pop_sequence() {
+    let executable = compile_program("tests/programs/array/push_pop_sequence.hl")
+        .expect("Failed to compile array push-pop sequence test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array push-pop sequence test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/push_pop_sequence.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_mutation_scope_cleanup() {
+    let executable = compile_program("tests/programs/array/mutation_scope_cleanup.hl")
+        .expect("Failed to compile array mutation scope cleanup test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array mutation scope cleanup test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no memory leaks)");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/mutation_scope_cleanup.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+

@@ -1099,6 +1099,39 @@ impl TypeChecker {
     }
 
     fn check_assign_statement(&mut self, assign_stmt: &AssignStmt) {
+        // Special handling for index assignment (arr[i] = x) - Array Phase B
+        if let Expression::IndexAccess(index_access) = &assign_stmt.target {
+            let array_type = self.check_expression(&index_access.object);
+            let index_type = self.check_expression(&index_access.index);
+            let value_type = self.check_expression(&assign_stmt.value);
+
+            // Verify array is actually an array type
+            if let Type::DynamicArray(elem_type) = array_type {
+                // Verify index is integer type
+                if !matches!(index_type, Type::I32 | Type::I64 | Type::U32 | Type::U64 | Type::Usize) {
+                    self.add_error(
+                        format!("Array index must be integer type, got {}", index_type),
+                        index_access.position.clone()
+                    );
+                }
+
+                // Verify assigned value matches element type
+                if *elem_type != value_type {
+                    self.add_error(
+                        format!("Cannot assign {} to array element of type {}", value_type, elem_type),
+                        assign_stmt.position.clone()
+                    );
+                }
+            } else {
+                self.add_error(
+                    format!("Cannot index assign to non-array type {}", array_type),
+                    assign_stmt.position.clone()
+                );
+            }
+            return;
+        }
+
+        // Regular assignment (non-index)
         let target_type = self.check_expression(&assign_stmt.target);
         let value_type = self.check_expression(&assign_stmt.value);
 
@@ -2721,10 +2754,18 @@ impl TypeChecker {
                     _ => Type::Nothing, // Unknown properties return nothing (Phase 9a behavior)
                 }
             },
-            Type::DynamicArray(_) => {
-                // Arrays have .length property
+            Type::DynamicArray(elem_type) => {
+                // Arrays have .length property and mutation methods (Array Phase B)
                 match member_access.member.as_str() {
                     "length" => Type::Usize,
+                    "push" => {
+                        // .push(x) where x: T -> Nothing (push returns nothing)
+                        Type::Function(vec![*elem_type.clone()], Box::new(Type::Nothing))
+                    },
+                    "pop" => {
+                        // .pop() -> T (returns element of array type)
+                        Type::Function(vec![], elem_type.clone())
+                    },
                     _ => {
                         self.add_error(
                             format!("Arrays do not have a property named '{}'", member_access.member),

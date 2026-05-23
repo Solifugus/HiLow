@@ -249,21 +249,45 @@ void hl_watcher_resume(HiLowWatcher* w);
 void hl_watcher_end(HiLowWatcher* w);
 bool hl_watcher_is_active(HiLowWatcher* w);
 
-// Array support (Array Phase A)
+// Array support (Array Phase A) and watcher scaffolding (Array Phase B)
+// Forward-declared; full definition populated in Phase 10-ε.
+typedef struct HiLowArrayWatcher HiLowArrayWatcher;
+
 typedef struct HiLowArray {
     int refcount;
     size_t length;
     size_t capacity;
     size_t elem_size;
     void* data;
+    HiLowArrayWatcher* watchers;   // Phase B scaffolding: head of subscription list (always NULL in Phase B)
 } HiLowArray;
+
+// Phase B scaffolding: the subscription node. Phase 10-ε fills in the calling
+// convention for firing the watcher body with delta information. For now the
+// struct exists so mutation operations can walk an (always-empty) list.
+struct HiLowArrayWatcher {
+    int modifier;                   // ADDED / REMOVED / CHANGED / DEEP / MOVED (enum values; define a small set)
+    void* body_fn;                  // watcher body function pointer (unused until 10-ε)
+    void** captured_vars;           // captured context (unused until 10-ε)
+    void* watcher_state;            // HiLowWatcher* for active/ended gating (unused until 10-ε)
+    HiLowArrayWatcher* next;
+};
+
+// Array watcher modifier constants (Phase B scaffolding)
+#define HL_ARR_ADDED 1
+#define HL_ARR_REMOVED 2
+#define HL_ARR_CHANGED 3
+#define HL_ARR_DEEP 4
+#define HL_ARR_MOVED 5
 
 HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity);
 void hl_array_retain(HiLowArray* arr);
 void hl_array_release(HiLowArray* arr);
-void hl_array_push(HiLowArray* arr, void* elem);   // copies elem_size bytes from elem into the buffer, growing if needed
+void hl_array_push(HiLowArray* arr, void* elem);   // copies elem_size bytes from elem into the buffer, growing if needed, now with firing loop
 void* hl_array_get(HiLowArray* arr, size_t index); // returns pointer to element slot (caller casts and dereferences)
 size_t hl_array_len(HiLowArray* arr);
+void* hl_array_pop(HiLowArray* arr);                // removes and returns pointer to the last element slot; decrements length
+void hl_array_set(HiLowArray* arr, size_t index, void* elem); // overwrites element at index with firing loop
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

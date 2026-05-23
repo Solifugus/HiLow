@@ -1543,6 +1543,40 @@ impl CodeGenerator {
                 self.output.push_str("    }\n");
                 self.output.push_str("}\n");
             }
+        } else if let Expression::IndexAccess(index_access) = &assign_stmt.target {
+            // Array Phase B: Index assignment (arr[i] = x) - route through hl_array_set
+            if assign_stmt.op != AssignOpKind::Assign {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "compound assignment to array elements".to_string(),
+                    phase: "future phases".to_string(),
+                });
+            }
+
+            // Verify this is actually array type to route correctly
+            let array_type = self.infer_expression_type_for_codegen(&index_access.object);
+            if !matches!(array_type, Type::DynamicArray(_)) {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "index assignment on non-array types".to_string(),
+                    phase: "future phases".to_string(),
+                });
+            }
+
+            // Generate temp variable for the assigned value (need lvalue for address)
+            let temp_var = format!("temp_{}", self.var_counter);
+            self.var_counter += 1;
+
+            // Determine element type for temp declaration
+            if let Type::DynamicArray(elem_type) = &array_type {
+                let elem_c_type = self.hilow_type_to_c(elem_type);
+                self.output.push_str(&format!("  {} {} = ", elem_c_type, temp_var));
+                self.generate_expression(&assign_stmt.value, type_checker)?;
+                self.output.push_str(";\n");
+                self.output.push_str("  hl_array_set(");
+                self.generate_expression(&index_access.object, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&index_access.index, type_checker)?;
+                self.output.push_str(&format!(", &{});\n", temp_var));
+            }
         } else {
             // Regular assignment to variables
 
@@ -2520,6 +2554,55 @@ impl CodeGenerator {
             if let Type::Object(_) = object_type {
                 // Object method calls
                 return self.generate_member_function_call(call, member_access, type_checker);
+            } else if let Type::DynamicArray(elem_type) = object_type {
+                // Array Phase B: Array method calls (.push, .pop)
+                match member_access.member.as_str() {
+                    "push" => {
+                        // arr.push(x) -> hl_array_push(arr, &temp)
+                        if call.args.len() != 1 {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: "array.push() with wrong argument count".to_string(),
+                                phase: "Array Phase B".to_string(),
+                            });
+                        }
+
+                        // Generate temp variable for the argument (need lvalue for address)
+                        let temp_var = format!("temp_{}", self.var_counter);
+                        self.var_counter += 1;
+                        let elem_c_type = self.hilow_type_to_c(&elem_type);
+
+                        self.output.push_str("{\n");
+                        self.output.push_str(&format!("    {} {} = ", elem_c_type, temp_var));
+                        self.generate_expression(&call.args[0], type_checker)?;
+                        self.output.push_str(";\n");
+                        self.output.push_str("    hl_array_push(");
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(&format!(", &{});\n", temp_var));
+                        self.output.push_str("}");
+                        return Ok(());
+                    }
+                    "pop" => {
+                        // arr.pop() -> (*(T*)hl_array_pop(arr))
+                        if !call.args.is_empty() {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: "array.pop() with arguments".to_string(),
+                                phase: "Array Phase B".to_string(),
+                            });
+                        }
+
+                        let elem_c_type = self.hilow_type_to_c(&elem_type);
+                        self.output.push_str(&format!("(*({}*)hl_array_pop(", elem_c_type));
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str("))");
+                        return Ok(());
+                    }
+                    _ => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("unsupported array method '{}'", member_access.member),
+                            phase: "Array Phase B".to_string(),
+                        });
+                    }
+                }
             } else if let Expression::Ident { name, .. } = member_access.object.as_ref() {
                 if name == "time" {
                     // Built-in time method calls
@@ -4246,12 +4329,30 @@ impl CodeGenerator {
             _ => Type::Unknown
         };
 
-        // Special case: array .length property
-        if matches!(object_type, Type::DynamicArray(_)) && member_access.member == "length" {
-            self.output.push_str("hl_array_len(");
-            self.generate_expression(&member_access.object, type_checker)?;
-            self.output.push_str(")");
-            return Ok(());
+        // Special case: array properties and methods
+        if let Type::DynamicArray(elem_type) = &object_type {
+            match member_access.member.as_str() {
+                "length" => {
+                    self.output.push_str("hl_array_len(");
+                    self.generate_expression(&member_access.object, type_checker)?;
+                    self.output.push_str(")");
+                    return Ok(());
+                }
+                "push" | "pop" => {
+                    // Array Phase B: These are method references, not direct properties
+                    // For now, we don't support storing array methods as function values
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("array method '{}' as first-class value", member_access.member),
+                        phase: "future phases".to_string(),
+                    });
+                }
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("unknown array property '{}'", member_access.member),
+                        phase: "Array Phase B".to_string(),
+                    });
+                }
+            }
         }
 
         // Special case: property access on unknown types or narrowed unknown values

@@ -1,0 +1,7 @@
+high program(): i32 {
+    let nums = [1, 2, 3]
+    nums.push(4)
+    nums[1] = 99
+    let x = nums.pop()
+    return 0
+}

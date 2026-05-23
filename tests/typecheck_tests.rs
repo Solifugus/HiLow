@@ -730,3 +730,22 @@ fn test_call_money_to_money_specific_behavior() {
     // actual behavior rather than assuming it should fail.
     assert!(result.is_ok(), "Current behavior allows money to money<USD> calls, got: {:?}", result);
 }
+
+// Array Phase B: Array mutation type checking tests
+
+#[test]
+fn test_array_push_type_mismatch_rejected() {
+    let input = r#"
+    high program(): i32 {
+        let nums = [1, 2]
+        nums.push(true)
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type mismatch error for push(bool) on i32 array");
+    let errors = result.unwrap_err();
+    let error_msg = format!("{:?}", errors);
+    assert!(error_msg.contains("Cannot assign bool to i32") ||
+            error_msg.contains("bool") && error_msg.contains("i32"),
+            "Error should mention type mismatch, got: {}", error_msg);
+}

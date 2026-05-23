@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array Phase A — Foundational Arrays**
+**Current phase: Array Phase B — Array Mutation**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
