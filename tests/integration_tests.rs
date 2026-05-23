@@ -3067,3 +3067,25 @@ fn test_array_mutation_scope_cleanup() {
     let _ = fs::remove_file(&executable);
 }
 
+
+#[test]
+fn test_array_return_element_from_scope() {
+    // Regression test for the use-after-free where a function returned a value
+    // derived from a heap-local array (return local[i]). The scope cleanup was
+    // releasing the array before the return expression read from it. Fixed by
+    // capturing the return value into a temp before emitting cleanup.
+    let executable = compile_program("tests/programs/array/return_element_from_scope/main.hl")
+        .expect("Failed to compile return_element_from_scope.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run return_element_from_scope test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no use-after-free, no leak)");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/return_element_from_scope.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}

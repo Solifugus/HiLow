@@ -1214,21 +1214,36 @@ impl CodeGenerator {
             // Phase 11b-fixup: Track that main has explicitly returned
             self.main_explicitly_returned = true;
         } else {
-            // In regular function: emit cleanup and return immediately
-            // Phase 8a: Emit cleanup for all scopes before returning
-            for scope in (1..=self.scope_depth).rev() {
-                self.emit_early_return_cleanup(scope);
-            }
-
-            self.output.push_str("  return");
+            // In regular function: evaluate the return value into a temp BEFORE
+            // emitting scope cleanup. Previously cleanup ran first, which freed
+            // heap-owned locals (e.g. arrays) before the return expression read
+            // from them (use-after-free for `return local[i]`). This matches the
+            // main-program branch ordering: value first, then cleanup, then return.
             if let Some(ref value) = return_stmt.value {
-                self.output.push_str(" ");
+                // Type the temp from the VALUE being returned, not from
+                // current_function_return_type (which is stale/wrong inside nested
+                // functions and closures — it reflects the enclosing function).
+                // For optional-wrapped returns the temp must be the wrapper type.
+                let value_type_for_temp = self.infer_expression_type_for_codegen(value);
+                let wrap_for_temp = if let Some(ref return_type) = self.current_function_return_type {
+                    if let Type::Optional(_) = return_type {
+                        matches!(value_type_for_temp, Type::I8 | Type::I16 | Type::I32 | Type::I64 |
+                                             Type::U8 | Type::U16 | Type::U32 | Type::U64 |
+                                             Type::F32 | Type::F64 | Type::Bool | Type::String |
+                                             Type::UnknownType)
+                    } else { false }
+                } else { false };
+                let ret_c_type = if wrap_for_temp {
+                    "HiLowOptional*".to_string()
+                } else {
+                    self.hilow_type_to_c(&value_type_for_temp)
+                };
+                let ret_temp = format!("__ret_{}", self.var_counter);
+                self.var_counter += 1;
 
-                // Check if we need to wrap value for optional return type
                 let need_optional_wrap = if let Some(ref return_type) = self.current_function_return_type {
-                    if let Type::Optional(inner_type) = return_type {
+                    if let Type::Optional(_inner_type) = return_type {
                         let value_type = self.infer_expression_type_for_codegen(value);
-                        // Wrap if returning inner type or unknown type
                         matches!(value_type, Type::I8 | Type::I16 | Type::I32 | Type::I64 |
                                              Type::U8 | Type::U16 | Type::U32 | Type::U64 |
                                              Type::F32 | Type::F64 | Type::Bool | Type::String |
@@ -1240,28 +1255,36 @@ impl CodeGenerator {
                     false
                 };
 
+                self.output.push_str(&format!("  {} {} = ", ret_c_type, ret_temp));
                 if need_optional_wrap {
-                    // Wrap primitive or unknown value for optional return type using new HiLowOptional struct
                     let value_type = self.infer_expression_type_for_codegen(value);
                     match value_type {
                         Type::I32 => self.output.push_str("hl_optional_new_i32("),
                         Type::String => self.output.push_str("hl_optional_new_string("),
                         Type::UnknownType => self.output.push_str("hl_optional_new_unknown("),
-                        _ => self.output.push_str("hl_optional_new_i32("), // Default to i32 for now
+                        _ => self.output.push_str("hl_optional_new_i32("),
                     }
                 }
-
-                // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::ReturnValue;
                 self.generate_expression(value, type_checker)?;
                 self.function_expr_context = old_context;
-
                 if need_optional_wrap {
                     self.output.push_str(")");
                 }
+                self.output.push_str(";\n");
+
+                for scope in (1..=self.scope_depth).rev() {
+                    self.emit_early_return_cleanup(scope);
+                }
+
+                self.output.push_str(&format!("  return {};\n", ret_temp));
+            } else {
+                for scope in (1..=self.scope_depth).rev() {
+                    self.emit_early_return_cleanup(scope);
+                }
+                self.output.push_str("  return;\n");
             }
-            self.output.push_str(";\n");
         }
         Ok(())
     }

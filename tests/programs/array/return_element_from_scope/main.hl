@@ -1,0 +1,10 @@
+high program(): i32 {
+    function build(): i32 {
+        let local = [10, 20, 30]
+        local.push(40)
+        return local[3]
+    }
+    let r = build()
+    print(r)
+    return 0
+}
