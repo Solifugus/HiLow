@@ -1,0 +1,11 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+
+    function do_remove(arr: [i32]): nothing {
+        arr.remove(1)
+    }
+
+    do_remove(nums)
+    print(nums.length)
+    return 0
+}

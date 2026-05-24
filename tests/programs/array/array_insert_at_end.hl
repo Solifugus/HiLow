@@ -1,0 +1,9 @@
+high program(): i32 {
+    let nums = [1, 2]
+    nums.insert(2, 3)
+    print(nums.length)
+    print(nums[0])
+    print(nums[1])
+    print(nums[2])
+    return 0
+}

@@ -2736,6 +2736,49 @@ impl CodeGenerator {
                         self.output.push_str("))");
                         return Ok(());
                     }
+                    "remove" => {
+                        // arr.remove(index) -> (*(T*)hl_array_remove(arr, index))
+                        if call.args.len() != 1 {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: "array.remove() with wrong argument count".to_string(),
+                                phase: "Array Phase B-2".to_string(),
+                            });
+                        }
+
+                        let elem_c_type = self.hilow_type_to_c(&elem_type);
+                        self.output.push_str(&format!("(*({}*)hl_array_remove(", elem_c_type));
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(", ");
+                        self.generate_expression(&call.args[0], type_checker)?;
+                        self.output.push_str("))");
+                        return Ok(());
+                    }
+                    "insert" => {
+                        // arr.insert(index, elem) -> hl_array_insert(arr, index, &temp)
+                        if call.args.len() != 2 {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: "array.insert() with wrong argument count".to_string(),
+                                phase: "Array Phase B-2".to_string(),
+                            });
+                        }
+
+                        // Generate temp variable for the element (need lvalue for address)
+                        let temp_var = format!("temp_{}", self.var_counter);
+                        self.var_counter += 1;
+                        let elem_c_type = self.hilow_type_to_c(&elem_type);
+
+                        self.output.push_str("{\n");
+                        self.output.push_str(&format!("    {} {} = ", elem_c_type, temp_var));
+                        self.generate_expression(&call.args[1], type_checker)?;
+                        self.output.push_str(";\n");
+                        self.output.push_str("    hl_array_insert(");
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(", ");
+                        self.generate_expression(&call.args[0], type_checker)?;
+                        self.output.push_str(&format!(", &{});\n", temp_var));
+                        self.output.push_str("}");
+                        return Ok(());
+                    }
                     _ => {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: format!("unsupported array method '{}'", member_access.member),
@@ -4478,8 +4521,8 @@ impl CodeGenerator {
                     self.output.push_str(")");
                     return Ok(());
                 }
-                "push" | "pop" => {
-                    // Array Phase B: These are method references, not direct properties
+                "push" | "pop" | "remove" | "insert" => {
+                    // Array Phase B/B-2: These are method references, not direct properties
                     // For now, we don't support storing array methods as function values
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("array method '{}' as first-class value", member_access.member),

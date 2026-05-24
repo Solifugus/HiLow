@@ -1,0 +1,7 @@
+high program(): i32 {
+    let nums = [100, 200, 300]
+    let w = watcher((gone=removed)nums) { print(gone) }
+    nums.remove(1)
+    print("done")
+    return 0
+}

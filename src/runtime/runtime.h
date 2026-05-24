@@ -288,6 +288,8 @@ void* hl_array_get(HiLowArray* arr, size_t index); // returns pointer to element
 size_t hl_array_len(HiLowArray* arr);
 void* hl_array_pop(HiLowArray* arr);                // removes and returns pointer to the last element slot; decrements length
 void hl_array_set(HiLowArray* arr, size_t index, void* elem); // overwrites element at index with firing loop
+void* hl_array_remove(HiLowArray* arr, size_t index); // removes and returns element at index, shifting trailing elements down
+void hl_array_insert(HiLowArray* arr, size_t index, void* elem); // inserts element at index, shifting trailing elements up
 
 // Array watcher registration (Phase 10-ε-α)
 void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state);

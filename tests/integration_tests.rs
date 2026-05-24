@@ -3378,3 +3378,119 @@ fn test_array_watcher_removed_alias_value() {
     let _ = fs::remove_file(&executable);
 }
 
+// Array Phase B-2: .remove() and .insert() integration tests
+
+#[test]
+fn test_array_remove_value() {
+    let executable = compile_program("tests/programs/array/array_remove_value.hl")
+        .expect("Failed to compile array_remove_value.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_remove_value");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_remove_value.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_insert_value() {
+    let executable = compile_program("tests/programs/array/array_insert_value.hl")
+        .expect("Failed to compile array_insert_value.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_insert_value");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_insert_value.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_remove_no_watcher() {
+    let executable = compile_program("tests/programs/array/array_remove_no_watcher.hl")
+        .expect("Failed to compile array_remove_no_watcher.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_remove_no_watcher");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_remove_no_watcher.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_insert_at_end() {
+    let executable = compile_program("tests/programs/array/array_insert_at_end.hl")
+        .expect("Failed to compile array_insert_at_end.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_insert_at_end");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_insert_at_end.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_remove_fires_removed_watcher() {
+    let executable = compile_program("tests/programs/array/array_remove_fires_removed_watcher.hl")
+        .expect("Failed to compile array_remove_fires_removed_watcher.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_remove_fires_removed_watcher");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_remove_fires_removed_watcher.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_remove_scope_cleanup() {
+    let executable = compile_program("tests/programs/array/array_remove_scope_cleanup.hl")
+        .expect("Failed to compile array_remove_scope_cleanup.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_remove_scope_cleanup");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no memory leaks)");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_remove_scope_cleanup.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+

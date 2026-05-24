@@ -2797,6 +2797,14 @@ impl TypeChecker {
                         // .pop() -> T (returns element of array type)
                         Type::Function(vec![], elem_type.clone())
                     },
+                    "remove" => {
+                        // .remove(index) where index: integer -> T (returns removed element)
+                        Type::Function(vec![Type::Usize], elem_type.clone())
+                    },
+                    "insert" => {
+                        // .insert(index, elem) where index: integer, elem: T -> Nothing
+                        Type::Function(vec![Type::Usize, *elem_type.clone()], Box::new(Type::Nothing))
+                    },
                     _ => {
                         self.add_error(
                             format!("Arrays do not have a property named '{}'", member_access.member),

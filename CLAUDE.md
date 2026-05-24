@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-ε-γ — Array watcher changed/deep (delta-passing)**
+**Current phase: Array Phase B-2 — arbitrary-position mutation**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

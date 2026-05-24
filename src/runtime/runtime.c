@@ -1757,6 +1757,95 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
     }
 }
 
+void* hl_array_remove(HiLowArray* arr, size_t index) {
+    // Bounds check
+    if (index >= arr->length) {
+        fprintf(stderr, "Runtime error: remove() index %zu out of bounds (length %zu)\n",
+                index, arr->length);
+        exit(1);
+    }
+
+    // Capture the element before shifting (needed for delta stability during watcher firing)
+    void* removed_slot = (char*)arr->data + (index * arr->elem_size);
+    static char temp_buffer[1024]; // Static buffer for delta stability - assumes elem_size <= 1024
+    memcpy(temp_buffer, removed_slot, arr->elem_size);
+
+    // Shift elements [index+1 .. length-1] down by one
+    if (index < arr->length - 1) {
+        void* dest = (char*)arr->data + (index * arr->elem_size);
+        void* src = (char*)arr->data + ((index + 1) * arr->elem_size);
+        size_t bytes_to_move = (arr->length - index - 1) * arr->elem_size;
+        memmove(dest, src, bytes_to_move);
+    }
+
+    // Decrement length
+    arr->length--;
+
+    // Fire watchers with captured element as delta
+    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (state != NULL && state->active && !state->ended) {
+            void* delta = NULL;
+            int fires = 0;
+            if (w->modifier == HL_ARR_REMOVED) {
+                delta = temp_buffer; fires = 1;
+            }
+            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                delta = NULL; fires = 1;
+            }
+            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
+    }
+
+    return temp_buffer;
+}
+
+void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
+    // Bounds check: index > length is error; index == length is allowed (append)
+    if (index > arr->length) {
+        fprintf(stderr, "Runtime error: insert() index %zu out of bounds (length %zu)\n",
+                index, arr->length);
+        exit(1);
+    }
+
+    // Grow if needed
+    if (arr->length == arr->capacity) {
+        arr->capacity *= 2;
+        arr->data = realloc(arr->data, arr->elem_size * arr->capacity);
+    }
+
+    // Shift elements [index .. length-1] up by one
+    if (index < arr->length) {
+        void* src = (char*)arr->data + (index * arr->elem_size);
+        void* dest = (char*)arr->data + ((index + 1) * arr->elem_size);
+        size_t bytes_to_move = (arr->length - index) * arr->elem_size;
+        memmove(dest, src, bytes_to_move);
+    }
+
+    // Place new element at index
+    void* dest = (char*)arr->data + (index * arr->elem_size);
+    memcpy(dest, elem, arr->elem_size);
+
+    // Increment length
+    arr->length++;
+
+    // Fire watchers with inserted element as delta
+    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (state != NULL && state->active && !state->ended) {
+            void* delta = NULL;
+            int fires = 0;
+            if (w->modifier == HL_ARR_ADDED) {
+                delta = elem; fires = 1;
+            }
+            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                delta = NULL; fires = 1;
+            }
+            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
+    }
+}
+
 // Array watcher registration (Phase 10-ε-α)
 void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state) {
     HiLowArrayWatcher* new_watcher = malloc(sizeof(HiLowArrayWatcher));
