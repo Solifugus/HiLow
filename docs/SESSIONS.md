@@ -6,6 +6,14 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-24 (Saturday) — Phase 10-ε-β-fix: alias scope registration
+
+- Commit: de3f06e
+- Tests: 168 → 170 integration (+2 value tests)
+- 10-ε-β shipped with the alias missing from variable_types so aliased-delta bodies failed to compile (`<unknown>`); β's debrief had reported a no-alias variant's output (999 999) as the canonical example, masking it; fixed by registering the alias with its element type; added two value-asserting tests (added→30/40, removed→25) that exercise the real delta path. Note this as another "test weakened / dodged path" instance for the methodology log.
+
+---
+
 ### 2026-05-24 (Sunday) — Phase 10-ε-α: array watcher firing (deep/changed, no delta)
 
 - Commit: c59e036

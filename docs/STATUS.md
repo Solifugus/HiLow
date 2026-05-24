@@ -6,10 +6,10 @@
 
 ## Current state
 
-Phase: Phase 10-ε-α complete — array watchers fire on mutation (deep/changed, no delta)
-Status: Arrays are now reactive — mutating an array (push/index-assign/pop) fires registered watchers through aliases, with pause/resume gating. 10-ε-β next (added/removed delta-passing).
-Last commit: Phase 10-ε-α: array watcher firing for deep/changed (no delta)
-Tests: 165 integration, 68 parser, 28 typecheck_module, 58 typecheck_tests (note: verify count), 8 resolver, plus unit suites — all passing.
+Phase: Phase 10-ε-β complete and verified (aliased delta values confirmed: added→30/40, removed→25). 10-ε-γ next.
+Status: Array watchers now support added/removed modifiers with delta-passing and alias binding. Alias registration bug fixed from β — aliased-delta bodies compile and receive real element values.
+Last commit: Phase 10-ε-β-fix: register alias in variable_types so aliased-delta bodies compile
+Tests: 170 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
