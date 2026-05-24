@@ -6,12 +6,12 @@
 
 ## Current state
 
-Phase: Array Phase B-2 complete — .remove / .insert with watcher firing
-Status: The array watcher system (10-ε) is functionally complete except `moved` (which awaits a future explicit reorder operation). Every array mutation — push, pop, index-assignment, remove, insert — fires the correct watchers with correct deltas, through aliases, with pause/resume gating. Arrays are fully reactive for add/remove/change.
+Phase: Array Phase D complete — for-in iteration over arrays  
+Status: Arrays are now iterable using for-in with the existing two-name syntax `for (let (i, x) in arr)` — index binds as usize, element binds as T. Length re-read live each iteration (deliberately allows mutation during iteration). Object for-in unchanged. The array watcher system (10-ε) is functionally complete except `moved`.
 Branch: main
-Last commit: Array Phase B-2: .remove and .insert with watcher firing
+Last commit: Array Phase D: for-in iteration over arrays
 
-Tests: 176 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Tests: 182 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
@@ -31,11 +31,9 @@ Tests: 176 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 re
 
 ### Arrays
 
-Resolved (Phase A, B, B-2 + UAF/usize/alias fixes): Dynamic arrays of primitives — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert. Heap-allocated, refcount-cleaned including heap-local-derived returns. Fully reactive: all mutations fire watchers (deep/changed/added/removed) with alias-bound deltas, through aliases, with pause/resume gating.
+Resolved (Phase A, B, B-2, D + UAF/usize/alias fixes): Dynamic arrays of primitives — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, for-in iteration. Heap-allocated, refcount-cleaned including heap-local-derived returns. Fully reactive: all mutations fire watchers (deep/changed/added/removed) with alias-bound deltas, through aliases, with pause/resume gating. Arrays are iterable with `for (let (i, x) in arr)` — live length re-read enables mutation during iteration.
 
 Still pending — Array Phase C: heap element types (arrays of objects/strings/tuples/arrays) with per-element retain/release on insert/remove.
-
-Still pending — Array Phase D: for-in iteration over arrays (for-in currently works over objects only).
 
 Still pending — reorder operations: .swap/.sort/.reverse (none exist). These would be the triggering operations for the `moved` watcher modifier (10-ε-γ), which is currently deferred for lack of any operation to fire it.
 

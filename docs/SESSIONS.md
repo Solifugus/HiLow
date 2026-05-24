@@ -6,6 +6,17 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-24 (Sunday) — Array Phase D: for-in iteration over arrays
+
+- Commit: 80759d8
+- Tests: 176 → 182 integration (+6)
+- Added for-in over arrays using the existing two-name syntax `for (let (i, x) in arr)` — index ↔ key, element ↔ value (structural mirror of object iteration). Typecheck+codegen only; no AST/parser change (ForInStmt already carries both names). Codegen emits an index loop that re-reads hl_array_len each iteration (live length), deliberately allowing mutation during iteration: a body push extends the loop, a body remove shifts and may skip — intentionally NOT forbidden (unlike Python).
+- Implementation: typecheck branches on DynamicArray(T) vs Object(_), declaring key_name as Usize vs String and value_name as T vs ObjectIterValue; codegen branches similarly, emitting `for (size_t i = 0; i < hl_array_len(arr); i++)` with element retrieval `*(ElemCType*)hl_array_get(arr, i)` vs the object property iteration path. Object for-in unchanged.
+- Value-asserting tests confirm both bindings: basic (0,10,1,20,2,30), empty=zero iterations, sum accumulator (30), index-only (0,1,2), mutation-push-extends (1,2,99), nested scoping. The mutation test proves live re-read: pushing during first iteration extends the loop to process the added element.
+- Milestone: arrays are now iterable. Arrays completed: literals, indexing, length, push/pop, index-assignment, remove/insert, for-in. Value-only for-in syntax (`for (let x in arr)`) deferred to a future lightweight revision.
+
+---
+
 ### 2026-05-24 (Sunday) — Array Phase B-2: .remove / .insert with watcher firing
 
 - Commit: 53c57ea
