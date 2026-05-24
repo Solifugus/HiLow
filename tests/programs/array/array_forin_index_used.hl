@@ -1,0 +1,7 @@
+high program(): i32 {
+    let vals = [100, 200, 300]
+    for (let (i, x) in vals) {
+        print(i)
+    }
+    return 0
+}

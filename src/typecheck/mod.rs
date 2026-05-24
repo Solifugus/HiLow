@@ -1062,20 +1062,8 @@ impl TypeChecker {
     }
 
     fn check_for_in_statement(&mut self, for_in_stmt: &ForInStmt) {
-        // Check that the iterable expression is an object type
+        // Check that the iterable expression is an object or array type
         let iterable_type = self.check_expression(&for_in_stmt.iterable);
-        match iterable_type {
-            Type::Object(_) => {
-                // Valid - we can iterate over objects
-            }
-            _ => {
-                self.add_error(
-                    format!("for-in requires an object; got {}", iterable_type),
-                    for_in_stmt.position.clone()
-                );
-                return;
-            }
-        }
 
         // Enter loop scope for break/continue validation
         self.loop_depth += 1;
@@ -1083,21 +1071,45 @@ impl TypeChecker {
         // Enter a new scope for the loop variables
         self.enter_scope();
 
-        // Declare the loop variables in the new scope
-        // Key is always string type
-        self.declare_variable(
-            &for_in_stmt.key_name,
-            Type::String,
-            for_in_stmt.position.clone()
-        );
-
-        // Value is a polymorphic type that allows runtime dispatch
-        // For Phase 7c-ζ, we'll use a special type that only allows certain operations
-        self.declare_variable(
-            &for_in_stmt.value_name,
-            Type::ObjectIterValue, // Special type for iteration values
-            for_in_stmt.position.clone()
-        );
+        // Declare the loop variables in the new scope based on iterable type
+        match iterable_type {
+            Type::Object(_) => {
+                // Object iteration: key is string, value is ObjectIterValue
+                self.declare_variable(
+                    &for_in_stmt.key_name,
+                    Type::String,
+                    for_in_stmt.position.clone()
+                );
+                self.declare_variable(
+                    &for_in_stmt.value_name,
+                    Type::ObjectIterValue, // Special type for iteration values
+                    for_in_stmt.position.clone()
+                );
+            }
+            Type::DynamicArray(elem_type) => {
+                // Array iteration: key is usize index, value is element type
+                self.declare_variable(
+                    &for_in_stmt.key_name,
+                    Type::Usize,
+                    for_in_stmt.position.clone()
+                );
+                self.declare_variable(
+                    &for_in_stmt.value_name,
+                    *elem_type,
+                    for_in_stmt.position.clone()
+                );
+            }
+            _ => {
+                self.add_error(
+                    format!("for-in requires an object or array; got {}", iterable_type),
+                    for_in_stmt.position.clone()
+                );
+                // Exit scopes before returning
+                self.exit_scope();
+                self.loop_depth -= 1;
+                return;
+            }
+        }
 
         // Check the loop body
         self.check_block(&for_in_stmt.body);

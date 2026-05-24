@@ -1359,51 +1359,102 @@ impl CodeGenerator {
     }
 
     fn generate_for_in_statement(&mut self, for_in_stmt: &ForInStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Generate runtime iteration over object properties
-        // for (let (key, value) in obj) { body }
-        // becomes:
-        // {
-        //     HiLowObject* __iter_obj = obj;
-        //     size_t __iter_count = hl_object_property_count(__iter_obj);
-        //     for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {
-        //         const char* key = hl_object_property_key_at(__iter_obj, __iter_i);
-        //         int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);
-        //         // Body with value dispatch based on __v_type
-        //     }
-        // }
+        // Determine if we're iterating over an object or array
+        let iterable_type = self.infer_expression_type_for_codegen(&for_in_stmt.iterable);
 
         self.output.push_str("  {\n");
 
-        // Generate the iterable object
-        self.output.push_str("    HiLowObject* __iter_obj = ");
-        self.generate_expression(&for_in_stmt.iterable, type_checker)?;
-        self.output.push_str(";\n");
+        match iterable_type {
+            Type::Object(_) => {
+                // Generate runtime iteration over object properties
+                // for (let (key, value) in obj) { body }
+                // becomes:
+                // {
+                //     HiLowObject* __iter_obj = obj;
+                //     size_t __iter_count = hl_object_property_count(__iter_obj);
+                //     for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {
+                //         const char* key = hl_object_property_key_at(__iter_obj, __iter_i);
+                //         int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);
+                //         // Body with value dispatch based on __v_type
+                //     }
+                // }
 
-        // Get property count
-        self.output.push_str("    size_t __iter_count = hl_object_property_count(__iter_obj);\n");
+                // Generate the iterable object
+                self.output.push_str("    HiLowObject* __iter_obj = ");
+                self.generate_expression(&for_in_stmt.iterable, type_checker)?;
+                self.output.push_str(";\n");
 
-        // Generate the iteration loop
-        self.output.push_str("    for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {\n");
+                // Get property count
+                self.output.push_str("    size_t __iter_count = hl_object_property_count(__iter_obj);\n");
 
-        // Get key and type for current iteration
-        self.output.push_str(&format!("      const char* {} = hl_object_property_key_at(__iter_obj, __iter_i);\n", for_in_stmt.key_name));
-        self.output.push_str("      int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);\n");
+                // Generate the iteration loop
+                self.output.push_str("    for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {\n");
 
-        // Store the value variable name and type for runtime dispatch in the loop body
-        let old_iter_value_name = self.current_iter_value_name.clone();
-        self.current_iter_value_name = Some(for_in_stmt.value_name.clone());
+                // Get key and type for current iteration
+                self.output.push_str(&format!("      const char* {} = hl_object_property_key_at(__iter_obj, __iter_i);\n", for_in_stmt.key_name));
+                self.output.push_str("      int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);\n");
 
-        // Update variable types to include the for-in variables
-        self.variable_types.insert(for_in_stmt.key_name.clone(), Type::String);
-        self.variable_types.insert(for_in_stmt.value_name.clone(), Type::ObjectIterValue);
+                // Store the value variable name and type for runtime dispatch in the loop body
+                let old_iter_value_name = self.current_iter_value_name.clone();
+                self.current_iter_value_name = Some(for_in_stmt.value_name.clone());
 
-        // Generate loop body
-        self.generate_block(&for_in_stmt.body, type_checker)?;
+                // Update variable types to include the for-in variables
+                self.variable_types.insert(for_in_stmt.key_name.clone(), Type::String);
+                self.variable_types.insert(for_in_stmt.value_name.clone(), Type::ObjectIterValue);
 
-        // Restore previous state
-        self.current_iter_value_name = old_iter_value_name;
-        self.variable_types.remove(&for_in_stmt.key_name);
-        self.variable_types.remove(&for_in_stmt.value_name);
+                // Generate loop body
+                self.generate_block(&for_in_stmt.body, type_checker)?;
+
+                // Restore previous state
+                self.current_iter_value_name = old_iter_value_name;
+                self.variable_types.remove(&for_in_stmt.key_name);
+                self.variable_types.remove(&for_in_stmt.value_name);
+            }
+            Type::DynamicArray(elem_type) => {
+                // Generate array iteration with live length re-read each iteration
+                // for (let (i, x) in arr) { body }
+                // becomes:
+                // {
+                //     HiLowArray* __iter_arr = arr;
+                //     for (size_t i = 0; i < hl_array_len(__iter_arr); i++) {
+                //         ELEM_C_TYPE x = *(ELEM_C_TYPE*)hl_array_get(__iter_arr, i);
+                //         body
+                //     }
+                // }
+
+                let elem_c_type = self.hilow_type_to_c(&elem_type);
+
+                // Store the iterable array in a temporary to avoid re-evaluating complex expressions
+                self.output.push_str("    HiLowArray* __iter_arr = ");
+                self.generate_expression(&for_in_stmt.iterable, type_checker)?;
+                self.output.push_str(";\n");
+
+                // Generate the iteration loop with live length re-read (allows mutation during iteration)
+                self.output.push_str(&format!("    for (size_t {} = 0; {} < hl_array_len(__iter_arr); {}++) {{\n",
+                    for_in_stmt.key_name, for_in_stmt.key_name, for_in_stmt.key_name));
+
+                // Get the element value for current iteration
+                self.output.push_str(&format!("      {} {} = *({}*)hl_array_get(__iter_arr, {});\n",
+                    elem_c_type, for_in_stmt.value_name, elem_c_type, for_in_stmt.key_name));
+
+                // Update variable types to include the for-in variables
+                self.variable_types.insert(for_in_stmt.key_name.clone(), Type::Usize);
+                self.variable_types.insert(for_in_stmt.value_name.clone(), *elem_type);
+
+                // Generate loop body
+                self.generate_block(&for_in_stmt.body, type_checker)?;
+
+                // Restore variable types
+                self.variable_types.remove(&for_in_stmt.key_name);
+                self.variable_types.remove(&for_in_stmt.value_name);
+            }
+            _ => {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("for-in over {} type", iterable_type),
+                    phase: "Array Phase D".to_string()
+                });
+            }
+        }
 
         self.output.push_str("    }\n");
         self.output.push_str("  }\n");

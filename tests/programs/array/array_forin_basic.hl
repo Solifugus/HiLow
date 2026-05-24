@@ -1,0 +1,8 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+    for (let (i, x) in nums) {
+        print(i)
+        print(x)
+    }
+    return 0
+}

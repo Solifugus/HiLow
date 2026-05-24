@@ -1,0 +1,10 @@
+high program(): i32 {
+    let arr = [1, 2]
+    for (let (i, x) in arr) {
+        print(x)
+        if (i ?= 0) {
+            arr.push(99)
+        }
+    }
+    return 0
+}

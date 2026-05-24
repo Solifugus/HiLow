@@ -1,0 +1,9 @@
+high program(): i32 {
+    let total: i32 = 0
+    let nums = [5, 10, 15]
+    for (let (i, x) in nums) {
+        total = total + x
+    }
+    print(total)
+    return 0
+}

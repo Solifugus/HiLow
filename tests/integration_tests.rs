@@ -3494,3 +3494,117 @@ fn test_array_remove_scope_cleanup() {
     let _ = fs::remove_file(&executable);
 }
 
+#[test]
+fn test_array_forin_basic() {
+    let executable = compile_program("tests/programs/array/array_forin_basic.hl")
+        .expect("Failed to compile array_forin_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_forin_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_forin_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_forin_empty() {
+    let executable = compile_program("tests/programs/array/array_forin_empty.hl")
+        .expect("Failed to compile array_forin_empty.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_forin_empty");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_forin_empty.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_forin_sum() {
+    let executable = compile_program("tests/programs/array/array_forin_sum.hl")
+        .expect("Failed to compile array_forin_sum.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_forin_sum");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_forin_sum.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_forin_index_used() {
+    let executable = compile_program("tests/programs/array/array_forin_index_used.hl")
+        .expect("Failed to compile array_forin_index_used.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_forin_index_used");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_forin_index_used.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_forin_mutation_push() {
+    let executable = compile_program("tests/programs/array/array_forin_mutation_push.hl")
+        .expect("Failed to compile array_forin_mutation_push.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_forin_mutation_push");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_forin_mutation_push.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_forin_nested() {
+    let executable = compile_program("tests/programs/array/array_forin_nested.hl")
+        .expect("Failed to compile array_forin_nested.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_forin_nested");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/array_forin_nested.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+

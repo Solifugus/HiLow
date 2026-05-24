@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array Phase B-2 — arbitrary-position mutation**
+**Current phase: Array Phase D — for-in over arrays**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

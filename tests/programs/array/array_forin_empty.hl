@@ -1,0 +1,10 @@
+high program(): i32 {
+    let arr = [42]
+    arr.pop()
+    print("before")
+    for (let (i, x) in arr) {
+        print("should not print")
+    }
+    print("after")
+    return 0
+}

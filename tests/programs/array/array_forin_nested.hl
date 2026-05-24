@@ -1,0 +1,11 @@
+high program(): i32 {
+    let outer = [1, 2]
+    for (let (i, x) in outer) {
+        print(x)
+        let inner = [10, 20]
+        for (let (j, y) in inner) {
+            print(y)
+        }
+    }
+    return 0
+}
