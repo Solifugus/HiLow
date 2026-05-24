@@ -3089,3 +3089,25 @@ fn test_array_return_element_from_scope() {
 
     let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_array_length_comparison() {
+    // usize/.length papercut fix: array length (usize) compared against bare
+    // integer literals works for both relational (>, <) and equality (?=),
+    // and against an explicitly-typed usize variable. Regression guard so the
+    // papercut cannot silently return.
+    let executable = compile_program("tests/programs/array/length_comparison/main.hl")
+        .expect("Failed to compile length_comparison.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run length_comparison test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array/length_comparison.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}

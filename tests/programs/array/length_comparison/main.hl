@@ -1,0 +1,17 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+    if (nums.length > 2) {
+        print(1)
+    }
+    if (nums.length ?= 3) {
+        print(2)
+    }
+    if (0 < nums.length) {
+        print(3)
+    }
+    let i: usize = 0
+    if (i < nums.length) {
+        print(4)
+    }
+    return 0
+}

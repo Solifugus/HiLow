@@ -1706,11 +1706,23 @@ impl TypeChecker {
                             // Regular numeric comparisons
                             if lhs_type.is_numeric() && rhs_type.is_numeric() {
                                 if lhs_type != rhs_type {
-                                    self.add_error(
-                                        format!("Cannot compare {} and {}; types must match exactly", lhs_type, rhs_type),
-                                        binary_op.position.clone()
-                                    );
-                                    return Type::Unknown;
+                                    // usize/.length papercut fix: a bare integer literal adapts
+                                    // to usize when compared against a usize value (e.g.
+                                    // `arr.length > 2`). Mirrors existing bare-literal inference;
+                                    // NOT general coercion — a typed i32 variable vs usize still
+                                    // requires an exact match (use `let i: usize = 0` for counters).
+                                    let lhs_is_int_literal = matches!(&*binary_op.lhs, Expression::IntLit(_, _));
+                                    let rhs_is_int_literal = matches!(&*binary_op.rhs, Expression::IntLit(_, _));
+                                    let usize_literal_ok =
+                                        (lhs_type == Type::Usize && rhs_is_int_literal) ||
+                                        (rhs_type == Type::Usize && lhs_is_int_literal);
+                                    if !usize_literal_ok {
+                                        self.add_error(
+                                            format!("Cannot compare {} and {}; types must match exactly", lhs_type, rhs_type),
+                                            binary_op.position.clone()
+                                        );
+                                        return Type::Unknown;
+                                    }
                                 }
 
                                 Type::Bool
@@ -1749,12 +1761,22 @@ impl TypeChecker {
                     _ => {
                         // Regular equality check
                         if lhs_type != rhs_type {
-                            self.add_error(
-                                format!("Cannot compare {} and {} for equality; types must match exactly",
-                                        lhs_type, rhs_type),
-                                binary_op.position.clone()
-                            );
-                            return Type::Unknown;
+                            // usize/.length papercut fix (equality): a bare integer literal
+                            // adapts to usize when compared against a usize (e.g. `arr.length ?= 3`).
+                            // Mirrors the relational-comparison fix; NOT general coercion.
+                            let lhs_is_int_literal = matches!(&*binary_op.lhs, Expression::IntLit(_, _));
+                            let rhs_is_int_literal = matches!(&*binary_op.rhs, Expression::IntLit(_, _));
+                            let usize_literal_ok =
+                                (lhs_type == Type::Usize && rhs_is_int_literal) ||
+                                (rhs_type == Type::Usize && lhs_is_int_literal);
+                            if !usize_literal_ok {
+                                self.add_error(
+                                    format!("Cannot compare {} and {} for equality; types must match exactly",
+                                            lhs_type, rhs_type),
+                                    binary_op.position.clone()
+                                );
+                                return Type::Unknown;
+                            }
                         }
 
                         Type::Bool
