@@ -1,0 +1,13 @@
+high program(): i32 {
+    let nums = [1, 2, 3]
+    let w = watcher((changed)nums) {
+        print(nums.length)
+    }
+    nums.push(4)  // Should fire
+    w.pause()
+    nums.push(5)  // Should NOT fire (paused)
+    nums.push(6)  // Should NOT fire (paused)
+    w.resume()
+    nums.push(7)  // Should fire (resumed)
+    return 0
+}

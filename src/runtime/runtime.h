@@ -289,6 +289,9 @@ size_t hl_array_len(HiLowArray* arr);
 void* hl_array_pop(HiLowArray* arr);                // removes and returns pointer to the last element slot; decrements length
 void hl_array_set(HiLowArray* arr, size_t index, void* elem); // overwrites element at index with firing loop
 
+// Array watcher registration (Phase 10-ε-α)
+void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state);
+
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);
 

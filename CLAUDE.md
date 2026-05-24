@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array Phase B — Array Mutation**
+**Current phase: Phase 10-ε-α — Array watcher firing (deep/changed)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

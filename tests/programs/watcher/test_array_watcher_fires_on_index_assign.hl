@@ -1,0 +1,8 @@
+high program(): i32 {
+    let nums = [1, 2, 3]
+    let w = watcher((changed)nums) {
+        print(99)
+    }
+    nums[0] = 7
+    return 0
+}

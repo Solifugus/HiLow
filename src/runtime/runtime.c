@@ -1641,6 +1641,13 @@ void hl_array_release(HiLowArray* arr) {
 
     arr->refcount--;
     if (arr->refcount == 0) {
+        // Free watcher list nodes (but not the watcher state - that's owned by the binding)
+        HiLowArrayWatcher* current = arr->watchers;
+        while (current != NULL) {
+            HiLowArrayWatcher* next = current->next;
+            free(current);
+            current = next;
+        }
         free(arr->data);
         free(arr);
         hl_free_count++;
@@ -1659,15 +1666,15 @@ void hl_array_push(HiLowArray* arr, void* elem) {
     memcpy(dest, elem, arr->elem_size);
     arr->length++;
 
-    // Phase B scaffolding: fire watchers registered on this array. List is always
-    // empty in Phase B (registration is Phase 10-ε), so this loop never executes a body.
+    // Phase 10-ε-α: fire watchers registered on this array
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        // Phase 10-ε will: check modifier matches this operation, check
-        // w->watcher_state active/not-ended, then call w->body_fn(w->captured_vars)
-        // with the delta (e.g. the pushed element for ADDED). Convention finalized in 10-ε.
-        // For Phase B this loop body is intentionally empty beyond the modifier-relevance
-        // comment; document which modifiers THIS operation will fire:
-        //   push -> ADDED, CHANGED, DEEP
+        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (state != NULL && state->active && !state->ended) {
+            if (w->modifier == HL_ARR_DEEP || w->modifier == HL_ARR_CHANGED) {
+                ((void(*)(HiLowArray*))w->body_fn)(arr);
+            }
+        }
+        // Note: push fires DEEP and CHANGED; ADDED fires in phase 10-ε-β
     }
 }
 
@@ -1699,15 +1706,15 @@ void* hl_array_pop(HiLowArray* arr) {
     // Get pointer to the now-removed element slot
     void* removed_slot = (char*)arr->data + (arr->length * arr->elem_size);
 
-    // Phase B scaffolding: fire watchers registered on this array. List is always
-    // empty in Phase B (registration is Phase 10-ε), so this loop never executes a body.
+    // Phase 10-ε-α: fire watchers registered on this array
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        // Phase 10-ε will: check modifier matches this operation, check
-        // w->watcher_state active/not-ended, then call w->body_fn(w->captured_vars)
-        // with the delta (e.g. the popped element for REMOVED). Convention finalized in 10-ε.
-        // For Phase B this loop body is intentionally empty beyond the modifier-relevance
-        // comment; document which modifiers THIS operation will fire:
-        //   pop -> REMOVED, CHANGED, DEEP
+        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (state != NULL && state->active && !state->ended) {
+            if (w->modifier == HL_ARR_DEEP || w->modifier == HL_ARR_CHANGED) {
+                ((void(*)(HiLowArray*))w->body_fn)(arr);
+            }
+        }
+        // Note: pop fires DEEP and CHANGED; REMOVED fires in phase 10-ε-β
     }
 
     return removed_slot;
@@ -1725,14 +1732,25 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
     void* dest = (char*)arr->data + (index * arr->elem_size);
     memcpy(dest, elem, arr->elem_size);
 
-    // Phase B scaffolding: fire watchers registered on this array. List is always
-    // empty in Phase B (registration is Phase 10-ε), so this loop never executes a body.
+    // Phase 10-ε-α: fire watchers registered on this array
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        // Phase 10-ε will: check modifier matches this operation, check
-        // w->watcher_state active/not-ended, then call w->body_fn(w->captured_vars)
-        // with the delta (e.g. the modified element for CHANGED). Convention finalized in 10-ε.
-        // For Phase B this loop body is intentionally empty beyond the modifier-relevance
-        // comment; document which modifiers THIS operation will fire:
-        //   set (index) -> CHANGED, DEEP
+        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (state != NULL && state->active && !state->ended) {
+            if (w->modifier == HL_ARR_DEEP || w->modifier == HL_ARR_CHANGED) {
+                ((void(*)(HiLowArray*))w->body_fn)(arr);
+            }
+        }
+        // Note: set fires DEEP and CHANGED (matches this operation)
     }
+}
+
+// Array watcher registration (Phase 10-ε-α)
+void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state) {
+    HiLowArrayWatcher* new_watcher = malloc(sizeof(HiLowArrayWatcher));
+    new_watcher->modifier = modifier;
+    new_watcher->body_fn = body_fn;
+    new_watcher->captured_vars = NULL;  // Not supported this phase
+    new_watcher->watcher_state = watcher_state;
+    new_watcher->next = arr->watchers;
+    arr->watchers = new_watcher;  // Prepend to list
 }

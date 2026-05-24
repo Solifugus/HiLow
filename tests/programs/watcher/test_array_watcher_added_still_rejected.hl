@@ -1,0 +1,7 @@
+high program(): i32 {
+    let nums = [1, 2, 3]
+    let w = watcher((added)nums) {
+        print("should not compile")
+    }
+    return 0
+}

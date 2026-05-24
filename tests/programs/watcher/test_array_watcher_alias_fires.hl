@@ -1,0 +1,9 @@
+high program(): i32 {
+    let data = [1, 2, 3]
+    let alias = data
+    let w = watcher((changed)data) {
+        print(data.length)
+    }
+    alias.push(4)
+    return 0
+}

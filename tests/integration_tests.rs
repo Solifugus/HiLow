@@ -3111,3 +3111,133 @@ fn test_array_length_comparison() {
 
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 10-ε-α: Array watcher integration tests
+
+#[test]
+fn test_array_watcher_changed_fires_on_push() {
+    let executable = compile_program("tests/programs/watcher/test_array_watcher_changed_fires_on_push.hl")
+        .expect("Failed to compile test_array_watcher_changed_fires_on_push.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run test_array_watcher_changed_fires_on_push");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_changed_fires_on_push.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_deep_fires_on_push() {
+    let executable = compile_program("tests/programs/watcher/test_array_watcher_deep_fires_on_push.hl")
+        .expect("Failed to compile test_array_watcher_deep_fires_on_push.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run test_array_watcher_deep_fires_on_push");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_deep_fires_on_push.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_fires_on_index_assign() {
+    let executable = compile_program("tests/programs/watcher/test_array_watcher_fires_on_index_assign.hl")
+        .expect("Failed to compile test_array_watcher_fires_on_index_assign.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run test_array_watcher_fires_on_index_assign");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_fires_on_index_assign.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_fires_on_pop() {
+    let executable = compile_program("tests/programs/watcher/test_array_watcher_fires_on_pop.hl")
+        .expect("Failed to compile test_array_watcher_fires_on_pop.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run test_array_watcher_fires_on_pop");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_fires_on_pop.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_alias_fires() {
+    let executable = compile_program("tests/programs/watcher/test_array_watcher_alias_fires.hl")
+        .expect("Failed to compile test_array_watcher_alias_fires.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run test_array_watcher_alias_fires");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_alias_fires.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_pause_blocks_firing() {
+    let executable = compile_program("tests/programs/watcher/test_array_watcher_pause_blocks_firing.hl")
+        .expect("Failed to compile test_array_watcher_pause_blocks_firing.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run test_array_watcher_pause_blocks_firing");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_pause_blocks_firing.expected.txt")
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_added_still_rejected() {
+    // This should fail to compile because 'added' modifier is not supported in phase 10-ε-α
+    let output = Command::new("./target/debug/hilowc")
+        .arg("tests/programs/watcher/test_array_watcher_added_still_rejected.hl")
+        .arg("-o")
+        .arg("/tmp/test_should_fail")
+        .output()
+        .expect("Failed to run compiler");
+
+    assert!(!output.status.success(), "Compilation should fail for 'added' modifier");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Phase 10-ε-β/γ") || stderr.contains("added"),
+            "Error should mention 'added' or phase 10-ε-β/γ. Got: {}", stderr);
+
+    // Clean up in case compilation somehow succeeded
+    let _ = fs::remove_file("/tmp/test_should_fail");
+}

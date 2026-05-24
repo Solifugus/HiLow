@@ -1010,26 +1010,54 @@ impl CodeGenerator {
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
 
-                    // Phase 10-δ-β: Register heap watcher subscriptions
+                    // Phase 10-δ-β/10-ε-α: Register heap watcher subscriptions
                     if let (Some(body_fn_name), subscriptions) = (
                         self.temp_watcher_expr_body_fn.take(),
                         std::mem::take(&mut self.temp_watcher_expr_subscriptions)
                     ) {
                         let c_var_name = self.mangle_variable_name(name);
-                        let all_subscriptions: Vec<String> = subscriptions.iter()
-                            .map(|s| s.variable_name.clone())
-                            .collect();
 
-                        for subscription in subscriptions {
-                            self.heap_watcher_subscribers
-                                .entry(subscription.variable_name.clone())
-                                .or_insert_with(Vec::new)
-                                .push(HeapWatcherSubscription {
-                                    watcher_var: c_var_name.clone(),
-                                    body_fn_name: body_fn_name.clone(),
-                                    modifier: subscription.modifier.clone(),
-                                    all_subscriptions: all_subscriptions.clone(),
-                                });
+                        // Check if this is an array watcher
+                        let is_array_watcher = subscriptions.iter().any(|s| {
+                            s.resolved_var_type
+                                .borrow()
+                                .as_ref()
+                                .map(|ty| matches!(ty, crate::ast::Type::DynamicArray(_)))
+                                .unwrap_or(false)
+                        });
+
+                        if is_array_watcher {
+                            // Phase 10-ε-α: Emit direct array watcher registration
+                            self.output.push_str(";\n");
+                            for subscription in &subscriptions {
+                                let c_modifier = match subscription.modifier {
+                                    SubscriptionModifier::Deep => "HL_ARR_DEEP",
+                                    SubscriptionModifier::Changed => "HL_ARR_CHANGED",
+                                    _ => continue, // Should not happen due to validation
+                                };
+                                let arr_var = self.mangle_variable_name(&subscription.variable_name);
+                                self.output.push_str(&format!(
+                                    "    hl_array_register_watcher({}, {}, {}, {});\n",
+                                    arr_var, c_modifier, body_fn_name, c_var_name
+                                ));
+                            }
+                        } else {
+                            // Scalar watcher: existing heap registration logic
+                            let all_subscriptions: Vec<String> = subscriptions.iter()
+                                .map(|s| s.variable_name.clone())
+                                .collect();
+
+                            for subscription in subscriptions {
+                                self.heap_watcher_subscribers
+                                    .entry(subscription.variable_name.clone())
+                                    .or_insert_with(Vec::new)
+                                    .push(HeapWatcherSubscription {
+                                        watcher_var: c_var_name.clone(),
+                                        body_fn_name: body_fn_name.clone(),
+                                        modifier: subscription.modifier.clone(),
+                                        all_subscriptions: all_subscriptions.clone(),
+                                    });
+                            }
                         }
                     }
                 }
@@ -2005,40 +2033,82 @@ impl CodeGenerator {
 
                 // Validate modifiers
                 for subscription in &watcher_expr.subscriptions {
+                    let is_array = subscription.resolved_var_type
+                        .borrow()
+                        .as_ref()
+                        .map(|ty| matches!(ty, crate::ast::Type::DynamicArray(_)))
+                        .unwrap_or(false);
+
                     match subscription.modifier {
                         SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
-                            // These are supported
+                            // These are supported for all watchable types
                         }
-                        SubscriptionModifier::Deep | SubscriptionModifier::Added |
-                        SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
+                        SubscriptionModifier::Deep => {
+                            if !is_array {
+                                return Err(CodegenError::UnsupportedFeature {
+                                    feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
+                                    phase: "deep watching only applies to arrays".to_string(),
+                                });
+                            }
+                            // Deep is supported for arrays in Phase 10-ε-α
+                        }
+                        SubscriptionModifier::Added | SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
                             return Err(CodegenError::UnsupportedFeature {
                                 feature: format!("watcher modifier {:?}", subscription.modifier),
-                                phase: "future phase: mutation-modifier semantics".to_string(),
+                                phase: "Phase 10-ε-β/γ: delta-passing array watchers".to_string(),
                             });
                         }
                     }
+                }
+
+                // Check for mixed scalar+array subscriptions (reject)
+                let mut has_arrays = false;
+                let mut has_scalars = false;
+                for subscription in &watcher_expr.subscriptions {
+                    if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                        if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
+                            has_arrays = true;
+                        } else {
+                            has_scalars = true;
+                        }
+                    }
+                }
+
+                if has_arrays && has_scalars {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: "mixed scalar and array subscriptions in one watcher".to_string(),
+                        phase: "Phase 10-ε-α supports only pure array or pure scalar watchers".to_string(),
+                    });
                 }
 
                 // Generate unique body function name
                 let body_fn_name = format!("hilow_watcher_expr_{}_body", self.watcher_counter);
                 self.watcher_counter += 1;
 
-                // Generate function signature
+                // Generate function signature based on watcher type
                 self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
 
-                // Add parameters for each subscription, in declaration order
-                for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
-                    if i > 0 {
-                        self.watcher_bodies.push_str(", ");
-                    }
+                if has_arrays {
+                    // Array watcher: single HiLowArray* parameter (use first subscription's name/alias)
+                    let first_subscription = &watcher_expr.subscriptions[0];
+                    let param_name = first_subscription.alias.as_ref()
+                        .unwrap_or(&first_subscription.variable_name);
+                    self.watcher_bodies.push_str(&format!("HiLowArray* {}", param_name));
+                } else {
+                    // Scalar watcher: existing logic
+                    for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
+                        if i > 0 {
+                            self.watcher_bodies.push_str(", ");
+                        }
 
-                    let var_name = &subscription.variable_name;
-                    let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+                        let var_name = &subscription.variable_name;
+                        let param_name = subscription.alias.as_ref().unwrap_or(var_name);
 
-                    // Get the variable type from resolved type on subscription
-                    if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                        let c_type = self.ast_type_to_c(var_type);
-                        self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
+                        // Get the variable type from resolved type on subscription
+                        if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                            let c_type = self.ast_type_to_c(var_type);
+                            self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
+                        }
                     }
                 }
 
@@ -2050,14 +2120,27 @@ impl CodeGenerator {
 
                 // Save current variable_types and add watcher parameters to scope
                 let old_variable_types = self.variable_types.clone();
-                for subscription in &watcher_expr.subscriptions {
-                    let var_name = &subscription.variable_name;
-                    let param_name = subscription.alias.as_ref().unwrap_or(var_name);
 
-                    // Get the variable type from resolved type on subscription
-                    if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                if has_arrays {
+                    // Array watcher: only add the array parameter to scope
+                    let first_subscription = &watcher_expr.subscriptions[0];
+                    let param_name = first_subscription.alias.as_ref()
+                        .unwrap_or(&first_subscription.variable_name);
+                    if let Some(ast_var_type) = first_subscription.resolved_var_type.borrow().as_ref() {
                         let types_var_type = Type::from_ast_type(ast_var_type);
                         self.variable_types.insert(param_name.clone(), types_var_type);
+                    }
+                } else {
+                    // Scalar watcher: existing logic
+                    for subscription in &watcher_expr.subscriptions {
+                        let var_name = &subscription.variable_name;
+                        let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+
+                        // Get the variable type from resolved type on subscription
+                        if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                            let types_var_type = Type::from_ast_type(ast_var_type);
+                            self.variable_types.insert(param_name.clone(), types_var_type);
+                        }
                     }
                 }
 
@@ -5399,12 +5482,12 @@ impl CodeGenerator {
         }
     }
 
-    /// Phase 10-γ: Check if a type is allowed for watching (numeric/bool types only)
+    /// Phase 10-γ: Check if a type is allowed for watching (numeric/bool/array types)
     fn is_type_watchable_in_phase_10g(&self, ty: &Type) -> bool {
         matches!(ty,
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
-            Type::F32 | Type::F64 | Type::Bool
+            Type::F32 | Type::F64 | Type::Bool | Type::DynamicArray(_)
         )
     }
 
@@ -5417,7 +5500,7 @@ impl CodeGenerator {
             AstType::Primitive(PrimitiveType::U16) | AstType::Primitive(PrimitiveType::U32) |
             AstType::Primitive(PrimitiveType::U64) | AstType::Primitive(PrimitiveType::U128) |
             AstType::Primitive(PrimitiveType::F32) | AstType::Primitive(PrimitiveType::F64) |
-            AstType::Primitive(PrimitiveType::Bool)
+            AstType::Primitive(PrimitiveType::Bool) | AstType::DynamicArray(_)
         )
     }
 
