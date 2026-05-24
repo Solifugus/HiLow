@@ -6,10 +6,12 @@
 
 ## Current state
 
-Phase: Phase 10-ε-β complete and verified (aliased delta values confirmed: added→30/40, removed→25). 10-ε-γ next.
-Status: Array watchers now support added/removed modifiers with delta-passing and alias binding. Alias registration bug fixed from β — aliased-delta bodies compile and receive real element values.
-Last commit: Phase 10-ε-β-fix: register alias in variable_types so aliased-delta bodies compile
-Tests: 170 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Phase: Array Phase B-2 complete — .remove / .insert with watcher firing
+Status: The array watcher system (10-ε) is functionally complete except `moved` (which awaits a future explicit reorder operation). Every array mutation — push, pop, index-assignment, remove, insert — fires the correct watchers with correct deltas, through aliases, with pause/resume gating. Arrays are fully reactive for add/remove/change.
+Branch: main
+Last commit: Array Phase B-2: .remove and .insert with watcher firing
+
+Tests: 176 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
@@ -29,23 +31,25 @@ Tests: 170 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 re
 
 ### Arrays
 
-Resolved (Phase A + B + UAF fix): Dynamic arrays of primitives — literals, indexing, .length, .push, index-assignment, .pop. Heap-allocated, refcount-cleaned including heap-local-derived returns. Watcher-list scaffolding on HiLowArray (firing loops present, empty list) ready for 10-ε.
+Resolved (Phase A, B, B-2 + UAF/usize/alias fixes): Dynamic arrays of primitives — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert. Heap-allocated, refcount-cleaned including heap-local-derived returns. Fully reactive: all mutations fire watchers (deep/changed/added/removed) with alias-bound deltas, through aliases, with pause/resume gating.
 
-Bug — usize/.length comparison (HIGH PRIORITY, fixing next): .length returns usize; strict no-coercion rejects comparing it against i32 literals or variables (`if (arr.length > 2)`, `while (i < arr.length)` both fail "Cannot compare usize and i32"). Makes .length nearly unusable. Favored fix: literal-context inference so bare integer literals adapt to usize when compared against usize, keeping no-coercion for typed variables. Loop-counter-vs-length (usize vs i32 variable) needs a companion decision.
+Still pending — Array Phase C: heap element types (arrays of objects/strings/tuples/arrays) with per-element retain/release on insert/remove.
 
-Still pending — Phase C: heap element types (arrays of objects/strings/tuples) with per-element retain/release.
-Still pending — Phase D: for-in over arrays.
-Still pending — niceties: .remove/.insert/.clear, fixed arrays [T;N], empty typed literals, bounds checks, equality, slicing, concat.
+Still pending — Array Phase D: for-in iteration over arrays (for-in currently works over objects only).
+
+Still pending — reorder operations: .swap/.sort/.reverse (none exist). These would be the triggering operations for the `moved` watcher modifier (10-ε-γ), which is currently deferred for lack of any operation to fire it.
+
+Still pending — array niceties: .clear, fixed arrays [T;N], empty typed literals, bounds-check graceful handling, equality, slicing, concatenation, comprehensions.
 
 ### Phase 10 watcher system (in progress)
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
-Phase 10-ε-α — COMPLETE (commit c59e036): array watchers fire on mutation for deep/changed (no delta). HiLowArray watcher list now populated via hl_array_register_watcher; firing loops in push/set/pop call the watcher body through a stored function pointer, gated on active/not-ended. Alias-routed mutations fire correctly (keystone verified). Array watcher bodies generated as void body(HiLowArray* arr). (deep) on primitive arrays currently equivalent to (changed) — true deep awaits heap element types. Captured outer variables in watcher bodies unsupported (inherited limitation). Declaration-form array watchers may still be limited; expression form is wired end-to-end.
-
-Phase 10-ε-β — NEXT: added/removed delta-passing. The body gains a delta parameter bound to an alias (the added/removed element). Builds on α's validated firing pipeline.
-
-Phase 10-ε-γ — pending: moved (index-pair deltas); also requires .remove/.insert (not yet implemented).
+Phase 10-ε — functionally COMPLETE except moved.
+- 10-ε-α (deep/changed firing, no delta): done (c59e036).
+- 10-ε-β (added/removed delta-passing, alias-bound element): done (5594d78 + fix de3f06e). Aliased deltas verified carrying real values.
+- 10-ε (remove/insert firing): done as part of Array Phase B-2 (53c57ea).
+- 10-ε-γ (moved): DEFERRED — reserved for a future explicit reorder operation (swap/sort/reverse). No triggering operation exists yet, and value arrays have no element identity to track across incidental shifts. Not blocked on anything buildable right now; awaits a reorder op being prioritized.
 
 **Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 
@@ -60,6 +64,7 @@ Phase 10-ε-γ — pending: moved (index-pair deltas); also requires .remove/.in
 - **`is` operator on objects is not implemented.** Phase 5a implements `is` for primitives only. Runtime prototype-chain checking comes in Phase 7.
 - **Codegen `get_expression_type` lacks symbol-table context.** Some member-access expressions in complex contexts fail with "member access for type <unknown>". Should be resolved by either storing type information during type checking or improving codegen type evaluation.
 - **current_function_return_type is stale inside nested functions/closures** (set in generate_function, not saved/restored). The Array Phase B UAF fix sidesteps it for the return temp, but the optional-wrap logic still reads it and would mis-wrap an optional-returning nested function. Fix: save/restore around the body (like the transferred_vars fix). Latent.
+- **hl_array_remove uses a `static char temp_buffer[1024]`** to hold the removed element as the watcher delta during firing. Two limitations: (1) it caps element size at 1024 bytes (fine for current primitives; would silently break for larger element types), and (2) being `static`, it is shared across all calls — NOT re-entrant: a watcher body that itself calls .remove on another array during firing would clobber the in-flight delta, and it is not thread-safe. Acceptable for current primitive single-threaded use. Proper fix (stack/heap-local capture, or a per-array scratch) should land with Array Phase C (heap element types), where element sizes vary and the 1024 cap becomes a real concern.
 
 ### Error message polish
 

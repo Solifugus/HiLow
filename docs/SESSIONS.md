@@ -6,6 +6,18 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-24 (Sunday) — Array Phase B-2: .remove / .insert with watcher firing
+
+- Commit: 53c57ea
+- Tests: 170 → 176 integration (+6)
+- Added arbitrary-position array mutation. hl_array_remove(arr, i) shifts trailing elements down and returns the removed element; hl_array_insert(arr, i, x) shifts trailing elements up (index == length appends), bounds out of range aborts. Both fire watchers via the established uniform-signature convention, mirroring pop/push: remove fires REMOVED (removed element as delta) + CHANGED + DEEP; insert fires ADDED (inserted element) + CHANGED + DEEP.
+- Semantic decision (settled): incidental element shifting from remove/insert is NOT a "move" event. moved is reserved for a future explicit reorder operation (swap/sort/reverse — none exist yet); value arrays have no element identity to track across shifts anyway. moved stays rejected.
+- Delta stability: the removed element is captured into a temp buffer BEFORE the shift overwrites its slot, so the delta pointer is valid during watcher firing.
+- Independently spot-verified beyond the debrief: remove canonical (20,2,10,30); a two-sequential-remove variant on [7,14,21,28] removing idx0 then idx2 → fired 7,28, final array [14,21] (7,28,2,14,21) — confirms the memmove shifts correctly across sequential removes; insert-at-front of [50,60] → fired 40, array [40,50,60] (40,3,40,50,60) — confirms front-insert shifts every element. Both add and remove deltas carry real values.
+- Milestone: the array watcher system (10-ε) is now FUNCTIONALLY COMPLETE except moved. Every mutation operation (push, pop, set, remove, insert) fires the correct watchers with correct deltas, through aliases, with pause/resume gating.
+
+---
+
 ### 2026-05-24 (Saturday) — Phase 10-ε-β-fix: alias scope registration
 
 - Commit: de3f06e
