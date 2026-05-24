@@ -2144,13 +2144,25 @@ impl CodeGenerator {
                 let old_variable_types = self.variable_types.clone();
 
                 if has_arrays {
-                    // Array watcher: only add the array parameter to scope
+                    // Array watcher: add the array parameter to scope
                     // Array parameter is always the variable name; alias (if any) binds to delta element
                     let first_subscription = &watcher_expr.subscriptions[0];
                     let param_name = &first_subscription.variable_name;
                     if let Some(ast_var_type) = first_subscription.resolved_var_type.borrow().as_ref() {
                         let types_var_type = Type::from_ast_type(ast_var_type);
                         self.variable_types.insert(param_name.clone(), types_var_type);
+                    }
+
+                    // Also register aliases for added/removed subscriptions (mirrors cast-emission loop above)
+                    for subscription in &watcher_expr.subscriptions {
+                        if matches!(subscription.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
+                            if let Some(ref alias_name) = subscription.alias {
+                                if let Some(alias_type) = subscription.resolved_alias_type.borrow().as_ref() {
+                                    let types_alias_type = Type::from_ast_type(alias_type);
+                                    self.variable_types.insert(alias_name.clone(), types_alias_type);
+                                }
+                            }
+                        }
                     }
                 } else {
                     // Scalar watcher: existing logic

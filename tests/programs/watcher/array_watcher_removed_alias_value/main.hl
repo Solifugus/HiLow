@@ -1,0 +1,8 @@
+high program(): i32 {
+    let nums = [5, 15, 25]
+    let w = watcher((gone=removed)nums) {
+        print(gone)
+    }
+    let x = nums.pop()
+    return 0
+}
