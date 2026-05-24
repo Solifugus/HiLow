@@ -6,12 +6,10 @@
 
 ## Current state
 
-Phase: Array Phase B complete (+ UAF fix) — arrays mutate correctly with watcher-list scaffolding in place
-Status: Arrays support literals, indexing, length, push, index-assignment, pop, with correct heap cleanup including heap-local-derived returns. usize/.length comparison usability bug found (see deferred work) — fixing next. Then Phase 10-ε (watcher mutation modifiers) is unblocked.
-Branch: main
-Last commit: Array Phase B fix: capture return value before scope cleanup (fixes use-after-free)
-
-Tests: 157 integration, 68 parser, 28 typecheck_module, 58 typecheck_tests, 8 resolver, plus other unit suites — all passing.
+Phase: Phase 10-ε-α complete — array watchers fire on mutation (deep/changed, no delta)
+Status: Arrays are now reactive — mutating an array (push/index-assign/pop) fires registered watchers through aliases, with pause/resume gating. 10-ε-β next (added/removed delta-passing).
+Last commit: Phase 10-ε-α: array watcher firing for deep/changed (no delta)
+Tests: 165 integration, 68 parser, 28 typecheck_module, 58 typecheck_tests (note: verify count), 8 resolver, plus unit suites — all passing.
 
 ---
 
@@ -43,7 +41,11 @@ Still pending — niceties: .remove/.insert/.clear, fixed arrays [T;N], empty ty
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
-Phase 10-ε — UNBLOCKED (Array Phase B scaffolding ready): collection-mutation modifier runtime. HiLowArray watcher list + firing loops exist (empty); 10-ε populates the list when watcher((added)arr){...} subscribes, and fills in the firing-body calling convention (delta passing). Likely splits 10-ε-α (deep), 10-ε-β (added/removed), 10-ε-γ (moved).
+Phase 10-ε-α — COMPLETE (commit c59e036): array watchers fire on mutation for deep/changed (no delta). HiLowArray watcher list now populated via hl_array_register_watcher; firing loops in push/set/pop call the watcher body through a stored function pointer, gated on active/not-ended. Alias-routed mutations fire correctly (keystone verified). Array watcher bodies generated as void body(HiLowArray* arr). (deep) on primitive arrays currently equivalent to (changed) — true deep awaits heap element types. Captured outer variables in watcher bodies unsupported (inherited limitation). Declaration-form array watchers may still be limited; expression form is wired end-to-end.
+
+Phase 10-ε-β — NEXT: added/removed delta-passing. The body gains a delta parameter bound to an alias (the added/removed element). Builds on α's validated firing pipeline.
+
+Phase 10-ε-γ — pending: moved (index-pair deltas); also requires .remove/.insert (not yet implemented).
 
 **Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 

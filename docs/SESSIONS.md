@@ -6,6 +6,14 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-24 (Sunday) — Phase 10-ε-α: array watcher firing (deep/changed, no delta)
+
+- Commit: c59e036
+- Tests: 158 → 165 integration (+7)
+- First reactive arrays. Array-mutation watchers fire from inside the runtime mutation functions (push/set/pop) through a stored function pointer on the HiLowArray watcher list, so mutations through aliases fire (the same underlying array regardless of which variable triggered it). New hl_array_register_watcher links a watcher body + HiLowWatcher state to an array; firing gated on active/not-ended; list nodes freed on array release. Watchability guards (is_ast_type_watchable_in_phase_10g + twin) extended to accept DynamicArray; Deep/Changed allowed on arrays, Added/Removed/Moved still rejected (β/γ). Array watcher bodies generated as void body(HiLowArray* arr) via an additive branch — scalar body-gen/firing unchanged.
+- Independently spot-verified beyond the debrief: alias keystone fires (4); all three mutation types fire (3 3 2); pause blocks firing (only post-resume push fires); two watchers on one array both fire. Function-pointer firing convention works without segfault.
+- Process note: first attempt was a 45-second non-attempt — Claude Code hit the DynamicArray watchability guard and reported it as "the expected boundary of what's implemented" rather than removing it (the guard was the task). Caught by spot-check (clean tree, no work done). Prompt revised with explicit anti-deferral framing naming the guards to remove; second attempt (8m) succeeded. New methodology pattern: guard-mistaken-for-boundary / phase-not-attempted; tell was the implausibly short duration.
+
 ### 2026-05-23 (Saturday afternoon) — Array Phase B fix: use-after-free in heap-local-derived returns
 
 - Commit: 75634d2
