@@ -3222,22 +3222,121 @@ fn test_array_watcher_pause_blocks_firing() {
     let _ = fs::remove_file(&executable);
 }
 
+// Phase 10-ε-β: Array watcher delta-passing tests
+
 #[test]
-fn test_array_watcher_added_still_rejected() {
-    // This should fail to compile because 'added' modifier is not supported in phase 10-ε-α
+fn test_array_watcher_added_with_alias() {
+    let executable = "/tmp/test_array_watcher_added_with_alias";
     let output = Command::new("./target/debug/hilowc")
-        .arg("tests/programs/watcher/test_array_watcher_added_still_rejected.hl")
+        .arg("tests/programs/watcher/test_array_watcher_added_with_alias.hl")
         .arg("-o")
-        .arg("/tmp/test_should_fail")
+        .arg(executable)
         .output()
         .expect("Failed to run compiler");
 
-    assert!(!output.status.success(), "Compilation should fail for 'added' modifier");
+    if !output.status.success() {
+        panic!("Compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Phase 10-ε-β/γ") || stderr.contains("added"),
-            "Error should mention 'added' or phase 10-ε-β/γ. Got: {}", stderr);
+    let result = Command::new(executable)
+        .output()
+        .expect("Failed to run test program");
 
-    // Clean up in case compilation somehow succeeded
-    let _ = fs::remove_file("/tmp/test_should_fail");
+    assert!(result.status.success(), "Program execution failed");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_added_with_alias.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
 }
+
+#[test]
+fn test_array_watcher_removed_with_alias() {
+    let executable = "/tmp/test_array_watcher_removed_with_alias";
+    let output = Command::new("./target/debug/hilowc")
+        .arg("tests/programs/watcher/test_array_watcher_removed_with_alias.hl")
+        .arg("-o")
+        .arg(executable)
+        .output()
+        .expect("Failed to run compiler");
+
+    if !output.status.success() {
+        panic!("Compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let result = Command::new(executable)
+        .output()
+        .expect("Failed to run test program");
+
+    assert!(result.status.success(), "Program execution failed");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_removed_with_alias.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_added_no_alias() {
+    let executable = "/tmp/test_array_watcher_added_no_alias";
+    let output = Command::new("./target/debug/hilowc")
+        .arg("tests/programs/watcher/test_array_watcher_added_no_alias.hl")
+        .arg("-o")
+        .arg(executable)
+        .output()
+        .expect("Failed to run compiler");
+
+    if !output.status.success() {
+        panic!("Compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let result = Command::new(executable)
+        .output()
+        .expect("Failed to run test program");
+
+    assert!(result.status.success(), "Program execution failed");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_added_no_alias.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_added_and_changed_both_fire() {
+    let executable = "/tmp/test_array_watcher_added_and_changed_both_fire";
+    let output = Command::new("./target/debug/hilowc")
+        .arg("tests/programs/watcher/test_array_watcher_added_and_changed_both_fire.hl")
+        .arg("-o")
+        .arg(executable)
+        .output()
+        .expect("Failed to run compiler");
+
+    if !output.status.success() {
+        panic!("Compilation failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let result = Command::new(executable)
+        .output()
+        .expect("Failed to run test program");
+
+    assert!(result.status.success(), "Program execution failed");
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_added_and_changed_both_fire.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+

@@ -549,7 +549,16 @@ impl TypeChecker {
         // 3. Validate modifier-type compatibility (per the rules above)
         let alias_type = self.validate_subscription_modifier(&sub.modifier, &outer_type, &sub.position);
 
-        // 3.1. Store resolved types in the subscription for codegen access
+        // 3.1. Phase 10-ε-β: Validate alias usage - only allowed with added/removed modifiers
+        if sub.alias.is_some() && !matches!(sub.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
+            self.add_error(
+                format!("alias binding is only supported with added/removed modifiers, got {:?}", sub.modifier),
+                sub.position.clone()
+            );
+            return;
+        }
+
+        // 3.2. Store resolved types in the subscription for codegen access
         sub.resolved_var_type.borrow_mut().replace(outer_type.to_ast_type());
         if let Some(ref at) = alias_type {
             sub.resolved_alias_type.borrow_mut().replace(at.to_ast_type());
@@ -591,9 +600,9 @@ impl TypeChecker {
                 }
             }
             Added | Removed => {
-                // Require collection type
+                // Phase 10-ε-β: Require collection type, alias gets element type
                 if let Some(element_type) = self.collection_element_type(outer_type) {
-                    Some(Type::DynamicArray(Box::new(element_type)))
+                    Some(element_type)  // alias binds to the element, not the array
                 } else {
                     self.add_error(
                         format!("({:?}) modifier requires a collection type, got '{}'",

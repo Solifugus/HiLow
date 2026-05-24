@@ -749,3 +749,37 @@ fn test_array_push_type_mismatch_rejected() {
             error_msg.contains("bool") && error_msg.contains("i32"),
             "Error should mention type mismatch, got: {}", error_msg);
 }
+
+// Phase 10-ε-β: Array watcher alias validation tests
+
+#[test]
+fn test_array_watcher_alias_on_changed_rejected() {
+    let input = r#"high program(): i32 {
+        let nums = [1, 2]
+        let w = watcher((x=changed)nums) {
+            print(999)
+        }
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected error for alias on changed modifier");
+    let errors = result.unwrap_err();
+    let error_msg = format!("{:?}", errors);
+    assert!(error_msg.contains("alias binding is only supported with added/removed modifiers"),
+            "Error should mention alias binding restriction, got: {}", error_msg);
+}
+
+#[test]
+fn test_array_watcher_moved_typechecks_but_fails_codegen() {
+    let input = r#"high program(): i32 {
+        let nums = [1, 2]
+        let w = watcher((moved)nums) {
+            print(999)
+        }
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_ok(), "Moved modifier should pass typecheck but fail in codegen");
+    // Note: This test verifies that moved passes typecheck. The codegen rejection is tested
+    // separately in integration tests since type_check_program doesn't run codegen.
+}

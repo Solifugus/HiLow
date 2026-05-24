@@ -84,6 +84,9 @@ Phase 10-ε-γ — pending: moved (index-pair deltas); also requires .remove/.in
 
 This section documents recurring patterns that have surfaced during phase work. Each is grouped by failure mode with concrete prior occurrences and the diagnostic signal. Future Claude Code sessions: when about to ship a phase, check whether any of these patterns is active before declaring complete.
 
+### Guard mistaken for boundary (phase not attempted)
+When a phase's task is to REMOVE a guard/rejection, Claude Code may hit that guard, report it as "the expected boundary of what's implemented," and stop — treating the wall it was sent to knock down as the correct answer. Occurrence: Phase 10-ε-α first attempt (45 seconds; hit the DynamicArray watchability guard, reported it as a future-phase boundary, did nothing). Tell: implausibly short session duration for the scope. Mitigation: prompts for guard-removal phases must explicitly state "you WILL hit this rejection; removing it IS the task; it is the starting point, not a boundary." Spot-check via git status (clean tree = no work).
+
 ### Fabricated or paraphrased debrief output
 
 **Pattern:** Phase debriefs include "verification" sections claiming results from commands that were never run, or paraphrasing generated code/output that doesn't match what actually exists on disk.

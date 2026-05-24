@@ -1,0 +1,9 @@
+high program(): i32 {
+    let nums = [10, 20]
+    let w = watcher((added)nums) {
+        print(777)
+    }
+    nums.push(30)
+    nums.push(40)
+    return 0
+}

@@ -1033,6 +1033,8 @@ impl CodeGenerator {
                                 let c_modifier = match subscription.modifier {
                                     SubscriptionModifier::Deep => "HL_ARR_DEEP",
                                     SubscriptionModifier::Changed => "HL_ARR_CHANGED",
+                                    SubscriptionModifier::Added => "HL_ARR_ADDED",
+                                    SubscriptionModifier::Removed => "HL_ARR_REMOVED",
                                     _ => continue, // Should not happen due to validation
                                 };
                                 let arr_var = self.mangle_variable_name(&subscription.variable_name);
@@ -2052,10 +2054,13 @@ impl CodeGenerator {
                             }
                             // Deep is supported for arrays in Phase 10-ε-α
                         }
-                        SubscriptionModifier::Added | SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
+                        SubscriptionModifier::Added | SubscriptionModifier::Removed => {
+                            // Phase 10-ε-β: Added/Removed now supported for arrays
+                        }
+                        SubscriptionModifier::Moved => {
                             return Err(CodegenError::UnsupportedFeature {
                                 feature: format!("watcher modifier {:?}", subscription.modifier),
-                                phase: "Phase 10-ε-β/γ: delta-passing array watchers".to_string(),
+                                phase: "Phase 10-ε-γ: moved array watchers".to_string(),
                             });
                         }
                     }
@@ -2089,11 +2094,11 @@ impl CodeGenerator {
                 self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
 
                 if has_arrays {
-                    // Array watcher: single HiLowArray* parameter (use first subscription's name/alias)
+                    // Array watcher: uniform signature with delta parameter (Phase 10-ε-β)
+                    // Array parameter is always the variable name; alias (if any) binds to delta element
                     let first_subscription = &watcher_expr.subscriptions[0];
-                    let param_name = first_subscription.alias.as_ref()
-                        .unwrap_or(&first_subscription.variable_name);
-                    self.watcher_bodies.push_str(&format!("HiLowArray* {}", param_name));
+                    let param_name = &first_subscription.variable_name;
+                    self.watcher_bodies.push_str(&format!("HiLowArray* {}, void* delta", param_name));
                 } else {
                     // Scalar watcher: existing logic
                     for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
@@ -2114,6 +2119,23 @@ impl CodeGenerator {
 
                 self.watcher_bodies.push_str(") {\n");
 
+                // Phase 10-ε-β: For added/removed with alias, emit delta cast+bind
+                if has_arrays {
+                    for subscription in &watcher_expr.subscriptions {
+                        if matches!(subscription.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
+                            if let Some(ref alias_name) = subscription.alias {
+                                if let Some(alias_type) = subscription.resolved_alias_type.borrow().as_ref() {
+                                    let c_elem_type = self.ast_type_to_c(alias_type);
+                                    self.watcher_bodies.push_str(&format!(
+                                        "    {} {} = *({} *)delta;\n",
+                                        c_elem_type, alias_name, c_elem_type
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Generate the watcher body
                 let saved_output = self.output.clone();
                 self.output.clear();
@@ -2123,9 +2145,9 @@ impl CodeGenerator {
 
                 if has_arrays {
                     // Array watcher: only add the array parameter to scope
+                    // Array parameter is always the variable name; alias (if any) binds to delta element
                     let first_subscription = &watcher_expr.subscriptions[0];
-                    let param_name = first_subscription.alias.as_ref()
-                        .unwrap_or(&first_subscription.variable_name);
+                    let param_name = &first_subscription.variable_name;
                     if let Some(ast_var_type) = first_subscription.resolved_var_type.borrow().as_ref() {
                         let types_var_type = Type::from_ast_type(ast_var_type);
                         self.variable_types.insert(param_name.clone(), types_var_type);

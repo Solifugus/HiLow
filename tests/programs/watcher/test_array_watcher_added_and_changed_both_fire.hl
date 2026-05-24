@@ -1,0 +1,11 @@
+high program(): i32 {
+    let nums = [10, 20]
+    let w1 = watcher((item=added)nums) {
+        print(111)  // Added fires
+    }
+    let w2 = watcher((changed)nums) {
+        print(222)  // Changed also fires
+    }
+    nums.push(30)
+    return 0
+}

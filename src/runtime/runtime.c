@@ -1666,15 +1666,20 @@ void hl_array_push(HiLowArray* arr, void* elem) {
     memcpy(dest, elem, arr->elem_size);
     arr->length++;
 
-    // Phase 10-ε-α: fire watchers registered on this array
+    // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
         HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
-            if (w->modifier == HL_ARR_DEEP || w->modifier == HL_ARR_CHANGED) {
-                ((void(*)(HiLowArray*))w->body_fn)(arr);
+            void* delta = NULL;
+            int fires = 0;
+            if (w->modifier == HL_ARR_ADDED) {
+                delta = elem; fires = 1;
             }
+            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                delta = NULL; fires = 1;
+            }
+            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
         }
-        // Note: push fires DEEP and CHANGED; ADDED fires in phase 10-ε-β
     }
 }
 
@@ -1706,15 +1711,20 @@ void* hl_array_pop(HiLowArray* arr) {
     // Get pointer to the now-removed element slot
     void* removed_slot = (char*)arr->data + (arr->length * arr->elem_size);
 
-    // Phase 10-ε-α: fire watchers registered on this array
+    // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
         HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
-            if (w->modifier == HL_ARR_DEEP || w->modifier == HL_ARR_CHANGED) {
-                ((void(*)(HiLowArray*))w->body_fn)(arr);
+            void* delta = NULL;
+            int fires = 0;
+            if (w->modifier == HL_ARR_REMOVED) {
+                delta = removed_slot; fires = 1;
             }
+            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                delta = NULL; fires = 1;
+            }
+            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
         }
-        // Note: pop fires DEEP and CHANGED; REMOVED fires in phase 10-ε-β
     }
 
     return removed_slot;
@@ -1732,15 +1742,18 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
     void* dest = (char*)arr->data + (index * arr->elem_size);
     memcpy(dest, elem, arr->elem_size);
 
-    // Phase 10-ε-α: fire watchers registered on this array
+    // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
         HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
-            if (w->modifier == HL_ARR_DEEP || w->modifier == HL_ARR_CHANGED) {
-                ((void(*)(HiLowArray*))w->body_fn)(arr);
+            void* delta = NULL;
+            int fires = 0;
+            if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                delta = NULL; fires = 1;
             }
+            // Note: set fires DEEP and CHANGED only (no size change)
+            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
         }
-        // Note: set fires DEEP and CHANGED (matches this operation)
     }
 }
 
