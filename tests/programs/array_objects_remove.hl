@@ -1,0 +1,12 @@
+high program(): i32 {
+    let a = { id: 1 }
+    let b = { id: 2 }
+    let c = { id: 3 }
+    let items = [a, b, c]
+    print(items.length)
+    print(items[1].id)
+    items.remove(1)
+    print(items.length)
+    print(items[1].id)
+    return 0
+}

@@ -1,0 +1,10 @@
+high program(): i32 {
+    let obj1 = { name: "first", value: 10 }
+    let obj2 = { name: "second", value: 20 }
+    let items = [obj1, obj2]
+
+    for (let (i, element) in items) {
+        print(element.value)
+    }
+    return 0
+}

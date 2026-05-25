@@ -1,0 +1,9 @@
+high program(): i32 {
+    let a = { name: "alpha", score: 10 }
+    let b = { name: "beta", score: 20 }
+    let items = [a, b]
+    print(items.length)
+    let first = items[0]
+    print(first.score)
+    return 0
+}

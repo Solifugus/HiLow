@@ -1616,7 +1616,7 @@ bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs) {
 
 // Array support (Array Phase A)
 
-HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity) {
+HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn) {
     HiLowArray* arr = malloc(sizeof(HiLowArray));
     hl_alloc_count++;
 
@@ -1626,6 +1626,8 @@ HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity) {
     arr->elem_size = elem_size;
     arr->data = malloc(elem_size * initial_capacity);
     arr->watchers = NULL;  // Phase B scaffolding: watcher list always empty
+    arr->retain_fn = retain_fn;
+    arr->release_fn = release_fn;
 
     return arr;
 }
@@ -1641,6 +1643,14 @@ void hl_array_release(HiLowArray* arr) {
 
     arr->refcount--;
     if (arr->refcount == 0) {
+        // Release all elements if this is an object array
+        if (arr->release_fn != NULL) {
+            for (size_t i = 0; i < arr->length; i++) {
+                void* slot = (char*)arr->data + (i * arr->elem_size);
+                arr->release_fn(*(void**)slot);
+            }
+        }
+
         // Free watcher list nodes (but not the watcher state - that's owned by the binding)
         HiLowArrayWatcher* current = arr->watchers;
         while (current != NULL) {
@@ -1664,6 +1674,12 @@ void hl_array_push(HiLowArray* arr, void* elem) {
     // Copy element into array
     void* dest = (char*)arr->data + (arr->length * arr->elem_size);
     memcpy(dest, elem, arr->elem_size);
+
+    // Retain the element if this is an object array
+    if (arr->retain_fn != NULL) {
+        arr->retain_fn(*(void**)dest);
+    }
+
     arr->length++;
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
@@ -1727,6 +1743,11 @@ void* hl_array_pop(HiLowArray* arr) {
         }
     }
 
+    // Release the array's reference to the element if this is an object array
+    if (arr->release_fn != NULL) {
+        arr->release_fn(*(void**)removed_slot);
+    }
+
     return removed_slot;
 }
 
@@ -1740,7 +1761,18 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
 
     // Overwrite element at index
     void* dest = (char*)arr->data + (index * arr->elem_size);
+
+    // Release the old element if this is an object array
+    if (arr->release_fn != NULL) {
+        arr->release_fn(*(void**)dest);
+    }
+
     memcpy(dest, elem, arr->elem_size);
+
+    // Retain the new element if this is an object array
+    if (arr->retain_fn != NULL) {
+        arr->retain_fn(*(void**)dest);
+    }
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
@@ -1797,6 +1829,11 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
         }
     }
 
+    // Release the array's reference to the removed element if this is an object array
+    if (arr->release_fn != NULL) {
+        arr->release_fn(*(void**)temp_buffer);
+    }
+
     return temp_buffer;
 }
 
@@ -1825,6 +1862,11 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
     // Place new element at index
     void* dest = (char*)arr->data + (index * arr->elem_size);
     memcpy(dest, elem, arr->elem_size);
+
+    // Retain the element if this is an object array
+    if (arr->retain_fn != NULL) {
+        arr->retain_fn(*(void**)dest);
+    }
 
     // Increment length
     arr->length++;

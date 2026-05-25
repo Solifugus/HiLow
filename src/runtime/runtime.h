@@ -253,6 +253,9 @@ bool hl_watcher_is_active(HiLowWatcher* w);
 // Forward-declared; full definition populated in Phase 10-ε.
 typedef struct HiLowArrayWatcher HiLowArrayWatcher;
 
+// Element function pointer type (Phase C)
+typedef void (*hl_elem_fn)(void*);
+
 typedef struct HiLowArray {
     int refcount;
     size_t length;
@@ -260,6 +263,8 @@ typedef struct HiLowArray {
     size_t elem_size;
     void* data;
     HiLowArrayWatcher* watchers;   // Phase B scaffolding: head of subscription list (always NULL in Phase B)
+    hl_elem_fn retain_fn;          // NULL for primitive arrays, hl_object_retain for object arrays
+    hl_elem_fn release_fn;         // NULL for primitive arrays, hl_object_release for object arrays
 } HiLowArray;
 
 // Phase B scaffolding: the subscription node. Phase 10-ε fills in the calling
@@ -280,7 +285,7 @@ struct HiLowArrayWatcher {
 #define HL_ARR_DEEP 4
 #define HL_ARR_MOVED 5
 
-HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity);
+HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn);
 void hl_array_retain(HiLowArray* arr);
 void hl_array_release(HiLowArray* arr);
 void hl_array_push(HiLowArray* arr, void* elem);   // copies elem_size bytes from elem into the buffer, growing if needed, now with firing loop

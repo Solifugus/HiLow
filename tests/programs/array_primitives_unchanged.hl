@@ -1,0 +1,13 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+    print(nums.length)
+    print(nums[1])
+    nums.push(40)
+    print(nums.length)
+    let popped = nums.pop()
+    print(popped)
+    let removed = nums.remove(1)
+    print(removed)
+    print(nums.length)
+    return 0
+}

@@ -1680,6 +1680,11 @@ impl CodeGenerator {
                 self.output.push_str(", ");
                 self.generate_expression(&index_access.index, type_checker)?;
                 self.output.push_str(&format!(", &{});\n", temp_var));
+
+                // Release temporary object reference after set (Phase C)
+                if matches!(**elem_type, Type::Object(_)) {
+                    self.output.push_str(&format!("  hl_object_release({});\n", temp_var));
+                }
             }
         } else {
             // Regular assignment to variables
@@ -2260,14 +2265,27 @@ impl CodeGenerator {
                 let elem_size = format!("sizeof({})", elem_c_type);
                 let initial_capacity = elements.len();
 
+                // Determine retain/release function pointers based on element type
+                let (retain_fn, release_fn) = match &elem_type {
+                    Type::Object(_) => ("(void(*)(void*))hl_object_retain", "(void(*)(void*))hl_object_release"),
+                    _ => ("NULL", "NULL"), // Primitive types
+                };
+
                 // Use GCC statement-expression for inline array construction
-                self.output.push_str(&format!("({{ HiLowArray* __arr = hl_array_new({}, {});\n", elem_size, initial_capacity));
+                self.output.push_str(&format!("({{ HiLowArray* __arr = hl_array_new({}, {}, {}, {});\n", elem_size, initial_capacity, retain_fn, release_fn));
 
                 // Push each element
                 for (i, element) in elements.iter().enumerate() {
                     self.output.push_str(&format!("     {} __e{} = ", elem_c_type, i));
                     self.generate_expression(element, type_checker)?;
                     self.output.push_str(&format!("; hl_array_push(__arr, &__e{});\n", i));
+                }
+
+                // Release temporary object references before returning the array (Phase C)
+                if matches!(&elem_type, Type::Object(_)) {
+                    for i in 0..elements.len() {
+                        self.output.push_str(&format!("     hl_object_release(__e{});\n", i));
+                    }
                 }
 
                 self.output.push_str("     __arr; })");
@@ -2769,6 +2787,12 @@ impl CodeGenerator {
                         self.output.push_str("    hl_array_push(");
                         self.generate_expression(&member_access.object, type_checker)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
+
+                        // Release temporary object reference after push (Phase C)
+                        if matches!(elem_type.as_ref(), Type::Object(_)) {
+                            self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                        }
+
                         self.output.push_str("}");
                         return Ok(());
                     }
@@ -2827,6 +2851,12 @@ impl CodeGenerator {
                         self.output.push_str(", ");
                         self.generate_expression(&call.args[0], type_checker)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
+
+                        // Release temporary object reference after insert (Phase C)
+                        if matches!(elem_type.as_ref(), Type::Object(_)) {
+                            self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                        }
+
                         self.output.push_str("}");
                         return Ok(());
                     }

@@ -1,0 +1,8 @@
+high program(): i32 {
+    let obj1 = { temp: 42 }
+    let obj2 = { temp: 84 }
+    let temp_array = [obj1, obj2]
+    print(temp_array.length)
+    print("done")
+    return 0
+}

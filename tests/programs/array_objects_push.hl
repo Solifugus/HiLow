@@ -1,0 +1,8 @@
+high program(): i32 {
+    let items = [{ x: 5, y: 10 }]
+    print(items.length)
+    items.push({ x: 15, y: 25 })
+    print(items.length)
+    print(items[1].x)
+    return 0
+}
