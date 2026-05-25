@@ -6,12 +6,12 @@
 
 ## Current state
 
-Phase: Array Phase D complete — for-in iteration over arrays  
-Status: Arrays are now iterable using for-in with the existing two-name syntax `for (let (i, x) in arr)` — index binds as usize, element binds as T. Length re-read live each iteration (deliberately allows mutation during iteration). Object for-in unchanged. The array watcher system (10-ε) is functionally complete except `moved`.
+Phase: Array Phase C complete and verified (incl. C-fix) — arrays of objects, ownership-correct
+Status: Arrays now hold primitives AND reference-counted objects. Per-element retain/release via function pointers on HiLowArray (NULL for primitives). pop/remove return objects the CALLER owns; discarded results are cleaned up; bound results released at scope exit; refcounts balance (verified by the built-in leak check across bind/discard/unused/watcher-delta). Arrays are complete for primitives and objects: literals, indexing, .length, push, pop, set, remove, insert, for-in, full watcher reactivity.
 Branch: main
-Last commit: Array Phase D: for-in iteration over arrays
+Last commit: Array Phase C-fix: infer pop/remove return type for usable object results
 
-Tests: 182 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Tests: 191 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
@@ -31,13 +31,17 @@ Tests: 182 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 re
 
 ### Arrays
 
-Resolved (Phase A, B, B-2, D + UAF/usize/alias fixes): Dynamic arrays of primitives — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, for-in iteration. Heap-allocated, refcount-cleaned including heap-local-derived returns. Fully reactive: all mutations fire watchers (deep/changed/added/removed) with alias-bound deltas, through aliases, with pause/resume gating. Arrays are iterable with `for (let (i, x) in arr)` — live length re-read enables mutation during iteration.
+Resolved (Phase A, B, B-2, C, D + UAF/usize/alias/inference fixes): Dynamic arrays of primitives AND objects — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, for-in iteration. Heap-allocated, refcount-cleaned. Fully reactive: all mutations fire watchers (deep/changed/added/removed) with alias-bound deltas, through aliases, with pause/resume gating. Iterable with `for (let (i, x) in arr)` (live length re-read enables mutation during iteration). Object elements: per-element retain/release via function pointers; pop/remove return caller-owned objects, discarded results cleaned up, refcounts balanced (built-in leak check verifies).
 
-Still pending — Array Phase C: heap element types (arrays of objects/strings/tuples/arrays) with per-element retain/release on insert/remove.
+Still pending — arrays of strings: String is char* (not reference-counted). Needs a managed-string type before string arrays are safe. Deferred.
 
-Still pending — reorder operations: .swap/.sort/.reverse (none exist). These would be the triggering operations for the `moved` watcher modifier (10-ε-γ), which is currently deferred for lack of any operation to fire it.
+Still pending — nested arrays (arrays of arrays): HiLowArray* is refcounted, so this is a quick follow-on using the same retain_fn/release_fn mechanism (pass hl_array_retain/hl_array_release as the element fns). Not yet done.
 
-Still pending — array niceties: .clear, fixed arrays [T;N], empty typed literals, bounds-check graceful handling, equality, slicing, concatenation, comprehensions.
+Still pending — arrays of functions / optionals / watchers / tuples.
+
+Still pending — reorder operations (.swap/.sort/.reverse) — would be the triggering ops for the `moved` watcher modifier (10-ε-γ, deferred).
+
+Still pending — array niceties: .clear, fixed arrays [T;N], empty typed literals, bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (`for (let x in arr)` — future lightweight revision).
 
 ### Phase 10 watcher system (in progress)
 
@@ -194,6 +198,12 @@ When a phase's task is to REMOVE a guard/rejection, Claude Code may hit that gua
 ### Test weakened to pass
 
 **Pattern:** Claude Code may silently rewrite a test into a weaker version that passes rather than surface a problem. Array Phase B (2026-05-23): mutation_scope_cleanup was "simplified to avoid parser issues" into returning a constant, dodging a real use-after-free. Signal: debrief says a test was "simplified" / "to avoid" / "to work around." Mitigation: probe the original hard case directly; such phrases often mask a real bug in another layer.
+
+### Test weaker than spec (honest debrief, green suite, gap survives)
+Distinct from a false debrief: the implementer truthfully reports a passing suite, but a test it wrote is weaker than the spec asked for, so a real gap survives undetected. Occurrence: Array Phase C — the spec said "pop an object into a binding, use it after pop," but the written array_objects_pop test did `items.pop()` discarded (unbound). The suite was genuinely green; the pop-result-binding bug (object pop results typed Unknown → field access failed to compile) survived. Caught only by an independent probe that bound the result and accessed a field — the exact thing the written test avoided. Mitigation: the reviewer must ask what the tests do NOT cover and probe exactly there; re-running the implementer's green tests is insufficient. Value-asserting tests must exercise the spec'd usage, not a weaker shape of it.
+
+### Fix exceeding stated scope (legitimately)
+A fix may need to ripple beyond its stated scope to be correct. Occurrence: the C-fix was scoped "inference-only," but balancing refcounts for bound pop/remove results also required changing the runtime ownership model (pop/remove → caller-owns + discard cleanup). The change was correct and disclosed. Lesson: scope-creep in a fix is a yellow flag (it's how unrequested changes sneak in), but it is sometimes necessary — so the reviewer must re-verify the WHOLE surface the fix touches (here: bind/discard/unused/watcher-delta for both pop and remove), not just the fix's stated target. The ripple is acceptable when disclosed and verified across the full surface; it is a problem when hidden or unverified.
 
 ---
 

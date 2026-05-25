@@ -6,6 +6,25 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-24 (Sunday) — Array Phase C-fix: pop/remove return-type inference + final ownership model
+
+- Commit: 43ecc0c (fixes b99b11b)
+- Tests: 189 → 191 integration (+2 bind-and-use tests)
+- Bug: infer_expression_type_for_codegen had no arm for method calls, so `let x = arr.pop()` / `arr.remove(i)` on an OBJECT array typed x as Unknown and field access (x.value) failed to compile — while `let e = arr[0]` worked because IndexAccess had an arm. The original array_objects_pop test discarded the popped result (`items.pop()` unbound), so the gap slipped the green suite. Caught by an independent probe that bound the result and accessed a field.
+- Fix: added a Call arm to infer_expression_type_for_codegen returning the element type for .pop()/.remove() on a DynamicArray (mirroring the IndexAccess arm). 
+- FINAL OWNERSHIP MODEL (this is the authoritative description — supersedes the b99b11b commit message): hl_array_pop and hl_array_remove do NOT release the returned object's reference — the CALLER owns the returned object. A `let x = arr.pop()` binding owns x (released at scope exit via the existing let machinery). A DISCARDED object-returning method result (`arr.pop()` with no binding) gets an explicit temp+release emitted at the expression-statement level, so it doesn't leak. This is a coherent caller-owns model; refcounts balance across bind / discard / unused-binding / watcher-delta cases.
+- Note (methodology): this is a "test weaker than spec" instance — the spec called for "pop into a binding, use it"; the written test discarded. Added array_objects_pop_use and array_objects_remove_use that bind and access a field, asserting exit 0 + empty stderr.
+- Note (methodology): the fix legitimately exceeded its stated scope (inference-only) into the runtime ownership model, because the inference fix alone would not have balanced refcounts for bound results. The change was disclosed in the debrief and verified correct across the full ownership surface (independent matrix: bind-use, pop-discarded, remove-discarded, removed-watcher-delta-field, bound-but-unused — all exit 0, no leak). Lesson: a reviewer must re-verify the whole surface a fix touches, not just the fix's stated target.
+- Independently verified: pop bind-use (200,1,200); remove bind-use (1,2); pop/remove discarded (no leak); bound-unused (no leak); removed-watcher reading delta field (2,2). All exit 0, no MEMORY LEAK.
+
+### 2026-05-24 (Sunday) — Array Phase C: arrays of objects with per-element retain/release
+
+- Commit: b99b11b
+- Tests: 182 → 189 integration (+7)
+- Arrays can now hold reference-counted objects. HiLowArray carries optional retain_fn/release_fn function pointers (Option A); hl_array_new takes them — NULL for primitive arrays (behavior unchanged, verified). push/insert/set retain the stored object pointer; hl_array_release releases every element before freeing the buffer. remove fires its REMOVED watcher BEFORE releasing so the delta object is alive during firing (UAF hazard handled). Built-in alloc/free leak check verifies refcount balance — all object-array tests exit 0 with empty stderr.
+- (Ownership of pop/remove RETURN values was refined in the C-fix above — see that entry for the final model.)
+- Strings deferred (char*, not refcounted). Nested arrays deferred (HiLowArray* is refcounted — a quick follow-on).
+
 ### 2026-05-24 (Sunday) — Array Phase D: for-in iteration over arrays
 
 - Commit: 80759d8
