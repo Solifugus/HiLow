@@ -850,9 +850,37 @@ impl CodeGenerator {
                 self.generate_return_statement(return_stmt, type_checker)?;
             }
             Statement::ExprStatement(expr) => {
-                // Generate the expression and add semicolon
-                self.generate_expression(expr, type_checker)?;
-                self.output.push_str(";\n");
+                // Check if this is an object-returning array method call that needs cleanup
+                let needs_release = match expr {
+                    Expression::Call(call) => {
+                        if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
+                            let object_type = self.infer_expression_type_for_codegen(&member_access.object);
+                            if let Type::DynamicArray(elem_type) = object_type {
+                                matches!(member_access.member.as_str(), "pop" | "remove") &&
+                                matches!(*elem_type, Type::Object(_))
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false
+                };
+
+                if needs_release {
+                    // Generate: { HiLowObject* temp = expr; hl_object_release(temp); }
+                    let temp_var = format!("temp_{}", self.var_counter);
+                    self.var_counter += 1;
+                    self.output.push_str(&format!("  {{ HiLowObject* {} = ", temp_var));
+                    self.generate_expression(expr, type_checker)?;
+                    self.output.push_str(&format!("; hl_object_release({}); }}\n", temp_var));
+                } else {
+                    // Normal expression statement
+                    self.output.push_str("  ");
+                    self.generate_expression(expr, type_checker)?;
+                    self.output.push_str(";\n");
+                }
             }
             Statement::If(if_stmt) => {
                 self.generate_if_statement(if_stmt, type_checker)?;
@@ -1078,7 +1106,16 @@ impl CodeGenerator {
                                     _ => None
                                 }
                             } else {
-                                None
+                                // Check for array method calls (pop, remove)
+                                let object_type = self.infer_expression_type_for_codegen(&member_access.object);
+                                if let Type::DynamicArray(elem_type) = object_type {
+                                    match member_access.member.as_str() {
+                                        "pop" | "remove" => Some(*elem_type), // Return element type
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
                             }
                         } else {
                             None
@@ -3826,7 +3863,16 @@ impl CodeGenerator {
                                 _ => Type::I32
                             }
                         } else {
-                            Type::I32
+                            // Check if this is a method call on an array (pop/remove)
+                            let object_type = self.infer_expression_type_for_codegen(&member_access.object);
+                            if let Type::DynamicArray(elem_type) = object_type {
+                                match member_access.member.as_str() {
+                                    "pop" | "remove" => *elem_type, // Return element type
+                                    _ => Type::I32,
+                                }
+                            } else {
+                                Type::I32
+                            }
                         }
                     } else {
                         Type::I32

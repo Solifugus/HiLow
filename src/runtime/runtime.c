@@ -1743,11 +1743,8 @@ void* hl_array_pop(HiLowArray* arr) {
         }
     }
 
-    // Release the array's reference to the element if this is an object array
-    if (arr->release_fn != NULL) {
-        arr->release_fn(*(void**)removed_slot);
-    }
-
+    // Return the removed element
+    // Note: The caller now owns the object reference; no release here
     return removed_slot;
 }
 
@@ -1829,11 +1826,8 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
         }
     }
 
-    // Release the array's reference to the removed element if this is an object array
-    if (arr->release_fn != NULL) {
-        arr->release_fn(*(void**)temp_buffer);
-    }
-
+    // Return the removed element
+    // Note: The caller now owns the object reference; no release here
     return temp_buffer;
 }
 

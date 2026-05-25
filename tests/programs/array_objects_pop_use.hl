@@ -1,0 +1,10 @@
+high program(): i32 {
+    let a = { value: 100 }
+    let b = { value: 200 }
+    let items = [a, b]
+    let x = items.pop()
+    print(x.value)
+    print(items.length)
+    print(x.value)
+    return 0
+}

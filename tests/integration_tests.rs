@@ -3723,6 +3723,44 @@ fn test_array_objects_scope_cleanup() {
 }
 
 #[test]
+fn test_array_objects_pop_use() {
+    let executable = compile_program("tests/programs/array_objects_pop_use.hl")
+        .expect("Failed to compile array_objects_pop_use.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_objects_pop_use");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_objects_pop_use.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_objects_remove_use() {
+    let executable = compile_program("tests/programs/array_objects_remove_use.hl")
+        .expect("Failed to compile array_objects_remove_use.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_objects_remove_use");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_objects_remove_use.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
 fn test_array_primitives_unchanged() {
     let executable = compile_program("tests/programs/array_primitives_unchanged.hl")
         .expect("Failed to compile array_primitives_unchanged.hl");

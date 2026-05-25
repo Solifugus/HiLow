@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array Phase C — heap element types (objects)**
+**Current phase: Array Phase C-fix — pop/remove return-type inference**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
