@@ -1,0 +1,8 @@
+high program(): i32 {
+    let m = [[1]]
+    m.push([2, 3])
+    print(m.length)
+    print(m[1][0])
+    print(m[1][1])
+    return 0
+}

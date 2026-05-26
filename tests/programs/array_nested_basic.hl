@@ -1,0 +1,8 @@
+high program(): i32 {
+    let m = [[1, 2], [3, 4]]
+    print(m.length)
+    print(m[0].length)
+    print(m[0][1])
+    print(m[1][0])
+    return 0
+}

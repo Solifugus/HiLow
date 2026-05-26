@@ -2305,6 +2305,7 @@ impl CodeGenerator {
                 // Determine retain/release function pointers based on element type
                 let (retain_fn, release_fn) = match &elem_type {
                     Type::Object(_) => ("(void(*)(void*))hl_object_retain", "(void(*)(void*))hl_object_release"),
+                    Type::DynamicArray(_) => ("(void(*)(void*))hl_array_retain", "(void(*)(void*))hl_array_release"),
                     _ => ("NULL", "NULL"), // Primitive types
                 };
 
@@ -2318,10 +2319,20 @@ impl CodeGenerator {
                     self.output.push_str(&format!("; hl_array_push(__arr, &__e{});\n", i));
                 }
 
-                // Release temporary object references before returning the array (Phase C)
-                if matches!(&elem_type, Type::Object(_)) {
-                    for i in 0..elements.len() {
-                        self.output.push_str(&format!("     hl_object_release(__e{});\n", i));
+                // Release temporary references before returning the array (Phase C + C-2)
+                match &elem_type {
+                    Type::Object(_) => {
+                        for i in 0..elements.len() {
+                            self.output.push_str(&format!("     hl_object_release(__e{});\n", i));
+                        }
+                    },
+                    Type::DynamicArray(_) => {
+                        for i in 0..elements.len() {
+                            self.output.push_str(&format!("     hl_array_release(__e{});\n", i));
+                        }
+                    },
+                    _ => {
+                        // Primitive types don't need release
                     }
                 }
 
@@ -2825,9 +2836,17 @@ impl CodeGenerator {
                         self.generate_expression(&member_access.object, type_checker)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
 
-                        // Release temporary object reference after push (Phase C)
-                        if matches!(elem_type.as_ref(), Type::Object(_)) {
-                            self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                        // Release temporary reference after push (Phase C + C-2)
+                        match elem_type.as_ref() {
+                            Type::Object(_) => {
+                                self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                            },
+                            Type::DynamicArray(_) => {
+                                self.output.push_str(&format!("    hl_array_release({});\n", temp_var));
+                            },
+                            _ => {
+                                // Primitive types don't need release
+                            }
                         }
 
                         self.output.push_str("}");

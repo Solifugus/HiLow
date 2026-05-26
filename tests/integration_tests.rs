@@ -3779,3 +3779,98 @@ fn test_array_primitives_unchanged() {
     let _ = fs::remove_file(&executable);
 }
 
+#[test]
+fn test_array_nested_basic() {
+    let executable = compile_program("tests/programs/array_nested_basic.hl")
+        .expect("Failed to compile array_nested_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_nested_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_nested_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_nested_forin() {
+    let executable = compile_program("tests/programs/array_nested_forin.hl")
+        .expect("Failed to compile array_nested_forin.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_nested_forin");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_nested_forin.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_nested_push() {
+    let executable = compile_program("tests/programs/array_nested_push.hl")
+        .expect("Failed to compile array_nested_push.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_nested_push");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_nested_push.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_nested_pop() {
+    let executable = compile_program("tests/programs/array_nested_pop.hl")
+        .expect("Failed to compile array_nested_pop.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_nested_pop");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_nested_pop.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_nested_scope() {
+    let executable = compile_program("tests/programs/array_nested_scope.hl")
+        .expect("Failed to compile array_nested_scope.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_nested_scope");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_nested_scope.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+

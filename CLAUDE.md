@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array Phase C-fix — pop/remove return-type inference**
+**Current phase: Array Phase C-2 — nested arrays**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

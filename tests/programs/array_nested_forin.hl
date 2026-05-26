@@ -1,0 +1,9 @@
+high program(): i32 {
+    let m = [[10, 20], [30, 40]]
+    for (let (i, row) in m) {
+        for (let (j, x) in row) {
+            print(x)
+        }
+    }
+    return 0
+}
