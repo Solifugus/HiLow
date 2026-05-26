@@ -549,10 +549,10 @@ impl TypeChecker {
         // 3. Validate modifier-type compatibility (per the rules above)
         let alias_type = self.validate_subscription_modifier(&sub.modifier, &outer_type, &sub.position);
 
-        // 3.1. Phase 10-ε-β: Validate alias usage - only allowed with added/removed modifiers
-        if sub.alias.is_some() && !matches!(sub.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
+        // 3.1. Phase 10-ε-β/γ: Validate alias usage - only allowed with added/removed/moved modifiers
+        if sub.alias.is_some() && !matches!(sub.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed | SubscriptionModifier::Moved) {
             self.add_error(
-                format!("alias binding is only supported with added/removed modifiers, got {:?}", sub.modifier),
+                format!("alias binding is only supported with added/removed/moved modifiers, got {:?}", sub.modifier),
                 sub.position.clone()
             );
             return;
@@ -613,9 +613,9 @@ impl TypeChecker {
                 }
             }
             Moved => {
-                // Require ordered collection (array)
+                // Phase 10-ε-γ: Require ordered collection (array), alias gets (from,to) tuple
                 if matches!(outer_type, Type::DynamicArray(_) | Type::FixedArray(_, _)) {
-                    Some(Type::DynamicArray(Box::new(Type::Tuple(vec![Type::Usize, Type::Usize]))))
+                    Some(Type::Tuple(vec![Type::Usize, Type::Usize]))  // alias binds to (from, to) indices
                 } else {
                     self.add_error(
                         format!("(moved) modifier requires an ordered collection type (array), got '{}'",
@@ -2816,6 +2816,10 @@ impl TypeChecker {
                     "insert" => {
                         // .insert(index, elem) where index: integer, elem: T -> Nothing
                         Type::Function(vec![Type::Usize, *elem_type.clone()], Box::new(Type::Nothing))
+                    },
+                    "move" => {
+                        // .move(from, to) where from: usize, to: usize -> Nothing
+                        Type::Function(vec![Type::Usize, Type::Usize], Box::new(Type::Nothing))
                     },
                     _ => {
                         self.add_error(

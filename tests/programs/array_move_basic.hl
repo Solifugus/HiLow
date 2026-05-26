@@ -1,0 +1,13 @@
+high program(): i32 {
+    let nums = [10, 20, 30, 40]
+    let w = watcher((m=moved)nums) {
+        print(m.0)
+        print(m.1)
+    }
+    nums.move(0, 2)
+    print(nums[0])
+    print(nums[1])
+    print(nums[2])
+    print(nums[3])
+    return 0
+}

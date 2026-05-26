@@ -1,0 +1,6 @@
+// This should fail at typecheck - alias on changed modifier is rejected
+high program(): i32 {
+    let nums = [1, 2, 3]
+    let w = watcher((x=changed)nums) { print(x) }
+    return 0
+}

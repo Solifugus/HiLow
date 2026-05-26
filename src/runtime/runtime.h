@@ -296,6 +296,14 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem); // overwrites elem
 void* hl_array_remove(HiLowArray* arr, size_t index); // removes and returns element at index, shifting trailing elements down
 void hl_array_insert(HiLowArray* arr, size_t index, void* elem); // inserts element at index, shifting trailing elements up
 
+// Phase 10-ε-γ: Moved watcher delta type (fixed layout compatible with Tuple(Usize, Usize))
+typedef struct {
+    size_t _0;  // from index
+    size_t _1;  // to index
+} HiLowMovedDelta;
+
+void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element from index 'from' to index 'to'
+
 // Array watcher registration (Phase 10-ε-α)
 void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state);
 

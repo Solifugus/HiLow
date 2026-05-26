@@ -339,16 +339,13 @@ fn test_watcher_added_on_array_with_alias() {
 fn test_watcher_moved_on_array() {
     let mut type_checker = TypeChecker::new();
 
-    // (moved) modifier on array type with alias should be rejected in Phase 10-ε-β
+    // (moved) modifier on array type with alias should now be accepted in Phase 10-ε-γ
     let graph = build_graph(vec![
         ("./test", "high program(): i32 { function makeItems(): [i32] { return unknown(\"not implemented\") } let items = makeItems(); watcher onItems((moves=moved)items) { print(\"moved\") } return 42 }")
     ]);
 
     let result = type_checker.check_graph(&graph);
-    assert!(result.is_err(), "Expected error for moved with alias, got: {:?}", result);
-    let errors = result.unwrap_err();
-    assert!(errors.iter().any(|e| e.message.contains("alias binding is only supported with added/removed modifiers")),
-            "Expected alias rejection error, got: {:?}", errors);
+    assert!(result.is_ok(), "Expected success for moved with alias, got: {:?}", result);
 }
 
 #[test]

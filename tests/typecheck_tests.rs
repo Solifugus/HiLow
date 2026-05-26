@@ -765,7 +765,7 @@ fn test_array_watcher_alias_on_changed_rejected() {
     assert!(result.is_err(), "Expected error for alias on changed modifier");
     let errors = result.unwrap_err();
     let error_msg = format!("{:?}", errors);
-    assert!(error_msg.contains("alias binding is only supported with added/removed modifiers"),
+    assert!(error_msg.contains("alias binding is only supported with added/removed/moved modifiers"),
             "Error should mention alias binding restriction, got: {}", error_msg);
 }
 

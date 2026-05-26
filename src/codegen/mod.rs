@@ -1063,6 +1063,7 @@ impl CodeGenerator {
                                     SubscriptionModifier::Changed => "HL_ARR_CHANGED",
                                     SubscriptionModifier::Added => "HL_ARR_ADDED",
                                     SubscriptionModifier::Removed => "HL_ARR_REMOVED",
+                                    SubscriptionModifier::Moved => "HL_ARR_MOVED",
                                     _ => continue, // Should not happen due to validation
                                 };
                                 let arr_var = self.mangle_variable_name(&subscription.variable_name);
@@ -2149,12 +2150,21 @@ impl CodeGenerator {
                         }
                         SubscriptionModifier::Added | SubscriptionModifier::Removed => {
                             // Phase 10-ε-β: Added/Removed now supported for arrays
+                            if !is_array {
+                                return Err(CodegenError::UnsupportedFeature {
+                                    feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
+                                    phase: "added/removed watching only applies to arrays".to_string(),
+                                });
+                            }
                         }
                         SubscriptionModifier::Moved => {
-                            return Err(CodegenError::UnsupportedFeature {
-                                feature: format!("watcher modifier {:?}", subscription.modifier),
-                                phase: "Phase 10-ε-γ: moved array watchers".to_string(),
-                            });
+                            // Phase 10-ε-γ: Moved now supported for arrays
+                            if !is_array {
+                                return Err(CodegenError::UnsupportedFeature {
+                                    feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
+                                    phase: "moved watching only applies to arrays".to_string(),
+                                });
+                            }
                         }
                     }
                 }
@@ -2212,7 +2222,7 @@ impl CodeGenerator {
 
                 self.watcher_bodies.push_str(") {\n");
 
-                // Phase 10-ε-β: For added/removed with alias, emit delta cast+bind
+                // Phase 10-ε-β/γ: For added/removed/moved with alias, emit delta cast+bind
                 if has_arrays {
                     for subscription in &watcher_expr.subscriptions {
                         if matches!(subscription.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
@@ -2224,6 +2234,14 @@ impl CodeGenerator {
                                         c_elem_type, alias_name, c_elem_type
                                     ));
                                 }
+                            }
+                        } else if matches!(subscription.modifier, SubscriptionModifier::Moved) {
+                            if let Some(ref alias_name) = subscription.alias {
+                                // Moved alias is typed as Tuple(Usize, Usize) but cast from HiLowMovedDelta
+                                self.watcher_bodies.push_str(&format!(
+                                    "    HiLowMovedDelta {} = *(HiLowMovedDelta *)delta;\n",
+                                    alias_name
+                                ));
                             }
                         }
                     }
@@ -2246,7 +2264,7 @@ impl CodeGenerator {
                         self.variable_types.insert(param_name.clone(), types_var_type);
                     }
 
-                    // Also register aliases for added/removed subscriptions (mirrors cast-emission loop above)
+                    // Also register aliases for added/removed/moved subscriptions (mirrors cast-emission loop above)
                     for subscription in &watcher_expr.subscriptions {
                         if matches!(subscription.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
                             if let Some(ref alias_name) = subscription.alias {
@@ -2254,6 +2272,12 @@ impl CodeGenerator {
                                     let types_alias_type = Type::from_ast_type(alias_type);
                                     self.variable_types.insert(alias_name.clone(), types_alias_type);
                                 }
+                            }
+                        } else if matches!(subscription.modifier, SubscriptionModifier::Moved) {
+                            if let Some(ref alias_name) = subscription.alias {
+                                // Moved alias is typed as Tuple(Usize, Usize) for .0/.1 access
+                                let tuple_type = Type::Tuple(vec![Type::Usize, Type::Usize]);
+                                self.variable_types.insert(alias_name.clone(), tuple_type);
                             }
                         }
                     }
@@ -2914,6 +2938,24 @@ impl CodeGenerator {
                         }
 
                         self.output.push_str("}");
+                        return Ok(());
+                    }
+                    "move" => {
+                        // arr.move(from, to) -> hl_array_move(arr, from, to)
+                        if call.args.len() != 2 {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: "array.move() with wrong argument count".to_string(),
+                                phase: "Phase 10-ε-γ".to_string(),
+                            });
+                        }
+
+                        self.output.push_str("hl_array_move(");
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(", ");
+                        self.generate_expression(&call.args[0], type_checker)?;  // from
+                        self.output.push_str(", ");
+                        self.generate_expression(&call.args[1], type_checker)?;  // to
+                        self.output.push_str(")");
                         return Ok(());
                     }
                     _ => {

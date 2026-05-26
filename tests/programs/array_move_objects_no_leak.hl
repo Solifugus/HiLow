@@ -1,0 +1,6 @@
+high program(): i32 {
+    let objs = [{id: 1}, {id: 2}, {id: 3}]
+    objs.move(0, 2)
+    print(objs[0].id)
+    return 0
+}

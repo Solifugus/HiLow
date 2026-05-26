@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array Phase C-2 — nested arrays**
+**Current phase: Phase 10-ε-γ complete — .move + moved watcher**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
