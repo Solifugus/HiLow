@@ -2958,6 +2958,20 @@ impl CodeGenerator {
                         self.output.push_str(")");
                         return Ok(());
                     }
+                    "clear" => {
+                        // arr.clear() -> hl_array_clear(arr)
+                        if !call.args.is_empty() {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: "array.clear() with arguments".to_string(),
+                                phase: "Array .clear()".to_string(),
+                            });
+                        }
+
+                        self.output.push_str("hl_array_clear(");
+                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.output.push_str(")");
+                        return Ok(());
+                    }
                     _ => {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: format!("unsupported array method '{}'", member_access.member),

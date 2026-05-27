@@ -1,0 +1,10 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+    let w = watcher((changed)nums) { print(nums.length) }
+    nums.clear()
+    print(nums.length)
+    nums.push(99)
+    print(nums.length)
+    print(nums[0])
+    return 0
+}

@@ -1,0 +1,9 @@
+high program(): i32 {
+    let nums = [5, 10]
+    nums.pop()
+    nums.pop()
+    print(nums.length)
+    nums.clear()
+    print(nums.length)
+    return 0
+}

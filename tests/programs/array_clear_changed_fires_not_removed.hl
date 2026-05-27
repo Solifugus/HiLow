@@ -1,0 +1,15 @@
+high program(): i32 {
+    let nums = [10, 20, 30]
+
+    let w_changed = watcher((changed)nums) {
+        print("changed")
+    }
+
+    let w_removed = watcher((removed)nums) {
+        print("removed")
+    }
+
+    nums.clear()
+    print("done")
+    return 0
+}

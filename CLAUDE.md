@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10-ε-γ complete — .move + moved watcher**
+**Current phase: Array .clear()**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

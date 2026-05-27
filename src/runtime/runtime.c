@@ -1961,6 +1961,32 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
     }
 }
 
+// Phase 10-ε-γ + clear: Array clear empties the array
+void hl_array_clear(HiLowArray* arr) {
+    if (!arr) return;
+
+    // Release all elements if this is an object array (same loop as hl_array_release)
+    if (arr->release_fn != NULL) {
+        for (size_t i = 0; i < arr->length; i++) {
+            void* slot = (char*)arr->data + (i * arr->elem_size);
+            arr->release_fn(*(void**)slot);
+        }
+    }
+
+    // Reset length to 0, but keep the buffer for reuse (don't free arr->data)
+    arr->length = 0;
+
+    // Fire watchers: CHANGED and DEEP get NULL delta; ADDED/REMOVED/MOVED do NOT fire
+    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (state != NULL && state->active && !state->ended) {
+            if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                ((void(*)(HiLowArray*, void*))w->body_fn)(arr, NULL);
+            }
+        }
+    }
+}
+
 // Array watcher registration (Phase 10-ε-α)
 void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state) {
     HiLowArrayWatcher* new_watcher = malloc(sizeof(HiLowArrayWatcher));

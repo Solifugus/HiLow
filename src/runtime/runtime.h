@@ -303,6 +303,7 @@ typedef struct {
 } HiLowMovedDelta;
 
 void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element from index 'from' to index 'to'
+void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements and setting length to 0
 
 // Array watcher registration (Phase 10-ε-α)
 void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state);

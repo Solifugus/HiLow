@@ -2821,6 +2821,10 @@ impl TypeChecker {
                         // .move(from, to) where from: usize, to: usize -> Nothing
                         Type::Function(vec![Type::Usize, Type::Usize], Box::new(Type::Nothing))
                     },
+                    "clear" => {
+                        // .clear() -> Nothing (no args)
+                        Type::Function(vec![], Box::new(Type::Nothing))
+                    },
                     _ => {
                         self.add_error(
                             format!("Arrays do not have a property named '{}'", member_access.member),

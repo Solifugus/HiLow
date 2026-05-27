@@ -3981,3 +3981,98 @@ fn test_array_moved_alias_rejected_on_changed() {
             "Expected alias rejection error, got: {}", error);
 }
 
+#[test]
+fn test_array_clear_basic() {
+    let executable = compile_program("tests/programs/array_clear_basic.hl")
+        .expect("Failed to compile array_clear_basic.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_clear_basic");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array_clear_basic.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_clear_objects_no_leak() {
+    let executable = compile_program("tests/programs/array_clear_objects_no_leak.hl")
+        .expect("Failed to compile array_clear_objects_no_leak.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_clear_objects_no_leak");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, indicating no memory leaks");
+
+    let expected = fs::read_to_string("tests/expected/array_clear_objects_no_leak.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_clear_empty() {
+    let executable = compile_program("tests/programs/array_clear_empty.hl")
+        .expect("Failed to compile array_clear_empty.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_clear_empty");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array_clear_empty.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_clear_then_reuse() {
+    let executable = compile_program("tests/programs/array_clear_then_reuse.hl")
+        .expect("Failed to compile array_clear_then_reuse.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_clear_then_reuse");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array_clear_then_reuse.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_clear_changed_fires_not_removed() {
+    let executable = compile_program("tests/programs/array_clear_changed_fires_not_removed.hl")
+        .expect("Failed to compile array_clear_changed_fires_not_removed.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_clear_changed_fires_not_removed");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/array_clear_changed_fires_not_removed.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
