@@ -16,6 +16,7 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 - .reverse / .swap / .sort DEFERRED — bulk reorders without a single (from,to) delta; how a bulk reorder reports `moved` is a separate future design. .move is the clean single-element primitive (and the more common need than swap).
 - Independently verified beyond the debrief: forward move(0,2) on [10,20,30,40] → delta 0,2, array [20,30,10,40]; BACKWARD move(3,1) on [1,2,3,4] → delta 3,1, array [1,4,2,3] (confirms the from>to shift direction the canonical didn't test); object move(0,2) → reordered, exit 0 NO leak (refcount-neutral confirmed); no-op move(1,1) → fires delta 1,1, array unchanged.
 - MILESTONE: the watcher system (10-ε) is now COMPLETE. All six modifiers implemented and verified — changed, assigned, deep, added, removed, moved — across scalar and array (primitive/object/nested) targets, with correct deltas, alias binding, pause/resume gating, and refcount-neutral reordering.
+- added `.clear()` to array methods list.
 
 ### 2026-05-25 (Monday night) — Array Phase C-2: nested arrays (arrays of arrays)
 
