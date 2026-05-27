@@ -6,12 +6,12 @@
 
 ## Current state
 
-Phase: Array Phase C complete and verified (incl. C-fix) — arrays of objects, ownership-correct
-Status: Arrays now hold primitives AND reference-counted objects. Per-element retain/release via function pointers on HiLowArray (NULL for primitives). pop/remove return objects the CALLER owns; discarded results are cleaned up; bound results released at scope exit; refcounts balance (verified by the built-in leak check across bind/discard/unused/watcher-delta). Arrays are complete for primitives and objects: literals, indexing, .length, push, pop, set, remove, insert, for-in, full watcher reactivity.
+Phase: Phase 10-ε-γ complete — .move + moved watcher. WATCHER SYSTEM COMPLETE.
+Status: Arrays are complete for primitives, objects, and nested arrays — literals, indexing, .length, push, pop, set, remove, insert, move, for-in, full watcher reactivity, ownership-correct at depth. The watcher system (10-ε) is complete across all six modifiers (changed/assigned/deep/added/removed/moved) for scalar and array targets. .move relocates an element refcount-neutrally and fires moved with a (from,to) delta (alias binds as Tuple(Usize,Usize), accessed .0/.1).
 Branch: main
-Last commit: Array Phase C-fix: infer pop/remove return type for usable object results
+Last commit: Phase 10-ε-γ + .move: element move with moved watcher (from,to delta)
 
-Tests: 191 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Tests: 202 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
@@ -31,27 +31,26 @@ Tests: 191 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 re
 
 ### Arrays
 
-Resolved (Phase A, B, B-2, C, D + UAF/usize/alias/inference fixes): Dynamic arrays of primitives AND objects — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, for-in iteration. Heap-allocated, refcount-cleaned. Fully reactive: all mutations fire watchers (deep/changed/added/removed) with alias-bound deltas, through aliases, with pause/resume gating. Iterable with `for (let (i, x) in arr)` (live length re-read enables mutation during iteration). Object elements: per-element retain/release via function pointers; pop/remove return caller-owned objects, discarded results cleaned up, refcounts balanced (built-in leak check verifies).
+Resolved (Phase A, B, B-2, C, C-2, D, 10-ε-γ + UAF/usize/alias/inference fixes): Dynamic arrays of primitives, objects, AND nested arrays — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, .move, for-in iteration. Heap-allocated, refcount-cleaned (per-element retain/release via function pointers; cascades to arbitrary depth). Fully reactive: all mutations fire watchers (changed/deep/added/removed/moved) with appropriate deltas (added/removed bind the element; moved binds a (from,to) Tuple(Usize,Usize)), through aliases, with pause/resume gating. Iterable with `for (let (i, x) in arr)` (live length re-read enables mutation during iteration). .move is refcount-neutral (reorder only). 
 
-Still pending — arrays of strings: String is char* (not reference-counted). Needs a managed-string type before string arrays are safe. Deferred.
+Still pending — bulk reorder ops: .reverse / .swap / .sort. These reorder multiple elements at once and lack a single (from,to) delta — how a bulk reorder reports `moved` is an open design question (fire moved N times? a bulk-reorder signal? no moved, just changed?). .sort additionally needs a comparator design (primitives orderable directly; objects need a key/comparator).
 
-Still pending — nested arrays (arrays of arrays): HiLowArray* is refcounted, so this is a quick follow-on using the same retain_fn/release_fn mechanism (pass hl_array_retain/hl_array_release as the element fns). Not yet done.
+Still pending — arrays of strings: String is char* (not reference-counted). Needs a managed-string type first. Deferred.
 
 Still pending — arrays of functions / optionals / watchers / tuples.
 
-Still pending — reorder operations (.swap/.sort/.reverse) — would be the triggering ops for the `moved` watcher modifier (10-ε-γ, deferred).
-
-Still pending — array niceties: .clear, fixed arrays [T;N], empty typed literals, bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (`for (let x in arr)` — future lightweight revision).
+Still pending — array niceties: .clear, fixed arrays [T;N], empty typed literals (let xs: [i32] = []), bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (for (let x in arr) — future lightweight revision).
 
 ### Phase 10 watcher system (in progress)
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
-Phase 10-ε — functionally COMPLETE except moved.
-- 10-ε-α (deep/changed firing, no delta): done (c59e036).
-- 10-ε-β (added/removed delta-passing, alias-bound element): done (5594d78 + fix de3f06e). Aliased deltas verified carrying real values.
-- 10-ε (remove/insert firing): done as part of Array Phase B-2 (53c57ea).
-- 10-ε-γ (moved): DEFERRED — reserved for a future explicit reorder operation (swap/sort/reverse). No triggering operation exists yet, and value arrays have no element identity to track across incidental shifts. Not blocked on anything buildable right now; awaits a reorder op being prioritized.
+Phase 10-ε — COMPLETE. The collection-mutation watcher system is fully implemented:
+- 10-ε-α (deep/changed firing, no delta): c59e036
+- 10-ε-β (added/removed delta-passing, alias-bound element): 5594d78 + fix de3f06e
+- 10-ε (remove/insert firing): part of Array Phase B-2, 53c57ea
+- 10-ε-γ (moved): ac5af58 — .move fires moved with a (from,to) delta; alias binds Tuple(Usize,Usize).
+All six modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. moved deltas come only from .move (the single-element reorder primitive); bulk reorders (.reverse/.swap/.sort) and their moved-reporting are deferred.
 
 **Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
 

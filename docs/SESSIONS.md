@@ -6,6 +6,26 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-26 (Tuesday) — Phase 10-ε-γ + .move: element move with moved watcher — WATCHER SYSTEM COMPLETE
+
+- Commit: ac5af58
+- Tests: 196 → 202 integration (+6)
+- Added arr.move(from, to): relocates an element (capture it, shift the span between from and to, place at to). Refcount-neutral — same element relocated, no retain/release (verified leak-free on object arrays). Handles both shift directions (from<to shifts the span down/left; from>to shifts up/right).
+- Implemented the `moved` watcher modifier (10-ε-γ — the last unimplemented modifier). .move fires MOVED (with a (from,to) delta) + CHANGED + DEEP. moved un-gated on arrays; the moved alias is now valid (alias valid on added/removed/moved; still rejected on changed/deep).
+- The (from,to) delta: carried as a fixed runtime struct `HiLowMovedDelta { size_t _0; size_t _1; }` (Option B). The watcher alias binds as Tuple(Usize,Usize); the body accesses .0 (from) and .1 (to). Layout coordination: TupleAccess codegen emits ._0/._1 for tuple fields, so HiLowMovedDelta's fields are named _0/_1 to match — alias.0 reads _0 (from), alias.1 reads _1 (to). Clean fixed-layout contract between runtime and codegen; no dependence on the dynamically-generated tuple struct.
+- .reverse / .swap / .sort DEFERRED — bulk reorders without a single (from,to) delta; how a bulk reorder reports `moved` is a separate future design. .move is the clean single-element primitive (and the more common need than swap).
+- Independently verified beyond the debrief: forward move(0,2) on [10,20,30,40] → delta 0,2, array [20,30,10,40]; BACKWARD move(3,1) on [1,2,3,4] → delta 3,1, array [1,4,2,3] (confirms the from>to shift direction the canonical didn't test); object move(0,2) → reordered, exit 0 NO leak (refcount-neutral confirmed); no-op move(1,1) → fires delta 1,1, array unchanged.
+- MILESTONE: the watcher system (10-ε) is now COMPLETE. All six modifiers implemented and verified — changed, assigned, deep, added, removed, moved — across scalar and array (primitive/object/nested) targets, with correct deltas, alias binding, pause/resume gating, and refcount-neutral reordering.
+
+### 2026-05-25 (Monday night) — Array Phase C-2: nested arrays (arrays of arrays)
+
+- Commit: 3375064
+- Tests: 191 → 196 integration (+5)
+- Nested arrays (arrays of arrays) via ONE fn-selection arm: a DynamicArray element type now passes hl_array_retain / hl_array_release as the element retain/release function pointers, reusing Phase C's Option-A mechanism. push retains and hl_array_release cascades generically (no runtime change needed — HiLowArray* is reference-counted, push retains via arr->retain_fn regardless of element kind). Also added the DynamicArray arm to the temporary-release logic in array literals and push.
+- Independently verified beyond the debrief: nested index m[0][1]; 3-deep cube[0][0][1] (cascade recurses arbitrarily); nested array of OBJECTS groups[0][1].id (deepest cascade — outer array holds array retain/release fns, inner arrays hold object fns; teardown cascades outer-array → inner-arrays → objects, all balanced); push-inner-then-pop-bind-use. All exit 0, no leak.
+
+---
+
 ### 2026-05-24 (Sunday) — Array Phase C-fix: pop/remove return-type inference + final ownership model
 
 - Commit: 43ecc0c (fixes b99b11b)
