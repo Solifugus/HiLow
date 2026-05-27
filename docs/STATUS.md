@@ -6,12 +6,18 @@
 
 ## Current state
 
-Phase: Phase 10-ε-γ complete — .move + moved watcher. WATCHER SYSTEM COMPLETE.
-Status: Arrays are complete for primitives, objects, and nested arrays — literals, indexing, .length, push, pop, set, remove, insert, move, for-in, full watcher reactivity, ownership-correct at depth. The watcher system (10-ε) is complete across all six modifiers (changed/assigned/deep/added/removed/moved) for scalar and array targets. .move relocates an element refcount-neutrally and fires moved with a (from,to) delta (alias binds as Tuple(Usize,Usize), accessed .0/.1).
+Phase: Array .clear() complete. WATCHER SYSTEM COMPLETE.
+Status: Arrays are complete for primitives, objects, and nested arrays — literals, indexing, .length, push, pop, set, remove, insert, move, clear, for-in, full watcher reactivity, ownership-correct at depth. The watcher system (10-ε) is complete across all six modifiers (changed/assigned/deep/added/removed/moved) for scalar and array targets. .move relocates an element refcount-neutrally and fires moved with a (from,to) delta (alias binds as Tuple(Usize,Usize), accessed .0/.1). .clear empties an array (releases object/nested elements, resets length, keeps buffer for reuse, fires changed+deep once).
 Branch: main
-Last commit: Phase 10-ε-γ + .move: element move with moved watcher (from,to delta)
+Last commit: Array .clear(): empty an array (release elements, reset length, keep buffer)
 
-Tests: 202 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Tests: 207 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+
+---
+
+## Recent sessions
+
+**2026-05-26 Array .clear()**: Implemented .clear() method for arrays that empties the array by releasing all elements (reusing hl_array_release's element-release loop for object/nested arrays), resets length to 0, retains the allocated buffer for reuse (push after clear works), and fires CHANGED + DEEP once (bulk change, not per-element removed). Object-array clear verified leak-free: elements released exactly once, and since length is reset to 0, the later scope-end hl_array_release releases zero elements (no double-free). Added 5 integration tests: canonical with watcher + reuse, object-clear-no-leak, clear-empty no-op, clear-then-reuse, changed-fires-removed-doesnt. Note: canonical test expected output updated from prompt spec because push operations correctly fire changed watchers (confirmed by existing test_array_watcher_changed_fires_on_push.hl test).
 
 ---
 
@@ -31,7 +37,7 @@ Tests: 202 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 re
 
 ### Arrays
 
-Resolved (Phase A, B, B-2, C, C-2, D, 10-ε-γ + UAF/usize/alias/inference fixes): Dynamic arrays of primitives, objects, AND nested arrays — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, .move, for-in iteration. Heap-allocated, refcount-cleaned (per-element retain/release via function pointers; cascades to arbitrary depth). Fully reactive: all mutations fire watchers (changed/deep/added/removed/moved) with appropriate deltas (added/removed bind the element; moved binds a (from,to) Tuple(Usize,Usize)), through aliases, with pause/resume gating. Iterable with `for (let (i, x) in arr)` (live length re-read enables mutation during iteration). .move is refcount-neutral (reorder only). 
+Resolved (Phase A, B, B-2, C, C-2, D, 10-ε-γ + UAF/usize/alias/inference fixes + clear): Dynamic arrays of primitives, objects, AND nested arrays — literals, indexing, .length, .push, index-assignment, .pop, .remove, .insert, .move, .clear, for-in iteration. Heap-allocated, refcount-cleaned (per-element retain/release via function pointers; cascades to arbitrary depth). Fully reactive: all mutations fire watchers (changed/deep/added/removed/moved) with appropriate deltas (added/removed bind the element; moved binds a (from,to) Tuple(Usize,Usize)), through aliases, with pause/resume gating. Iterable with `for (let (i, x) in arr)` (live length re-read enables mutation during iteration). .move is refcount-neutral (reorder only). 
 
 Still pending — bulk reorder ops: .reverse / .swap / .sort. These reorder multiple elements at once and lack a single (from,to) delta — how a bulk reorder reports `moved` is an open design question (fire moved N times? a bulk-reorder signal? no moved, just changed?). .sort additionally needs a comparator design (primitives orderable directly; objects need a key/comparator).
 
@@ -39,7 +45,7 @@ Still pending — arrays of strings: String is char* (not reference-counted). Ne
 
 Still pending — arrays of functions / optionals / watchers / tuples.
 
-Still pending — array niceties: .clear, fixed arrays [T;N], empty typed literals (let xs: [i32] = []), bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (for (let x in arr) — future lightweight revision).
+Still pending — array niceties: fixed arrays [T;N], empty typed literals (let xs: [i32] = []), bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (for (let x in arr) — future lightweight revision).
 
 ### Phase 10 watcher system (in progress)
 
