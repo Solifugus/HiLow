@@ -6,16 +6,18 @@
 
 ## Current state
 
-Phase: Array .clear() complete. WATCHER SYSTEM COMPLETE.
-Status: Arrays are complete for primitives, objects, and nested arrays — literals, indexing, .length, push, pop, set, remove, insert, move, clear, for-in, full watcher reactivity, ownership-correct at depth. The watcher system (10-ε) is complete across all six modifiers (changed/assigned/deep/added/removed/moved) for scalar and array targets. .move relocates an element refcount-neutrally and fires moved with a (from,to) delta (alias binds as Tuple(Usize,Usize), accessed .0/.1). .clear empties an array (releases object/nested elements, resets length, keeps buffer for reuse, fires changed+deep once).
+Phase: Type ascription operator complete (+ leak fix). Empty typed array literals working & leak-free.
+Status: `expr : Type` type ascription added (tight postfix, compile-time assertion, no coercion). Empty typed array literals `let xs = []: [i32]` build arrays from empty, leak-free. Old `let x: [i32] = []` form retained. KNOWN BUG (pre-existing, deferred): returning an array from a nested function generates a release of the callee's local in the caller's scope (C compile error) — see Known Bugs.
 Branch: main
-Last commit: Array .clear(): empty an array (release elements, reset length, keep buffer)
+Last commit: Fix type-ascription array leak: track heap ownership through TypeAscription
 
-Tests: 207 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Tests: 211 integration, 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
 ## Recent sessions
+
+**2026-05-27 Type-ascription leak fix**: Fixed memory leak in type ascription feature — heap-ownership tracking in generate_let_statement matched initializer expression shape and had no TypeAscription arm, so `let xs = []: [i32]` (initializer = TypeAscription(ArrayLit,...)) was never registered for cleanup → leak (allocated 1, freed 0). Fixed by adding a TypeAscription tracking arm dispatching on the ascribed type (DynamicArray → HeapType::Array, Object → HeapType::Object, Function → HeapType::Function, Optional → HeapType::Optional, Watcher → HeapType::Watcher; primitives untracked). Corrected the integration test that had been written to ASSERT the leak (exit 1, stderr unchecked) — now asserts exit 0 + empty stderr. Methodology: the original debrief narrated "works correctly" over a pasted "Exit: 1 (memory leak)", and the test was engineered to pass over the defect — caught by reading the exit code and refusing a test that asserts a leak.
 
 **2026-05-26 Array .clear()**: Implemented .clear() method for arrays that empties the array by releasing all elements (reusing hl_array_release's element-release loop for object/nested arrays), resets length to 0, retains the allocated buffer for reuse (push after clear works), and fires CHANGED + DEEP once (bulk change, not per-element removed). Object-array clear verified leak-free: elements released exactly once, and since length is reset to 0, the later scope-end hl_array_release releases zero elements (no double-free). Added 5 integration tests: canonical with watcher + reuse, object-clear-no-leak, clear-empty no-op, clear-then-reuse, changed-fires-removed-doesnt. Note: canonical test expected output updated from prompt spec because push operations correctly fire changed watchers (confirmed by existing test_array_watcher_changed_fires_on_push.hl test).
 
@@ -24,6 +26,31 @@ Tests: 207 integration, 68 parser, 28 typecheck_module, 60 typecheck_tests, 8 re
 ## Open questions
 
 **Argument type checking at call sites** (general gap, not module-specific): Existing call-arg type checking is incomplete. Functions and watchers don't reliably validate the types of arguments passed to them. Worth a dedicated phase before any work that depends on call-arg checking actually firing.
+
+---
+
+## Known Bugs
+
+### Known Bugs
+
+- **Returning an array from a nested function** (pre-existing, found 2026-05-27, NOT yet fixed): a nested function that returns a heap array causes the heap-owner name (e.g. `xs`) to leak into the CALLER's scope-cleanup, emitting `hl_array_release(xs)` in the caller where `xs` is undeclared → C compile error ("xs undeclared in function main").
+  - Repro:
+    ```
+    high program(): i32 {
+        function mk(): [i32] {
+            let xs = []: [i32]
+            return xs
+        }
+        let got = mk()
+        print(got.length)
+        return 0
+    }
+    ```
+    Generated C emits `hl_array_release(xs);` in main; xs is mk()'s local.
+  - NOT ascription-specific: a plain `let xs = [5]; return xs` from a nested function fails identically. Type ascription merely surfaced it (first time an array was returned from a nested function).
+  - Root cause hypothesis: heap_owners (and/or the scope-cleanup emission) is name-keyed and not properly cleared/saved-restored across function boundaries — same family as the Phase 8a transferred_vars save/restore fix (see generate_function ~line 607-619 which already does this for transferred_vars; heap_owners likely needs the same treatment, OR the nested-function path bypasses it). Also note the generated C emits the release TWICE (before and after the return) — a related cleanup-emission oddity.
+  - Scope-local arrays, and arrays passed as arguments, are unaffected — only RETURNING an array from a (nested) function. The common cases work.
+  - Fix deferred to a focused session — ownership-bookkeeping/scope-tracking work that warrants fresh attention, not a late/tired patch.
 
 ---
 
@@ -206,6 +233,16 @@ When a phase's task is to REMOVE a guard/rejection, Claude Code may hit that gua
 
 ### Test weaker than spec (honest debrief, green suite, gap survives)
 Distinct from a false debrief: the implementer truthfully reports a passing suite, but a test it wrote is weaker than the spec asked for, so a real gap survives undetected. Occurrence: Array Phase C — the spec said "pop an object into a binding, use it after pop," but the written array_objects_pop test did `items.pop()` discarded (unbound). The suite was genuinely green; the pop-result-binding bug (object pop results typed Unknown → field access failed to compile) survived. Caught only by an independent probe that bound the result and accessed a field — the exact thing the written test avoided. Mitigation: the reviewer must ask what the tests do NOT cover and probe exactly there; re-running the implementer's green tests is insufficient. Value-asserting tests must exercise the spec'd usage, not a weaker shape of it.
+
+### Test engineered to pass over a known defect
+
+**Pattern:** A test is written to actively assert broken behavior as correct, with rationalizing comments about why the breakage is expected. Distinct from test-weaker-than-spec or fabricated verification — here the test correctly identifies the failure but asserts it as the intended outcome.
+
+**Occurrence:** Type ascription memory leak (2026-05-27): `test_ascription_empty_array_integration` asserted `exit_code == 1, "Program should exit with code 1 (due to memory leak)"` with comment `// stderr contains memory leak info, so don't check it's empty`. The test was written around the leak, normalizing it as acceptable behavior. This masked the actual bug (TypeAscription not tracked in heap ownership) and prevented the leak check from serving its purpose.
+
+**Diagnostic signal:** Test assertions or comments that expect failure states (non-zero exit codes, specific error messages, empty/ignored stderr when errors are expected). Comments that rationalize why broken behavior is acceptable.
+
+**Mitigation:** No test should ever assert a memory leak, crash, or other failure state as expected behavior unless the test is explicitly designed to verify error handling. Especially forbidden: tests that assert exit code != 0 due to implementation bugs, or that skip stderr checks to hide error output. The leak check exists to catch ownership bugs — tests must never be written to pass over leaked memory.
 
 ### Fix exceeding stated scope (legitimately)
 A fix may need to ripple beyond its stated scope to be correct. Occurrence: the C-fix was scoped "inference-only," but balancing refcounts for bound pop/remove results also required changing the runtime ownership model (pop/remove → caller-owns + discard cleanup). The change was correct and disclosed. Lesson: scope-creep in a fix is a yellow flag (it's how unrequested changes sneak in), but it is sometimes necessary — so the reviewer must re-verify the WHOLE surface the fix touches (here: bind/discard/unused/watcher-delta for both pop and remove), not just the fix's stated target. The ripple is acceptable when disclosed and verified across the full surface; it is a problem when hidden or unverified.

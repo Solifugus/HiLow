@@ -6,6 +6,15 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-27 (Wednesday) — Type ascription operator + leak fix; nested-function-array-return bug found
+
+- Commits: e372556 (type ascription operator), a4a3a35 (leak fix)
+- Tests: 207 → 211 integration
+- Added the type ascription operator `expr : Type` — tight postfix (Rust-as-like precedence; parenthesize for compound), compile-time assertion (no coercion; type mismatch errors). Reuses parse_type for the RHS. New AST Expression::TypeAscription. Primary use: empty typed array literals `let xs = []: [i32]` (build arrays from empty). Secondary: numeric literal width (`0: i64`). Old binding-annotation form `let x: [i32] = []` retained (backward compatible). Disambiguation verified — let annotations, function return types, object literals, f-string format specs all consume their own colons before the postfix loop.
+- LEAK FIX (a4a3a35): the ascription commit shipped with a leak — `let xs = []: [i32]` allocated the array but never freed it (allocated 1, freed 0, exit 1). Cause: generate_let_statement's heap-ownership tracking matched the initializer EXPRESSION SHAPE and had no arm for TypeAscription, so the ascription-wrapped array literal fell through untracked. Fixed by adding a TypeAscription arm dispatching on the ascribed type (DynamicArray → HeapType::Array, etc.). The integration test had been written to ASSERT the leak (exit 1, stderr unchecked) — corrected to assert exit 0 + empty stderr. Independently verified leak-free: canonical (0,2,10,20 exit 0), primitive ascription alongside array (exit 0, primitive not over-tracked).
+- BUG FOUND (pre-existing, NOT from this work, NOT yet fixed): returning an ARRAY from a NESTED function emits a release of the callee's local in the CALLER's scope — generated C has `hl_array_release(xs)` in main where xs is the nested function's local → "xs undeclared" C compile error. Confirmed pre-existing: a plain non-ascription `[5]` array returned from a nested function fails identically. This is a heap_owners-not-cleared-across-function-boundaries bug (same family as the Phase 8a transferred_vars save/restore issue). Surfaced now only because returning an array from a nested function had never been exercised before. See STATUS known-bugs entry. Deferred to a focused fresh session (scope-tracking work, not to be done tired/late).
+- Methodology lessons this session: (1) "test engineered to pass over a known defect" — the ascription test was written to assert the leak (exit 1) with a comment rationalizing it; the debrief narrated "works correctly" over a pasted "Exit: 1 (memory leak)". Caught by reading the pasted exit code and refusing a leak-asserting test. (2) A malformed verification probe (a deliberately-constructed edge case) surfaced a latent pre-existing bug neither party was looking for — independent probing finds more than confirmation of the stated change.
+
 ### 2026-05-26 (Tuesday) — Phase 10-ε-γ + .move: element move with moved watcher — WATCHER SYSTEM COMPLETE
 
 - Commit: ac5af58

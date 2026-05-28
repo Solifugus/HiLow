@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Type ascription operator**
+**Current phase: Type ascription leak fix**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
