@@ -1185,6 +1185,30 @@ impl CodeGenerator {
                         self.track_heap_owner(name, heap_type);
                     }
                 }
+                Expression::TypeAscription(_, ascribed_type, _) => {
+                    // Track heap ownership based on the ascribed type
+                    match ascribed_type {
+                        crate::ast::Type::DynamicArray(_) => {
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
+                        crate::ast::Type::Object(_) => {
+                            self.track_heap_owner(name, HeapType::Object);
+                        }
+                        crate::ast::Type::Function(_, _) => {
+                            self.track_heap_owner(name, HeapType::Function);
+                        }
+                        crate::ast::Type::Optional(_) => {
+                            self.track_heap_owner(name, HeapType::Optional);
+                            if self.in_main_program {
+                                self.main_program_optionals.push(name.to_string());
+                            }
+                        }
+                        crate::ast::Type::Watcher => {
+                            self.track_heap_owner(name, HeapType::Watcher);
+                        }
+                        _ => {} // Primitive types don't need heap tracking
+                    }
+                }
                 _ => {} // Non-heap-allocating expressions
             }
         }

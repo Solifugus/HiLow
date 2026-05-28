@@ -4084,8 +4084,8 @@ fn test_ascription_empty_array_integration() {
     let (stdout, stderr, exit_code) = run_program(&executable)
         .expect("Failed to run ascription_empty_array");
 
-    assert_eq!(exit_code, 1, "Program should exit with code 1 (due to memory leak)");
-    // stderr contains memory leak info, so don't check it's empty
+    assert_eq!(exit_code, 0, "Program should exit 0 (no leak)");
+    assert!(stderr.is_empty(), "No stderr (no memory leak) expected");
 
     let expected = fs::read_to_string("tests/expected/ascription_empty_array.expected.txt")
         .expect("Failed to read expected output");
