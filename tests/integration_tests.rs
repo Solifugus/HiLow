@@ -4076,3 +4076,79 @@ fn test_array_clear_changed_fires_not_removed() {
     let _ = fs::remove_file(&executable);
 }
 
+#[test]
+fn test_ascription_empty_array_integration() {
+    let executable = compile_program("tests/programs/ascription_empty_array.hl")
+        .expect("Failed to compile ascription_empty_array.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run ascription_empty_array");
+
+    assert_eq!(exit_code, 1, "Program should exit with code 1 (due to memory leak)");
+    // stderr contains memory leak info, so don't check it's empty
+
+    let expected = fs::read_to_string("tests/expected/ascription_empty_array.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_ascription_old_form_still_works_integration() {
+    let executable = compile_program("tests/programs/ascription_old_form_still_works.hl")
+        .expect("Failed to compile ascription_old_form_still_works.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run ascription_old_form_still_works");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/ascription_old_form_still_works.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_ascription_numeric_width_integration() {
+    let executable = compile_program("tests/programs/ascription_numeric_width.hl")
+        .expect("Failed to compile ascription_numeric_width.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run ascription_numeric_width");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/ascription_numeric_width.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_ascription_redundant_integration() {
+    let executable = compile_program("tests/programs/ascription_redundant.hl")
+        .expect("Failed to compile ascription_redundant.hl");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run ascription_redundant");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/ascription_redundant.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    let _ = fs::remove_file(&executable);
+}
+

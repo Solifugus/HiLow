@@ -1,0 +1,5 @@
+high program(): i32 {
+    let x = (5: i32)
+    print(x)
+    return 0
+}

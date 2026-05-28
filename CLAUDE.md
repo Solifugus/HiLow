@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Array .clear()**
+**Current phase: Type ascription operator**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

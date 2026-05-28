@@ -783,3 +783,35 @@ fn test_array_watcher_moved_typechecks_but_fails_codegen() {
     // Note: This test verifies that moved passes typecheck. The codegen rejection is tested
     // separately in integration tests since type_check_program doesn't run codegen.
 }
+
+#[test]
+fn test_ascription_mismatch_rejected() {
+    let input = r#"high program(): i32 {
+        let s = "hello": i32
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type error for string ascribed as i32");
+
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("cannot ascribe type"));
+        assert!(errors[0].message.contains("does not perform conversion"));
+    }
+}
+
+#[test]
+fn test_ascription_bare_empty_still_errors() {
+    let input = r#"high program(): i32 {
+        let xs = []
+        return 0
+    }"#;
+    let result = type_check_program(input);
+    assert!(result.is_err(), "Expected type error for bare empty array literal");
+
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("empty array"));
+        assert!(errors[0].message.contains("type ascription") || errors[0].message.contains("binding annotation"));
+    }
+}

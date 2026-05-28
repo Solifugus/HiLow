@@ -2316,10 +2316,9 @@ impl CodeGenerator {
                 let elem_type = if !elements.is_empty() {
                     self.infer_expression_type_for_codegen(&elements[0])
                 } else {
-                    return Err(CodegenError::UnsupportedFeature {
-                        feature: "empty array literals".to_string(),
-                        phase: "not yet supported in Array Phase A".to_string(),
-                    });
+                    // For empty arrays, if type checking passed, it means there was type context.
+                    // Use a reasonable default element type.
+                    Type::I32
                 };
 
                 let elem_c_type = self.hilow_type_to_c(&elem_type);
@@ -2361,6 +2360,54 @@ impl CodeGenerator {
                 }
 
                 self.output.push_str("     __arr; })");
+            }
+            Expression::TypeAscription(inner, ascribed_ty, _) => {
+                // Type ascription: expr : Type
+                // Handle special cases, otherwise just generate the inner expression
+
+                // Special case: empty array literal with ascription
+                if let Expression::ArrayLit(elements, _) = inner.as_ref() {
+                    if elements.is_empty() {
+                        if let crate::ast::Type::DynamicArray(elem_ast_type) = ascribed_ty {
+                            let elem_type = Type::from_ast_type(elem_ast_type);
+                            let elem_c_type = self.hilow_type_to_c(&elem_type);
+                            let elem_size = format!("sizeof({})", elem_c_type);
+                            let initial_capacity = 4; // Small initial capacity for empty arrays
+
+                            // Determine retain/release function pointers based on element type
+                            let (retain_fn, release_fn) = match &elem_type {
+                                Type::Object(_) => ("(void(*)(void*))hl_object_retain", "(void(*)(void*))hl_object_release"),
+                                Type::DynamicArray(_) => ("(void(*)(void*))hl_array_retain", "(void(*)(void*))hl_array_release"),
+                                _ => ("NULL", "NULL"), // Primitive types
+                            };
+
+                            self.output.push_str(&format!("hl_array_new({}, {}, {}, {})",
+                                                         elem_size, initial_capacity, retain_fn, release_fn));
+                            return Ok(());
+                        }
+                    }
+                    // Non-empty array: generate normally
+                    self.generate_expression(inner, type_checker)?;
+                    return Ok(());
+                }
+
+                // For numeric literals with ascription, emit with the ascribed type
+                if let Expression::IntLit(value, _) = inner.as_ref() {
+                    if let crate::ast::Type::Primitive(ref prim) = ascribed_ty {
+                        match prim {
+                            crate::ast::PrimitiveType::I64 => self.output.push_str(&format!("((int64_t){})", value)),
+                            crate::ast::PrimitiveType::U64 => self.output.push_str(&format!("((uint64_t){})", value)),
+                            _ => {
+                                // Default case - just emit the value
+                                self.output.push_str(&value.to_string());
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+
+                // Default case: just generate the inner expression (ascription is compile-time only)
+                self.generate_expression(inner, type_checker)?;
             }
         }
         Ok(())
@@ -4031,6 +4078,10 @@ impl CodeGenerator {
                 }
             }
             Expression::WatcherExpr(_) => Type::Watcher,
+            Expression::TypeAscription(_, ascribed_ty, _) => {
+                // For type ascription, return the ascribed type
+                Type::from_ast_type(ascribed_ty)
+            }
             _ => Type::Unknown
         }
     }

@@ -1237,6 +1237,26 @@ impl TypeChecker {
                 // Duration literals always have type duration
                 Type::Duration
             },
+            Expression::ArrayLit(elements, pos) => {
+                // Special handling for empty arrays with expected type
+                if elements.is_empty() {
+                    match expected {
+                        Type::DynamicArray(_) => {
+                            expected.clone()
+                        },
+                        _ => {
+                            self.add_error(
+                                format!("empty array literal expected to have array type, but expected type is {}", expected),
+                                pos.clone()
+                            );
+                            Type::Unknown
+                        }
+                    }
+                } else {
+                    // Non-empty arrays: use regular type checking
+                    self.check_expression(expression)
+                }
+            },
             _ => {
                 // For non-literals, use regular type checking
                 self.check_expression(expression)
@@ -1388,9 +1408,10 @@ impl TypeChecker {
             },
             Expression::ArrayLit(elements, pos) => {
                 if elements.is_empty() {
-                    // Empty arrays not supported yet
+                    // Empty arrays without type ascription are not supported
+                    // If this is reached, it means we have a bare [] without type ascription
                     self.add_error(
-                        "empty array literals require an explicit type annotation, not yet supported in Array Phase A".to_string(),
+                        "empty array literals require type ascription (use []: [ElementType]) or binding annotation (let x: [ElementType] = [])".to_string(),
                         pos.clone()
                     );
                     return Type::Unknown;
@@ -1413,6 +1434,55 @@ impl TypeChecker {
                 }
 
                 Type::DynamicArray(Box::new(first_elem_type))
+            },
+            Expression::TypeAscription(inner, ascribed_ty, pos) => {
+                // Type ascription: expr : Type
+
+                // Convert AST type to internal type for comparison
+                let ascribed_internal_type = Type::from_ast_type(ascribed_ty);
+
+                // Special case: empty array literal with ascription provides the element type
+                if let Expression::ArrayLit(elements, _) = inner.as_ref() {
+                    if elements.is_empty() {
+                        // For empty arrays, the ascription must be a DynamicArray type
+                        if let crate::ast::Type::DynamicArray(_) = ascribed_ty {
+                            return ascribed_internal_type;
+                        } else {
+                            self.add_error(
+                                format!("empty array literal with type ascription must have array type, found {:?}", ascribed_ty),
+                                pos.clone()
+                            );
+                            return Type::Unknown;
+                        }
+                    }
+                }
+
+                // For all other cases, check the inner expression normally
+                let inner_type = self.check_expression(inner);
+
+                // For numeric literals, allow ascription to compatible numeric types
+                if let Expression::IntLit(_, _) = inner.as_ref() {
+                    if ascribed_internal_type.is_numeric() {
+                        return ascribed_internal_type;
+                    }
+                }
+
+                // For other cases, the types must be compatible
+                if inner_type == ascribed_internal_type {
+                    // Redundant/matching ascription - allow it
+                    ascribed_internal_type
+                } else if inner_type == Type::Unknown {
+                    // If inner type is unknown (due to error), return ascribed type to avoid cascading errors
+                    ascribed_internal_type
+                } else {
+                    // Type mismatch - error
+                    self.add_error(
+                        format!("cannot ascribe type {:?} to expression of type {}; type ascription does not perform conversion",
+                                ascribed_ty, inner_type),
+                        pos.clone()
+                    );
+                    ascribed_internal_type
+                }
             },
             Expression::WatcherExpr(watcher_expr) => {
                 self.check_watcher_expression(watcher_expr)
@@ -2295,6 +2365,9 @@ impl TypeChecker {
                     self.write_refinements_to_expression(element);
                 }
             }
+            Expression::TypeAscription(inner, _, _) => {
+                self.write_refinements_to_expression(inner);
+            }
             Expression::WatcherExpr(watcher_expr) => {
                 self.write_refinements_to_block(&mut watcher_expr.body);
             }
@@ -3116,6 +3189,9 @@ impl TypeChecker {
                     self.check_for_captures_in_expression(element, outer_scope_depth);
                 }
             }
+            Expression::TypeAscription(inner, _, _) => {
+                self.check_for_captures_in_expression(inner, outer_scope_depth);
+            }
             Expression::WatcherExpr(_) => {
                 // Watcher expressions are not yet implemented in Phase 10-α
                 // Skip capture checking
@@ -3302,6 +3378,9 @@ impl TypeChecker {
                     self.collect_captures_in_expression(element, outer_scope_depth, captures);
                 }
             }
+            Expression::TypeAscription(inner, _, _) => {
+                self.collect_captures_in_expression(inner, outer_scope_depth, captures);
+            }
             Expression::WatcherExpr(_) => {
                 // Watcher expressions are not yet implemented in Phase 10-α
                 // Skip capture collection
@@ -3484,6 +3563,7 @@ impl HasPosition for Expression {
             Expression::TupleLit(_, pos) => pos.clone(),
             Expression::TupleAccess(_, _, pos) => pos.clone(),
             Expression::ArrayLit(_, pos) => pos.clone(),
+            Expression::TypeAscription(_, _, pos) => pos.clone(),
             Expression::WatcherExpr(watcher_expr) => watcher_expr.position.clone(),
         }
     }

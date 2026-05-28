@@ -1535,6 +1535,29 @@ impl Parser {
                         position,
                     });
                 }
+                TokenKind::Colon => {
+                    // Check if the token after the colon could start a type
+                    // If not, this colon isn't for type ascription (e.g., f-string format spec)
+                    if let Ok(next_token) = self.peek_ahead(1) {
+                        match next_token.kind {
+                            // Valid type starters
+                            TokenKind::Identifier |
+                            TokenKind::LeftBracket |  // [Type]
+                            TokenKind::LeftParen |    // (Type, Type)
+                            TokenKind::LeftBrace |    // {field: Type}
+                            TokenKind::At => {        // @Type
+                                let position = self.advance()?.position; // consume ':'
+                                let ty = self.parse_type()?;             // reuse existing type parser
+                                expr = Expression::TypeAscription(Box::new(expr), ty, position);
+                            }
+                            // Invalid type starters - don't consume the colon
+                            _ => break,
+                        }
+                    } else {
+                        // Can't peek ahead - don't consume the colon
+                        break;
+                    }
+                }
                 _ => break,
             }
         }
@@ -1636,20 +1659,15 @@ impl Parser {
     fn parse_array_literal(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
         let mut elements = Vec::new();
 
-        // Check for empty array (reject for now)
+        // Check for empty array
         if self.check(&TokenKind::RightBracket) {
-            return Err(ParseError::UnsupportedFeature {
-                feature: "empty array literal".to_string(),
-                position: start_pos,
-                suggestion: "empty array literals require an explicit type annotation, not yet supported in Array Phase A".to_string(),
-            });
-        }
+            // Empty array - let type checker handle validation
+        } else {
+            // Parse first element
+            elements.push(self.parse_expression()?);
 
-        // Parse first element
-        elements.push(self.parse_expression()?);
-
-        // Parse remaining elements
-        while self.check(&TokenKind::Comma) {
+            // Parse remaining elements
+            while self.check(&TokenKind::Comma) {
             self.advance()?; // consume ','
 
             // Allow trailing comma
@@ -1658,6 +1676,7 @@ impl Parser {
             }
 
             elements.push(self.parse_expression()?);
+        }
         }
 
         self.expect_token(TokenKind::RightBracket, "Expected ']' after array literal")?;

@@ -1,0 +1,5 @@
+high program(): i32 {
+    let big = 0: i64
+    print(big)
+    return 0
+}

@@ -1,0 +1,10 @@
+high program(): i32 {
+    let xs = []: [i32]
+    print(xs.length)
+    xs.push(10)
+    xs.push(20)
+    print(xs.length)
+    print(xs[0])
+    print(xs[1])
+    return 0
+}
