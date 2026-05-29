@@ -610,6 +610,13 @@ impl CodeGenerator {
         // skipped during cleanup, leaking memory. Save and restore around the body.
         let saved_transferred = std::mem::take(&mut self.transferred_vars);
 
+        // Heap ownership is also local to a function. Without this save/restore, a nested
+        // function's heap-owned locals (e.g. `let xs = ...; return xs`) pollute the caller's
+        // heap_owners map, so the caller's scope-cleanup tries to release the callee's locals
+        // (generating `hl_array_release(xs);` in main where xs is undeclared → C compile error).
+        // Same family as the transferred_vars fix above.
+        let saved_heap_owners = std::mem::take(&mut self.heap_owners);
+
         // Generate function body
         if let Some(body) = &function.body {
             self.generate_block_with_parameter_context(body, &function.params, type_checker)?;
@@ -617,6 +624,8 @@ impl CodeGenerator {
 
         // Restore caller's ownership-transfer state
         self.transferred_vars = saved_transferred;
+        // Restore caller's heap-ownership state
+        self.heap_owners = saved_heap_owners;
 
         // Clear function return type context
         self.current_function_return_type = None;
