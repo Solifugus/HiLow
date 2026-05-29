@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Type ascription leak fix**
+**Current phase: Nested-function array-return bug fix**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

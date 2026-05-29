@@ -6,16 +6,18 @@
 
 ## Current state
 
-Phase: Type ascription operator complete (+ leak fix). Empty typed array literals working & leak-free.
-Status: `expr : Type` type ascription added (tight postfix, compile-time assertion, no coercion). Empty typed array literals `let xs = []: [i32]` build arrays from empty, leak-free. Old `let x: [i32] = []` form retained. KNOWN BUG (pre-existing, deferred): returning an array from a nested function generates a release of the callee's local in the caller's scope (C compile error) — see Known Bugs.
+Phase: Nested-function array-return bug FIXED.
+Status: `expr : Type` type ascription added (tight postfix, compile-time assertion, no coercion). Empty typed array literals `let xs = []: [i32]` build arrays from empty, leak-free. Old `let x: [i32] = []` form retained. Nested-function array-return bug FIXED: heap_owners save/restore at function boundaries prevents callee's locals from polluting caller's scope-cleanup.
 Branch: main
-Last commit: Fix type-ascription array leak: track heap ownership through TypeAscription
+Last commit: Fix nested-function array-return: save/restore heap_owners at function boundary
 
 Tests: 211 integration, 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
 ## Recent sessions
+
+**2026-05-28 Nested-function array-return fix**: Fixed nested-function-array-return bug — heap_owners (HashMap<String, (HeapType, usize)>, name-keyed) was not save/restored at function boundaries, so a nested function's heap-owned locals (e.g. `let xs = ...; return xs`) polluted the caller's heap_owners → caller's scope-cleanup emitted `hl_array_release(xs);` in main where xs was undeclared (C compile error). Fixed by adding a `std::mem::take`/restore around the function body in generate_function, exactly mirroring the existing transferred_vars save/restore (Phase 10-δ-γ-fixup) which solved the same class of problem for a different name-keyed map. Verified: original repro now compiles and exits 0; same-name-in-caller-and-callee case (the danger analogue) works without confusion; non-ascription and (if applicable) object-return variants work. The double-emission of releases in main is now harmless (both walks see the same correctly-scoped heap_owners; second walk is in dead code after return) and is left as a separate code-shape note. Closes the Known Bug recorded 2026-05-27.
 
 **2026-05-27 Type-ascription leak fix**: Fixed memory leak in type ascription feature — heap-ownership tracking in generate_let_statement matched initializer expression shape and had no TypeAscription arm, so `let xs = []: [i32]` (initializer = TypeAscription(ArrayLit,...)) was never registered for cleanup → leak (allocated 1, freed 0). Fixed by adding a TypeAscription tracking arm dispatching on the ascribed type (DynamicArray → HeapType::Array, Object → HeapType::Object, Function → HeapType::Function, Optional → HeapType::Optional, Watcher → HeapType::Watcher; primitives untracked). Corrected the integration test that had been written to ASSERT the leak (exit 1, stderr unchecked) — now asserts exit 0 + empty stderr. Methodology: the original debrief narrated "works correctly" over a pasted "Exit: 1 (memory leak)", and the test was engineered to pass over the defect — caught by reading the exit code and refusing a test that asserts a leak.
 
@@ -32,25 +34,6 @@ Tests: 211 integration, 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 re
 ## Known Bugs
 
 ### Known Bugs
-
-- **Returning an array from a nested function** (pre-existing, found 2026-05-27, NOT yet fixed): a nested function that returns a heap array causes the heap-owner name (e.g. `xs`) to leak into the CALLER's scope-cleanup, emitting `hl_array_release(xs)` in the caller where `xs` is undeclared → C compile error ("xs undeclared in function main").
-  - Repro:
-    ```
-    high program(): i32 {
-        function mk(): [i32] {
-            let xs = []: [i32]
-            return xs
-        }
-        let got = mk()
-        print(got.length)
-        return 0
-    }
-    ```
-    Generated C emits `hl_array_release(xs);` in main; xs is mk()'s local.
-  - NOT ascription-specific: a plain `let xs = [5]; return xs` from a nested function fails identically. Type ascription merely surfaced it (first time an array was returned from a nested function).
-  - Root cause hypothesis: heap_owners (and/or the scope-cleanup emission) is name-keyed and not properly cleared/saved-restored across function boundaries — same family as the Phase 8a transferred_vars save/restore fix (see generate_function ~line 607-619 which already does this for transferred_vars; heap_owners likely needs the same treatment, OR the nested-function path bypasses it). Also note the generated C emits the release TWICE (before and after the return) — a related cleanup-emission oddity.
-  - Scope-local arrays, and arrays passed as arguments, are unaffected — only RETURNING an array from a (nested) function. The common cases work.
-  - Fix deferred to a focused session — ownership-bookkeeping/scope-tracking work that warrants fresh attention, not a late/tired patch.
 
 ---
 
@@ -246,6 +229,9 @@ Distinct from a false debrief: the implementer truthfully reports a passing suit
 
 ### Fix exceeding stated scope (legitimately)
 A fix may need to ripple beyond its stated scope to be correct. Occurrence: the C-fix was scoped "inference-only," but balancing refcounts for bound pop/remove results also required changing the runtime ownership model (pop/remove → caller-owns + discard cleanup). The change was correct and disclosed. Lesson: scope-creep in a fix is a yellow flag (it's how unrequested changes sneak in), but it is sometimes necessary — so the reviewer must re-verify the WHOLE surface the fix touches (here: bind/discard/unused/watcher-delta for both pop and remove), not just the fix's stated target. The ripple is acceptable when disclosed and verified across the full surface; it is a problem when hidden or unverified.
+
+### Fix-pattern precedent in-codebase
+When a bug class has a precise precedent fix already in the codebase, the safe path is to mirror it idiom-for-idiom rather than design a fresh approach. Occurrence: nested-function-array-return bug (2026-05-28) — heap_owners (HashMap<String, (HeapType, usize)>, name-keyed like transferred_vars) was not save/restored at function boundaries, causing scope pollution. The exact same pattern was already solved for transferred_vars in Phase 10-δ-γ-fixup with std::mem::take/restore around the function body. Mirroring that fix idiom-for-idiom solved the heap_owners variant immediately. Reduces design risk, makes intent obvious in the diff, and the explanatory comment can reference the precedent directly.
 
 ---
 
