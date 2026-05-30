@@ -627,6 +627,15 @@ impl CodeGenerator {
         // Same family as the transferred_vars fix above.
         let saved_heap_owners = std::mem::take(&mut self.heap_owners);
 
+        // Watcher subscribers are also local to a function. Without this save/restore, a nested
+        // function's watchers pollute the caller's watcher_subscribers maps, so the nested
+        // function's assignments fire both the nested and caller watchers (cross-scope leak).
+        // Same family as the transferred_vars/heap_owners fix above.
+        // NOTE: This prevents watcher factory patterns that register watchers for outer-scope
+        // variables within inner functions. Such patterns may need redesign.
+        let saved_watcher_subscribers = std::mem::take(&mut self.watcher_subscribers);
+        let saved_heap_watcher_subscribers = std::mem::take(&mut self.heap_watcher_subscribers);
+
         // Generate function body
         if let Some(body) = &function.body {
             self.generate_block_with_parameter_context(body, &function.params, type_checker)?;
@@ -636,6 +645,9 @@ impl CodeGenerator {
         self.transferred_vars = saved_transferred;
         // Restore caller's heap-ownership state
         self.heap_owners = saved_heap_owners;
+        // Restore caller's watcher-subscriber state
+        self.watcher_subscribers = saved_watcher_subscribers;
+        self.heap_watcher_subscribers = saved_heap_watcher_subscribers;
 
         // Clear function return type context
         self.current_function_return_type = None;
@@ -6146,5 +6158,91 @@ impl CodeGenerator {
             self.output.push_str(&format!("&{}", self.mangle_variable_name(var_name)));
         }
         Ok(())
+    }
+
+    /// Collect names of variables declared locally within the given block items
+    fn collect_local_variable_names(&self, items: &[BlockItem]) -> std::collections::HashSet<String> {
+        let mut local_vars = std::collections::HashSet::new();
+
+        for item in items {
+            self.collect_local_vars_from_block_item(item, &mut local_vars);
+        }
+
+        local_vars
+    }
+
+    /// Recursively collect local variable declarations from a block item
+    fn collect_local_vars_from_block_item(&self, item: &BlockItem, local_vars: &mut std::collections::HashSet<String>) {
+        use crate::ast::BlockItem::*;
+
+        match item {
+            Statement(stmt) => {
+                self.collect_local_vars_from_statement(stmt, local_vars);
+            }
+            Function(func) => {
+                // Function parameters are local to the function
+                for param in &func.params {
+                    local_vars.insert(param.name.clone());
+                }
+                // Recursively collect from function body
+                if let Some(body) = &func.body {
+                    for body_item in &body.items {
+                        self.collect_local_vars_from_block_item(body_item, local_vars);
+                    }
+                }
+            }
+            Watcher(_) => {
+                // Watchers don't declare variables by themselves
+            }
+        }
+    }
+
+    /// Recursively collect local variable declarations from a statement
+    fn collect_local_vars_from_statement(&self, stmt: &Statement, local_vars: &mut std::collections::HashSet<String>) {
+        use crate::ast::Statement::*;
+
+        match stmt {
+            Let(let_decl) => {
+                if let crate::ast::LetPattern::Identifier(name, _) = &let_decl.pattern {
+                    local_vars.insert(name.clone());
+                }
+            }
+            If(if_stmt) => {
+                for item in &if_stmt.then_block.items {
+                    self.collect_local_vars_from_block_item(item, local_vars);
+                }
+                if let Some(else_block) = &if_stmt.else_block {
+                    for item in &else_block.items {
+                        self.collect_local_vars_from_block_item(item, local_vars);
+                    }
+                }
+            }
+            While(while_stmt) => {
+                for item in &while_stmt.body.items {
+                    self.collect_local_vars_from_block_item(item, local_vars);
+                }
+            }
+            Loop(loop_stmt) => {
+                for item in &loop_stmt.body.items {
+                    self.collect_local_vars_from_block_item(item, local_vars);
+                }
+            }
+            ForIn(for_stmt) => {
+                // The iteration variables are local
+                local_vars.insert(for_stmt.key_name.clone());
+                local_vars.insert(for_stmt.value_name.clone());
+                for item in &for_stmt.body.items {
+                    self.collect_local_vars_from_block_item(item, local_vars);
+                }
+            }
+            StealthBlock(block, _) => {
+                for item in &block.items {
+                    self.collect_local_vars_from_block_item(item, local_vars);
+                }
+            }
+            _ => {
+                // Other statement types don't declare variables
+            }
+        }
     }
 }
