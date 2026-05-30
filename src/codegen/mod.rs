@@ -1106,6 +1106,21 @@ impl CodeGenerator {
                 Expression::StringLit(_, _) => {
                     self.track_heap_owner(name, HeapType::Array); // String is HiLowArray<u8>
                 }
+                Expression::BinaryOp(binary_op) => {
+                    // Track heap ownership for binary operations that return heap types
+                    let result_type = self.infer_expression_type_for_codegen(initializer);
+                    match result_type {
+                        Type::String => {
+                            self.track_heap_owner(name, HeapType::Array); // String concatenation returns HiLowArray<u8>
+                        }
+                        Type::DynamicArray(_) => {
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
+                        _ => {
+                            // Non-heap return types don't need tracking
+                        }
+                    }
+                }
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
 
@@ -4101,6 +4116,8 @@ impl CodeGenerator {
                             (Type::Time, Type::Duration) => Type::Time,        // time + duration → time
                             (Type::Duration, Type::Time) => Type::Time,        // duration + time → time
                             (Type::Duration, Type::Duration) => Type::Duration, // duration + duration → duration
+                            // String concatenation
+                            (Type::String, Type::String) => Type::String,
                             // Money + Money → Money (currency from left operand, type checker ensures same currency)
                             (Type::MoneyOf(currency), Type::MoneyOf(_)) => Type::MoneyOf(currency.clone()),
                             // Generic money + specific currency → specific currency
@@ -4347,10 +4364,11 @@ impl CodeGenerator {
                 }
             }
             Expression::IndexAccess(index_access) => {
-                // Infer element type from array type
+                // Infer element type from array or string type
                 let array_type = self.infer_expression_type_for_codegen(&index_access.object);
                 match array_type {
                     Type::DynamicArray(elem_type) => *elem_type,
+                    Type::String => Type::U8, // String indexing returns u8 bytes
                     _ => Type::Unknown,
                 }
             }

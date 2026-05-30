@@ -1,9 +1,9 @@
-high function make_string(): string {
-  let s = "nested"
-  return s
-}
-
 high program(): i32 {
+  function make_string(): string {
+    let s = "nested"
+    return s
+  }
+
   let outer = make_string()
   print(outer)
   return 0
