@@ -7,18 +7,18 @@
 ## Current state
 
 Phase: Phase 10a complete (Watch System + Stealth). 
-Status: All watcher modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. Stealth blocks (`stealth { ... }`) suppress watcher firing dynamically across function calls. Cross-scope watcher firing leak fixed.
+Status: All watcher modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. Stealth blocks (`stealth { ... }`) suppress watcher firing dynamically across function calls. Cross-scope watcher firing leak fixed with surgical shadow masking.
 KNOWN BUG (pre-existing, deferred): watcher bodies cannot reference outer-scope variables other than the watched variable — see Known Bugs.
 Branch: main
-Last commit: Fix watcher-subscriber cross-scope leak by mirroring heap_owners save/restore pattern
+Last commit: Complete watcher cross-scope fix with surgical shadow masking
 
-Tests: 222 integration (2 watcher factory tests fail due to cross-scope fix), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites.
+Tests: 225 integration (all passing), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites.
 
 ---
 
 ## Recent sessions
 
-**2026-05-30 Fix watcher-subscriber cross-scope leak**: Fixed pre-existing bug where watcher subscriber maps (name-keyed) caused nested functions to fire watchers from outer scopes when assigning to local variables with the same name. Root cause: watcher_subscribers and heap_watcher_subscribers not saved/restored across function boundaries. Fixed by mirroring the existing std::mem::take/restore pattern around generate_function body (same as heap_owners and transferred_vars fixes). Verified: same_name_caller_callee now prints "42 7" instead of "42 42 7"; simple watcher cases unchanged. Limitation: prevents watcher factory patterns (inner functions creating watchers for outer variables) - 2 factory tests now fail. Test count: 224 total, 222 pass, 2 fail (factory limitation). Cross-scope leak was incorrect behavior; factory pattern is less critical and can be redesigned.
+**2026-05-30 Complete surgical watcher cross-scope fix**: Replaced blunt whole-map take with surgical shadow masking to allow factory patterns while maintaining cross-scope isolation. Key insight: lexical binding — watchers bind to nearest enclosing declaration, not all names in inheritance chain. Root issue: previous fix used std::mem::take on entire watcher_subscribers maps, wiping ALL entries including function's own watchers → in-function watchers never fired (common case failure, not edge case). Solution: collect function's local names (params + let declarations), save/remove only shadowed entries, generate body (letting function register its own watchers), then restore shadowed + remove local entries to prevent outward leak. Fixed collect_local_variable_names to not recurse into nested function bodies (over-collection bug). Now supports both cross-scope isolation (same_name_caller_callee: 42 7) AND factory patterns. All 225 integration tests pass. Added three_level_shadow_probe integration test. Retracts previous "factory pattern tradeoff acceptable" framing.
 
 **2026-05-30 Restore parser modifier tests**: Restored test_parse_watcher_with_modifier and test_parse_watcher_expression_with_modifier in tests/parser_tests.rs, rewritten to use (changed) instead of (deep). These were deleted in the deep-removal commit but were actually testing general modifier-with-no-alias parsing (structural assertions on subscription count, variable_name, modifier field, alias=None — equally meaningful for any modifier). Restoring fills the unaliased-modifier-parsing gap. Parser test count: 66 → 68. Methodology note: when deleting tests during a feature removal, distinguish between tests testing the removed feature specifically vs tests using the feature as a generic example; the latter should be rewritten to use a remaining alternative.
 
