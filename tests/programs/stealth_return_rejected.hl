@@ -1,0 +1,7 @@
+high program(): i32 {
+    let x = 0
+    stealth {
+        return 1       // Should be rejected as compile error
+    }
+    return 0
+}

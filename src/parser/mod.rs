@@ -965,6 +965,7 @@ impl Parser {
             TokenKind::Switch => self.parse_switch_statement(),
             TokenKind::Break => self.parse_break_statement(),
             TokenKind::Continue => self.parse_continue_statement(),
+            TokenKind::Stealth => self.parse_stealth_statement(),
             _ => {
                 // Try to parse assignment or expression statement
                 let checkpoint = self.current;
@@ -1101,6 +1102,12 @@ impl Parser {
     fn parse_continue_statement(&mut self) -> Result<Statement, ParseError> {
         let pos = self.advance()?.position; // consume 'continue'
         Ok(Statement::Continue(pos))
+    }
+
+    fn parse_stealth_statement(&mut self) -> Result<Statement, ParseError> {
+        let position = self.advance()?.position;  // consume 'stealth'
+        let block = self.parse_block()?;
+        Ok(Statement::StealthBlock(block, position))
     }
 
     fn parse_for_in_statement(&mut self) -> Result<Statement, ParseError> {

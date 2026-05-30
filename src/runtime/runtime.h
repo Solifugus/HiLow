@@ -433,4 +433,8 @@ bool hl_money_le(HiLowMoney lhs, HiLowMoney rhs);
 bool hl_money_gt(HiLowMoney lhs, HiLowMoney rhs);
 bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs);
 
+// Phase 10a-stealth: watcher suppression depth.
+// Becomes thread-local in Phase 10b when async is added.
+extern int hl_stealth_depth;
+
 #endif // HILOW_RUNTIME_H

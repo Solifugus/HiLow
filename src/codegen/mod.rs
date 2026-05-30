@@ -927,6 +927,9 @@ impl CodeGenerator {
             Statement::QualifiedOp(qualified_op) => {
                 self.generate_qualified_op_statement(qualified_op, type_checker)?;
             }
+            Statement::StealthBlock(block, position) => {
+                self.generate_stealth_block(block, position, type_checker)?;
+            }
         }
         Ok(())
     }
@@ -1798,11 +1801,45 @@ impl CodeGenerator {
                             self.output.push_str(";\n");
 
                             // Emit notifications inside the changed check
-                            self.output.push_str(&format!("    if ({} != {}) {{\n", old_var, var_name));
+                            self.output.push_str("    if (hl_stealth_depth == 0) {\n");
+                            self.output.push_str(&format!("        if ({} != {}) {{\n", old_var, var_name));
 
                             // Declaration-form watchers (changed modifier only)
                             for subscriber in &decl_subs {
                                 if subscriber.modifier == SubscriptionModifier::Changed {
+                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
+                                        self.output.push_str(&format!("            if (hilow_watcher_{}_active) {{\n", watcher_id));
+                                        self.output.push_str(&format!("                {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                        self.output.push_str("            }\n");
+                                    } else {
+                                        self.output.push_str(&format!("            {}(", subscriber.fn_name));
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.output.push_str(");\n");
+                                    }
+                                }
+                            }
+
+                            // Heap watchers (changed modifier only)
+                            for heap_sub in &heap_subs {
+                                if heap_sub.modifier == SubscriptionModifier::Changed {
+                                    self.output.push_str(&format!(
+                                        "            if ({} != NULL && {}->active && !{}->ended) {{\n",
+                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
+                                    ));
+                                    self.output.push_str(&format!("                {}(", heap_sub.body_fn_name));
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.output.push_str(");\n");
+                                    self.output.push_str("            }\n");
+                                }
+                            }
+
+                            self.output.push_str("        }\n");
+
+                            // Emit assigned notifications outside the changed check
+                            for subscriber in &decl_subs {
+                                if subscriber.modifier == SubscriptionModifier::Assigned {
                                     if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
                                         self.output.push_str(&format!("        if (hilow_watcher_{}_active) {{\n", watcher_id));
                                         self.output.push_str(&format!("            {}(", subscriber.fn_name));
@@ -1817,9 +1854,8 @@ impl CodeGenerator {
                                 }
                             }
 
-                            // Heap watchers (changed modifier only)
                             for heap_sub in &heap_subs {
-                                if heap_sub.modifier == SubscriptionModifier::Changed {
+                                if heap_sub.modifier == SubscriptionModifier::Assigned {
                                     self.output.push_str(&format!(
                                         "        if ({} != NULL && {}->active && !{}->ended) {{\n",
                                         heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
@@ -1831,14 +1867,22 @@ impl CodeGenerator {
                                 }
                             }
 
-                            self.output.push_str("    }\n");
+                            self.output.push_str("    }\n"); // Close stealth check
+                            self.output.push_str("}\n");
+                        } else {
+                            // Assigned-only path - no old value tracking needed
+                            self.generate_expression(&assign_stmt.target, type_checker)?;
+                            self.output.push_str(" = ");
+                            self.generate_expression(&assign_stmt.value, type_checker)?;
+                            self.output.push_str(";\n");
 
-                            // Emit assigned notifications outside the changed check
+                            self.output.push_str("  if (hl_stealth_depth == 0) {\n");
+                            // Declaration-form notifications (assigned only)
                             for subscriber in &decl_subs {
                                 if subscriber.modifier == SubscriptionModifier::Assigned {
                                     if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
                                         self.output.push_str(&format!("    if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                        self.output.push_str(&format!("        {}(", subscriber.fn_name));
+                                        self.output.push_str(&format!("      {}(", subscriber.fn_name));
                                         self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
                                         self.output.push_str(");\n");
                                         self.output.push_str("    }\n");
@@ -1850,57 +1894,20 @@ impl CodeGenerator {
                                 }
                             }
 
+                            // Heap watcher notifications (assigned only)
                             for heap_sub in &heap_subs {
                                 if heap_sub.modifier == SubscriptionModifier::Assigned {
                                     self.output.push_str(&format!(
                                         "    if ({} != NULL && {}->active && !{}->ended) {{\n",
                                         heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
                                     ));
-                                    self.output.push_str(&format!("        {}(", heap_sub.body_fn_name));
+                                    self.output.push_str(&format!("      {}(", heap_sub.body_fn_name));
                                     self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
                                     self.output.push_str(");\n");
                                     self.output.push_str("    }\n");
                                 }
                             }
-
-                            self.output.push_str("}\n");
-                        } else {
-                            // Assigned-only path - no old value tracking needed
-                            self.generate_expression(&assign_stmt.target, type_checker)?;
-                            self.output.push_str(" = ");
-                            self.generate_expression(&assign_stmt.value, type_checker)?;
-                            self.output.push_str(";\n");
-
-                            // Declaration-form notifications (assigned only)
-                            for subscriber in &decl_subs {
-                                if subscriber.modifier == SubscriptionModifier::Assigned {
-                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
-                                        self.output.push_str(&format!("  if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                        self.output.push_str(&format!("    {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                        self.output.push_str(");\n");
-                                        self.output.push_str("  }\n");
-                                    } else {
-                                        self.output.push_str(&format!("  {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
-                                        self.output.push_str(");\n");
-                                    }
-                                }
-                            }
-
-                            // Heap watcher notifications (assigned only)
-                            for heap_sub in &heap_subs {
-                                if heap_sub.modifier == SubscriptionModifier::Assigned {
-                                    self.output.push_str(&format!(
-                                        "  if ({} != NULL && {}->active && !{}->ended) {{\n",
-                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
-                                    ));
-                                    self.output.push_str(&format!("    {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
-                                    self.output.push_str(");\n");
-                                    self.output.push_str("  }\n");
-                                }
-                            }
+                            self.output.push_str("  }\n"); // Close stealth check
                         }
                         return Ok(());
                     }
@@ -4175,6 +4182,39 @@ impl CodeGenerator {
 
         self.output.push_str(c_operator);
         self.generate_expression(&qualified_op.rhs, type_checker)?;
+
+        Ok(())
+    }
+
+    fn generate_stealth_block(&mut self, block: &Block, _position: &Position, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Check for early returns inside the stealth block and reject them
+        for item in &block.items {
+            if let BlockItem::Statement(Statement::Return(_)) = item {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: "return inside stealth block".to_string(),
+                    phase: "future phase (not Phase 10a)".to_string(),
+                });
+            }
+        }
+
+        // Emit stealth depth increment
+        self.output.push_str("  hl_stealth_depth++;\n");
+
+        // Enter a normal scope for heap cleanup
+        self.enter_scope();
+
+        // Generate the block body
+        for item in &block.items {
+            if let BlockItem::Statement(statement) = item {
+                self.generate_statement(statement, type_checker)?;
+            }
+        }
+
+        // Exit the scope (runs heap cleanup)
+        self.exit_scope();
+
+        // Emit stealth depth decrement
+        self.output.push_str("  hl_stealth_depth--;\n");
 
         Ok(())
     }

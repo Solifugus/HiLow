@@ -1,0 +1,12 @@
+high program(): i32 {
+    let x = 0
+    let w = watcher((changed)x) { print(77) }
+    stealth {
+        // Multiple operations inside stealth block - all should be suppressed
+        x = 1
+        x = 2
+        x = 3
+    }
+    x = 4                           // Should fire (outside stealth)
+    return 0
+}

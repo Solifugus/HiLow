@@ -1,0 +1,12 @@
+high program(): i32 {
+    let x = 0
+    let w = watcher((changed)x) { print(66) }
+    stealth {
+        stealth {
+            x = 1      // Should NOT fire (double nested)
+        }
+        x = 2          // Should NOT fire (still nested)
+    }
+    x = 3              // Should fire
+    return 0
+}

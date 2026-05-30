@@ -1,0 +1,8 @@
+high program(): i32 {
+    let arr = [{}]         // Object array
+    stealth {
+        arr.push({})       // Allocate inside stealth
+        arr.pop()          // Release inside stealth
+    }
+    return 0               // Should exit cleanly with no leaks
+}

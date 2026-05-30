@@ -1,0 +1,11 @@
+high program(): i32 {
+    let x = 0
+    let w = watcher((changed)x) { print(55) }
+    stealth {
+        x = 1          // Should NOT fire
+    }
+    // Counter should be properly decremented after stealth block exits
+    x = 2              // Should fire
+    x = 3              // Should fire again
+    return 0
+}

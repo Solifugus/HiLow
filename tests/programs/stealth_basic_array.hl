@@ -1,0 +1,9 @@
+high program(): i32 {
+    let arr = [1, 2, 3]
+    let w = watcher((added)arr) { print(88) }
+    stealth {
+        arr.push(4)
+    }
+    arr.push(5)
+    return 0
+}

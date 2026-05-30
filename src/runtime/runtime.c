@@ -42,6 +42,10 @@ void print_nothing(void) {
     printf("nothing\n");
 }
 
+// Phase 10a-stealth: watcher suppression depth.
+// Becomes thread-local in Phase 10b when async is added.
+int hl_stealth_depth = 0;
+
 // Unknown type support (Phase 9b)
 
 HiLowUnknown* hl_unknown_new(const char* reason) {
@@ -1683,8 +1687,9 @@ void hl_array_push(HiLowArray* arr, void* elem) {
     arr->length++;
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -1695,6 +1700,7 @@ void hl_array_push(HiLowArray* arr, void* elem) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
         }
     }
 }
@@ -1728,8 +1734,9 @@ void* hl_array_pop(HiLowArray* arr) {
     void* removed_slot = (char*)arr->data + (arr->length * arr->elem_size);
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -1740,6 +1747,7 @@ void* hl_array_pop(HiLowArray* arr) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
         }
     }
 
@@ -1772,8 +1780,9 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
     }
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -1782,6 +1791,7 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
             }
             // Note: set fires DEEP and CHANGED only (no size change)
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
         }
     }
 }
@@ -1811,8 +1821,9 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
     arr->length--;
 
     // Fire watchers with captured element as delta
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -1823,6 +1834,7 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
         }
     }
 
@@ -1866,8 +1878,9 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
     arr->length++;
 
     // Fire watchers with inserted element as delta
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -1878,6 +1891,7 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+        }
         }
     }
 }
@@ -1900,8 +1914,9 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
     if (from == to) {
         // Still fire watchers with delta (or skip - documented choice: still fire)
         HiLowMovedDelta delta = { ._0 = from, ._1 = to };
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        if (hl_stealth_depth == 0) {
+            for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+                HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
             if (state != NULL && state->active && !state->ended) {
                 void* delta_ptr = NULL;
                 int fires = 0;
@@ -1912,6 +1927,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
                     delta_ptr = NULL; fires = 1;
                 }
                 if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta_ptr);
+            }
             }
         }
         return;
@@ -1945,8 +1961,9 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
 
     // Fire watchers with (from,to) delta
     HiLowMovedDelta delta = { ._0 = from, ._1 = to };
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
         if (state != NULL && state->active && !state->ended) {
             void* delta_ptr = NULL;
             int fires = 0;
@@ -1957,6 +1974,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
                 delta_ptr = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta_ptr);
+        }
         }
     }
 }
@@ -1977,11 +1995,13 @@ void hl_array_clear(HiLowArray* arr) {
     arr->length = 0;
 
     // Fire watchers: CHANGED and DEEP get NULL delta; ADDED/REMOVED/MOVED do NOT fire
-    for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-        HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
-        if (state != NULL && state->active && !state->ended) {
-            if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
-                ((void(*)(HiLowArray*, void*))w->body_fn)(arr, NULL);
+    if (hl_stealth_depth == 0) {
+        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
+                HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+            if (state != NULL && state->active && !state->ended) {
+                if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                    ((void(*)(HiLowArray*, void*))w->body_fn)(arr, NULL);
+                }
             }
         }
     }

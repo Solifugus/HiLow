@@ -810,6 +810,7 @@ impl TypeChecker {
             },
             Statement::Assign(assign_stmt) => self.check_assign_statement(assign_stmt),
             Statement::QualifiedOp(qualified_op) => self.check_qualified_op(qualified_op),
+            Statement::StealthBlock(block, _) => self.check_block(block),
             Statement::ExprStatement(expr) => {
                 self.check_expression(expr);
             }
@@ -2264,6 +2265,9 @@ impl TypeChecker {
                 self.write_refinements_to_expression(&mut qualified_op.lhs);
                 self.write_refinements_to_expression(&mut qualified_op.rhs);
             }
+            Statement::StealthBlock(block, _) => {
+                self.write_refinements_to_block(block);
+            }
             Statement::ExprStatement(expr) => {
                 self.write_refinements_to_expression(expr);
             }
@@ -3093,6 +3097,11 @@ impl TypeChecker {
                     }
                 }
             }
+            Statement::StealthBlock(block, _) => {
+                for stmt in block.statements_iter() {
+                    self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                }
+            }
             Statement::Break(_) | Statement::Continue(_) => {
                 // No expressions to check
             }
@@ -3280,6 +3289,11 @@ impl TypeChecker {
                     for stmt in default_statements {
                         self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                     }
+                }
+            }
+            Statement::StealthBlock(block, _) => {
+                for stmt in block.statements_iter() {
+                    self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }
             }
             Statement::Break(_) | Statement::Continue(_) => {

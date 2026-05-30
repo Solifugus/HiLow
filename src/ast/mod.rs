@@ -459,6 +459,7 @@ pub enum Statement {
     Continue(Position),
     Assign(AssignStmt),
     QualifiedOp(QualifiedOp), // For qualified assignment operations
+    StealthBlock(Block, Position),
     ExprStatement(Expression),
 }
 

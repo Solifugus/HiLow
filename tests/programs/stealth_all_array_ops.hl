@@ -1,0 +1,15 @@
+high program(): i32 {
+    let arr = [1, 2, 3]
+    let w_added = watcher((added)arr) { print(11) }
+    let w_removed = watcher((removed)arr) { print(22) }
+    let w_moved = watcher((moved)arr) { print(44) }
+    stealth {
+        arr.push(4)        // Should NOT fire (added)
+        arr.pop()          // Should NOT fire (removed)
+        arr.remove(0)      // Should NOT fire (removed)
+        arr.insert(0, 8)   // Should NOT fire (added)
+        arr.move(0, 1)     // Should NOT fire (moved)
+    }
+    arr.push(5)            // Should fire (added)
+    return 0
+}
