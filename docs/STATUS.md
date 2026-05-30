@@ -6,17 +6,18 @@
 
 ## Current state
 
-Phase: Phase 10a complete (Watch System + Stealth). 
-Status: All watcher modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. Stealth blocks (`stealth { ... }`) suppress watcher firing dynamically across function calls. Cross-scope watcher firing leak fixed with surgical shadow masking.
-KNOWN BUG (pre-existing, deferred): watcher bodies cannot reference outer-scope variables other than the watched variable — see Known Bugs.
+Phase: Phase 10a complete (Watch System + Stealth + Closure Capture). 
+Status: All watcher modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. Stealth blocks (`stealth { ... }`) suppress watcher firing dynamically across function calls. Cross-scope watcher firing leak fixed with surgical shadow masking. Array watcher closure-capture implemented with by-reference semantics via environment structs.
 Branch: main
-Last commit: Complete watcher cross-scope fix with surgical shadow masking
+Last commit: Implement array watcher closure-capture via env struct
 
-Tests: 225 integration (all passing), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites.
+Tests: 231 integration (all passing), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites.
 
 ---
 
 ## Recent sessions
+
+**2026-05-30 Array watcher closure-capture via env struct**: Implemented array watcher closure-capture using environment struct mechanism adapted from function expressions. Array watchers can now reference outer-scope variables with by-reference semantics (captures see current values at fire-time, not creation-time snapshots). Memory model: env owned by declaring scope, freed at scope exit, no cross-scope transfer. Technical approach: extend hl_array_register_watcher with env parameter, generate array watcher bodies with (void* env, HiLowArray*, void*) signature, differentiated env storage (scalars as pointers for by-reference access, arrays directly for identity capture), update variable access with conditional dereferencing. Fixed C compilation issues with array/scalar storage type mismatches. Integration tests: basic read/write capture, by-reference semantics verification, multiple captures, simplified scope lifetime test, leak verification. Test count: 225→231 integration. Closes the closure-capture Known Bug that was blocking full Phase 10a completion.
 
 **2026-05-30 Complete surgical watcher cross-scope fix**: Replaced blunt whole-map take with surgical shadow masking to allow factory patterns while maintaining cross-scope isolation. Key insight: lexical binding — watchers bind to nearest enclosing declaration, not all names in inheritance chain. Root issue: previous fix used std::mem::take on entire watcher_subscribers maps, wiping ALL entries including function's own watchers → in-function watchers never fired (common case failure, not edge case). Solution: collect function's local names (params + let declarations), save/remove only shadowed entries, generate body (letting function register its own watchers), then restore shadowed + remove local entries to prevent outward leak. Fixed collect_local_variable_names to not recurse into nested function bodies (over-collection bug). Now supports both cross-scope isolation (same_name_caller_callee: 42 7) AND factory patterns. All 225 integration tests pass. Added three_level_shadow_probe integration test. Retracts previous "factory pattern tradeoff acceptable" framing.
 
@@ -40,24 +41,7 @@ Tests: 225 integration (all passing), 68 parser, 28 typecheck_module, 62 typeche
 
 ### Known Bugs
 
-- **Watcher bodies can't reference outer-scope variables other than the watched variable** (pre-existing, found 2026-05-29, NOT yet fixed): a watcher body is emitted as a C function (e.g. `hilow_watcher_expr_0_body`); references to outer-scope variables that aren't the watched variable produce C compile errors ("identifier undeclared"). Affects both reading and writing such variables.
-  - Repro (reading):
-    ```
-    high program(): i32 {
-        let x = 0
-        let y = 42
-        let w = watcher((changed)x) {
-            print(y)   // C compile error: 'y' undeclared
-        }
-        x = 1
-        return 0
-    }
-    ```
-  - Same shape fails for `y = 5;` inside the body (writing).
-  - Surfaced during stealth verification when probing "stealth inside a watcher body" — but the bug exists with or without stealth (stealth never executes because the program fails to compile).
-  - Root cause hypothesis: the watcher body codegen emits the watched variable as a parameter to the body function, but does NOT establish a closure-environment for other captured variables. Function closures (FunctionExpr) likely already have machinery for capturing outer-scope vars via an environment struct (see Phase 7c-δ and FunctionExprContext::LetInitializer in generate_let_statement); watcher bodies need analogous machinery, or to reuse it directly.
-  - Workaround for now: have watcher bodies only reference the watched variable. To affect other state, factor through a function call that receives needed state as parameters (though this may have its own issues depending on how function-from-watcher-body interacts with the watcher firing context — untested).
-  - Fix deferred to a focused fresh session — closure-capture is subtle codegen, same family as the heap_owners scope fix (which was deferred for the same reasons and addressed cleanly with fresh attention).
+None currently. The watcher closure-capture bug (watcher bodies couldn't reference outer-scope variables) was resolved in the 2026-05-30 session with environment struct implementation.
 
 ---
 
@@ -81,9 +65,9 @@ Still pending — arrays of functions / optionals / watchers / tuples.
 
 Still pending — array niceties: fixed arrays [T;N], empty typed literals (let xs: [i32] = []), bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (for (let x in arr) — future lightweight revision).
 
-Phase 10 — Watch System. Phase 10a COMPLETE (watchers + stealth). Phase 10b (Async and Shared) — design captured in docs/concurrency-design.md (significant redesign vs. original plan: watcher-integrated structured concurrency with explicit write-capability lists; see design doc). NOT YET implemented.
+Phase 10 — Watch System. Phase 10a COMPLETE (watchers + stealth + closure-capture). Phase 10b (Async and Shared) — design captured in docs/concurrency-design.md (significant redesign vs. original plan: watcher-integrated structured concurrency with explicit write-capability lists; see design doc). NOT YET implemented.
 
-Note: Phase 10a's "completion" is qualified by the watcher-body closure-capture bug above — the watcher SYSTEM is implemented across all modifiers and all mutation sites, but watcher bodies have a closure-capture limitation that should be addressed before any program relying on watcher bodies accessing surrounding state can be written.
+Phase 10a is now fully complete with closure-capture support: watcher bodies can reference and modify outer-scope variables with by-reference semantics. Both scalar and array watchers support closure capture via environment structs, with memory safety guaranteed through scope-bound environment lifetime.
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
