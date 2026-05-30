@@ -1121,6 +1121,36 @@ impl CodeGenerator {
                         }
                     }
                 }
+                Expression::Call(_) => {
+                    // Track heap ownership for function calls that return heap types
+                    let result_type = self.infer_expression_type_for_codegen(initializer);
+                    match result_type {
+                        Type::String => {
+                            self.track_heap_owner(name, HeapType::Array); // String is HiLowArray<u8>
+                        }
+                        Type::DynamicArray(_) => {
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
+                        Type::Object(_) => {
+                            self.track_heap_owner(name, HeapType::Object);
+                        }
+                        Type::Function(_, _) => {
+                            self.track_heap_owner(name, HeapType::Function);
+                        }
+                        Type::Watcher => {
+                            self.track_heap_owner(name, HeapType::Watcher);
+                        }
+                        Type::Optional(_) => {
+                            self.track_heap_owner(name, HeapType::Optional);
+                        }
+                        Type::Unknown => {
+                            self.track_heap_owner(name, HeapType::Unknown);
+                        }
+                        _ => {
+                            // Non-heap return types don't need tracking
+                        }
+                    }
+                }
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
 
