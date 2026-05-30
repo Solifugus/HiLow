@@ -589,14 +589,13 @@ impl Parser {
         match name {
             "changed" => Ok(SubscriptionModifier::Changed),
             "assigned" => Ok(SubscriptionModifier::Assigned),
-            "deep" => Ok(SubscriptionModifier::Deep),
             "added" => Ok(SubscriptionModifier::Added),
             "removed" => Ok(SubscriptionModifier::Removed),
             "moved" => Ok(SubscriptionModifier::Moved),
             _ => Err(ParseError::UnsupportedFeature {
                 feature: format!("subscription modifier '{}'", name),
                 position: position.clone(),
-                suggestion: "valid modifiers are: changed, assigned, deep, added, removed, moved".to_string(),
+                suggestion: "valid modifiers are: changed, assigned, added, removed, moved".to_string(),
             })
         }
     }

@@ -282,7 +282,6 @@ struct HiLowArrayWatcher {
 #define HL_ARR_ADDED 1
 #define HL_ARR_REMOVED 2
 #define HL_ARR_CHANGED 3
-#define HL_ARR_DEEP 4
 #define HL_ARR_MOVED 5
 
 HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn);

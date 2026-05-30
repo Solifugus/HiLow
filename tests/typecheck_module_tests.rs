@@ -310,17 +310,6 @@ fn test_watcher_assigned_modifier_on_any_type() {
 }
 
 #[test]
-fn test_watcher_deep_on_object() {
-    let mut type_checker = TypeChecker::new();
-
-    // (deep) modifier should work on object types
-    let graph = build_graph(vec![
-        ("./test", "high program(): i32 { let obj = {x: 5}; watcher onObj((deep)obj) { print(obj.x) } return 42 }")
-    ]);
-
-    let result = type_checker.check_graph(&graph);
-    assert!(result.is_ok(), "Expected Ok(()), got: {:?}", result);
-}
 
 #[test]
 fn test_watcher_added_on_array_with_alias() {
@@ -443,25 +432,6 @@ fn test_watcher_subscription_to_function() {
     }
 }
 
-#[test]
-fn test_watcher_deep_on_primitive_error() {
-    let mut type_checker = TypeChecker::new();
-
-    // (deep) on primitive should error
-    let graph = build_graph(vec![
-        ("./test", "high program(): i32 { let x: i32 = 5; watcher onX((deep)x) { print(x) } return 42 }")
-    ]);
-
-    let result = type_checker.check_graph(&graph);
-    assert!(result.is_err(), "Expected error for (deep) on primitive, got: {:?}", result);
-
-    if let Err(errors) = result {
-        let has_deep_error = errors.iter().any(|err| {
-            err.to_string().contains("(deep) modifier is not meaningful for primitive type")
-        });
-        assert!(has_deep_error, "Expected (deep) primitive error, got: {:?}", errors);
-    }
-}
 
 #[test]
 fn test_watcher_added_on_primitive_error() {

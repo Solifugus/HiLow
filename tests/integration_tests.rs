@@ -3132,23 +3132,6 @@ fn test_array_watcher_changed_fires_on_push() {
     let _ = fs::remove_file(&executable);
 }
 
-#[test]
-fn test_array_watcher_deep_fires_on_push() {
-    let executable = compile_program("tests/programs/watcher/test_array_watcher_deep_fires_on_push.hl")
-        .expect("Failed to compile test_array_watcher_deep_fires_on_push.hl");
-
-    let (stdout, stderr, exit_code) = run_program(&executable)
-        .expect("Failed to run test_array_watcher_deep_fires_on_push");
-
-    assert_eq!(exit_code, 0, "Program should exit with code 0");
-    assert!(stderr.is_empty(), "No stderr output expected");
-
-    let expected = fs::read_to_string("tests/expected/watcher/test_array_watcher_deep_fires_on_push.expected.txt")
-        .expect("Failed to read expected output");
-    assert_eq!(stdout.trim(), expected.trim());
-
-    let _ = fs::remove_file(&executable);
-}
 
 #[test]
 fn test_array_watcher_fires_on_index_assign() {

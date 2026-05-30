@@ -1071,7 +1071,6 @@ impl CodeGenerator {
                             self.output.push_str(";\n");
                             for subscription in &subscriptions {
                                 let c_modifier = match subscription.modifier {
-                                    SubscriptionModifier::Deep => "HL_ARR_DEEP",
                                     SubscriptionModifier::Changed => "HL_ARR_CHANGED",
                                     SubscriptionModifier::Added => "HL_ARR_ADDED",
                                     SubscriptionModifier::Removed => "HL_ARR_REMOVED",
@@ -2178,15 +2177,6 @@ impl CodeGenerator {
                     match subscription.modifier {
                         SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
                             // These are supported for all watchable types
-                        }
-                        SubscriptionModifier::Deep => {
-                            if !is_array {
-                                return Err(CodegenError::UnsupportedFeature {
-                                    feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
-                                    phase: "deep watching only applies to arrays".to_string(),
-                                });
-                            }
-                            // Deep is supported for arrays in Phase 10-ε-α
                         }
                         SubscriptionModifier::Added | SubscriptionModifier::Removed => {
                             // Phase 10-ε-β: Added/Removed now supported for arrays
@@ -5934,7 +5924,7 @@ impl CodeGenerator {
                 SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
                     // These are supported
                 }
-                SubscriptionModifier::Deep | SubscriptionModifier::Added |
+                SubscriptionModifier::Added |
                 SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("watcher modifier {:?}", subscription.modifier),

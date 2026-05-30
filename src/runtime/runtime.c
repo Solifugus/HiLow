@@ -1696,7 +1696,7 @@ void hl_array_push(HiLowArray* arr, void* elem) {
             if (w->modifier == HL_ARR_ADDED) {
                 delta = elem; fires = 1;
             }
-            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+            else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
@@ -1743,7 +1743,7 @@ void* hl_array_pop(HiLowArray* arr) {
             if (w->modifier == HL_ARR_REMOVED) {
                 delta = removed_slot; fires = 1;
             }
-            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+            else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
@@ -1786,7 +1786,7 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
-            if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+            if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
             // Note: set fires DEEP and CHANGED only (no size change)
@@ -1830,7 +1830,7 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
             if (w->modifier == HL_ARR_REMOVED) {
                 delta = temp_buffer; fires = 1;
             }
-            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+            else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
@@ -1887,7 +1887,7 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
             if (w->modifier == HL_ARR_ADDED) {
                 delta = elem; fires = 1;
             }
-            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+            else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
@@ -1923,7 +1923,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
                 if (w->modifier == HL_ARR_MOVED) {
                     delta_ptr = &delta; fires = 1;
                 }
-                else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                else if (w->modifier == HL_ARR_CHANGED) {
                     delta_ptr = NULL; fires = 1;
                 }
                 if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta_ptr);
@@ -1970,7 +1970,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
             if (w->modifier == HL_ARR_MOVED) {
                 delta_ptr = &delta; fires = 1;
             }
-            else if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+            else if (w->modifier == HL_ARR_CHANGED) {
                 delta_ptr = NULL; fires = 1;
             }
             if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta_ptr);
@@ -1999,7 +1999,7 @@ void hl_array_clear(HiLowArray* arr) {
         for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
                 HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
             if (state != NULL && state->active && !state->ended) {
-                if (w->modifier == HL_ARR_CHANGED || w->modifier == HL_ARR_DEEP) {
+                if (w->modifier == HL_ARR_CHANGED) {
                     ((void(*)(HiLowArray*, void*))w->body_fn)(arr, NULL);
                 }
             }

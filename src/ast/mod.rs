@@ -236,7 +236,6 @@ pub struct FunctionExpr {
 pub enum SubscriptionModifier {
     Changed,
     Assigned,
-    Deep,
     Added,
     Removed,
     Moved,

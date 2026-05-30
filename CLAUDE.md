@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Phase 10a complete (Watch System + Stealth)**
+**Current phase: Remove `(deep)` modifier**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

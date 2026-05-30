@@ -587,18 +587,6 @@ impl TypeChecker {
                 // Compatible with any type; no alias-specific type
                 Some(outer_type.clone())
             }
-            Deep => {
-                if self.is_primitive_type(outer_type) {
-                    self.add_error(
-                        format!("(deep) modifier is not meaningful for primitive type '{}' (primitives cannot be mutated in place)",
-                            self.type_name(outer_type)),
-                        position.clone()
-                    );
-                    None
-                } else {
-                    Some(outer_type.clone())
-                }
-            }
             Added | Removed => {
                 // Phase 10-ε-β: Require collection type, alias gets element type
                 if let Some(element_type) = self.collection_element_type(outer_type) {
