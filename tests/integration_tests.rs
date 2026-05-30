@@ -4517,6 +4517,25 @@ fn test_array_watcher_dies_with_scope_integration() {
 }
 
 #[test]
+fn test_array_watcher_multiple_fires_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_watcher_multiple_fires.hl")
+        .expect("Failed to compile array_watcher_multiple_fires.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_watcher_multiple_fires.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_watcher_multiple_fires");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
 fn test_array_capture_no_leak_integration() {
     let executable = compile_program("tests/programs/phase10a/array_capture_no_leak.hl")
         .expect("Failed to compile array_capture_no_leak.hl");

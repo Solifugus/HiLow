@@ -306,6 +306,7 @@ void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements
 
 // Array watcher registration (Phase 10-ε-α)
 void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* env, void* watcher_state);
+void hl_array_unregister_watcher(HiLowArray* arr, void* env);
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

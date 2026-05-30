@@ -159,6 +159,9 @@ pub struct CodeGenerator {
     temp_watcher_expr_captured_vars: Vec<String>,
     /// Phase 10a: tracks captured variables in scalar watchers for pointer-dereference access
     scalar_watcher_captures: HashSet<String>,
+    /// Phase 10a: track array watchers for scope cleanup (env unregister before free)
+    /// Maps env_var_name to (array_var_name, scope_depth)
+    array_watcher_registrations: HashMap<String, (String, usize)>,
 }
 
 impl CodeGenerator {
@@ -197,6 +200,7 @@ impl CodeGenerator {
             temp_watcher_expr_subscriptions: Vec::new(),
             temp_watcher_expr_captured_vars: Vec::new(),
             scalar_watcher_captures: HashSet::new(),
+            array_watcher_registrations: HashMap::new(),
         }
     }
 
@@ -1176,6 +1180,12 @@ impl CodeGenerator {
                                     "    hl_array_register_watcher({}, {}, {}, {}, {});\n",
                                     arr_var, c_modifier, body_fn_name, env_var_name, c_var_name
                                 ));
+
+                                // Track array watcher registration for scope cleanup
+                                self.array_watcher_registrations.insert(
+                                    env_var_name.clone(),
+                                    (arr_var, self.scope_depth)
+                                );
                             }
                         } else {
                             // Scalar watcher: existing heap registration logic
@@ -5842,6 +5852,22 @@ impl CodeGenerator {
                         self.output.push_str(&format!("    hl_function_release({});\n", c_var_name));
                     }
                     HeapType::Environment => {
+                        // Phase 10a: Unregister array watchers before freeing environment
+                        // Only unregister if array is in a different scope (to avoid double-free in flat-scope cases)
+                        if let Some((arr_var, watcher_scope)) = self.array_watcher_registrations.get(var_name) {
+                            if let Some((_, arr_scope)) = self.heap_owners.iter()
+                                .find(|(name, _)| self.mangle_variable_name(name) == *arr_var)
+                                .map(|(_, (_, scope))| ((), scope)) {
+                                if *watcher_scope != *arr_scope {
+                                    self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                        arr_var, c_var_name));
+                                }
+                            } else {
+                                // Array not in heap_owners (might be stack-allocated), safe to unregister
+                                self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                    arr_var, c_var_name));
+                            }
+                        }
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
                     }
                     HeapType::FStringBuffer => {
@@ -5867,6 +5893,8 @@ impl CodeGenerator {
         // Remove released variables from tracking
         for var_name in &vars_to_release {
             self.heap_owners.remove(var_name);
+            // Also clean up array watcher registrations for freed environments
+            self.array_watcher_registrations.remove(var_name);
         }
     }
 
@@ -5894,6 +5922,22 @@ impl CodeGenerator {
                         self.output.push_str(&format!("    hl_function_release({});\n", c_var_name));
                     }
                     HeapType::Environment => {
+                        // Phase 10a: Unregister array watchers before freeing environment
+                        // Only unregister if array is in a different scope (to avoid double-free in flat-scope cases)
+                        if let Some((arr_var, watcher_scope)) = self.array_watcher_registrations.get(var_name) {
+                            if let Some((_, arr_scope)) = self.heap_owners.iter()
+                                .find(|(name, _)| self.mangle_variable_name(name) == *arr_var)
+                                .map(|(_, (_, scope))| ((), scope)) {
+                                if *watcher_scope != *arr_scope {
+                                    self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                        arr_var, c_var_name));
+                                }
+                            } else {
+                                // Array not in heap_owners (might be stack-allocated), safe to unregister
+                                self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                    arr_var, c_var_name));
+                            }
+                        }
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
                     }
                     HeapType::FStringBuffer => {
@@ -5917,6 +5961,14 @@ impl CodeGenerator {
         }
 
         // Do NOT modify heap_owners - function-end cleanup needs the same list
+        // But clean up array watcher registrations for freed environments
+        for var_name in &vars_to_release {
+            if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
+                if matches!(heap_type, HeapType::Environment) {
+                    self.array_watcher_registrations.remove(var_name);
+                }
+            }
+        }
     }
 
     fn emit_leak_check_and_return(&mut self) {

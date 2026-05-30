@@ -6,7 +6,9 @@ high program(): i32 {
     }
     let xs = []: [i32]
     inner(xs)
-    xs.push(1)        // walks xs's watcher list, finds inner's dead watcher,
-    print("after")    // calls its body_fn with w->env pointing at FREED memory
+    xs.push(1)        // dead watcher should not fire
+    xs.push(2)        // dead watcher should not fire
+    xs.push(3)        // dead watcher should not fire
+    print("after")
     return 0
 }

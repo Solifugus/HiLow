@@ -2017,3 +2017,17 @@ void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, voi
     new_watcher->next = arr->watchers;
     arr->watchers = new_watcher;  // Prepend to list
 }
+
+void hl_array_unregister_watcher(HiLowArray* arr, void* env) {
+    HiLowArrayWatcher** current = &arr->watchers;
+
+    while (*current != NULL) {
+        if ((*current)->env == env) {
+            HiLowArrayWatcher* to_remove = *current;
+            *current = (*current)->next;  // Remove from list
+            free(to_remove);  // Free the watcher node
+            return;
+        }
+        current = &(*current)->next;
+    }
+}
