@@ -1204,6 +1204,38 @@ fn test_parse_watcher_simple_declaration() {
     }
 }
 
+#[test]
+fn test_parse_watcher_with_modifier() {
+    let input = "high program(): i32 { watcher onItems((changed)items) { print(items) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Watcher(watcher) => {
+                        assert_eq!(watcher.name, "onItems");
+                        assert_eq!(watcher.subscriptions.len(), 1);
+
+                        let sub = &watcher.subscriptions[0];
+                        assert_eq!(sub.variable_name, "items");
+                        assert_eq!(sub.modifier, SubscriptionModifier::Changed);
+                        assert_eq!(sub.alias, None);
+                    }
+                    _ => panic!("Expected Watcher item"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
 
 #[test]
 fn test_parse_watcher_with_aliased_modifier() {
@@ -1446,6 +1478,45 @@ fn test_parse_watcher_expression_basic() {
                                     let sub = &watcher_expr.subscriptions[0];
                                     assert_eq!(sub.variable_name, "x");
                                     assert_eq!(sub.modifier, SubscriptionModifier::Changed);
+                                }
+                                _ => panic!("Expected WatcherExpr"),
+                            }
+                        } else {
+                            panic!("Expected initializer");
+                        }
+                    }
+                    _ => panic!("Expected Let statement"),
+                }
+            } else {
+                panic!("Expected program body");
+            }
+        }
+        _ => panic!("Expected Program"),
+    }
+}
+
+#[test]
+fn test_parse_watcher_expression_with_modifier() {
+    let input = "high program(): i32 { let w = watcher((changed)items) { print(items) } }";
+    let result = Parser::new(input).unwrap().parse();
+
+    assert!(result.is_ok());
+    let top_level = result.unwrap();
+
+    match top_level {
+        TopLevel::Program(program) => {
+            if let Some(ref body) = program.body {
+                assert_eq!(body.items.len(), 1);
+                match &body.items[0] {
+                    BlockItem::Statement(Statement::Let(let_decl)) => {
+                        if let Some(ref init) = let_decl.initializer {
+                            match init {
+                                Expression::WatcherExpr(watcher_expr) => {
+                                    assert_eq!(watcher_expr.subscriptions.len(), 1);
+                                    let sub = &watcher_expr.subscriptions[0];
+                                    assert_eq!(sub.variable_name, "items");
+                                    assert_eq!(sub.modifier, SubscriptionModifier::Changed);
+                                    assert_eq!(sub.alias, None);
                                 }
                                 _ => panic!("Expected WatcherExpr"),
                             }

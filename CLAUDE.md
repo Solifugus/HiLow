@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Remove `(deep)` modifier**
+**Current phase: Restore lost parser-modifier test coverage**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
