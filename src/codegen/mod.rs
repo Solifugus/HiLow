@@ -1122,6 +1122,47 @@ impl CodeGenerator {
                         if is_array_watcher {
                             // Phase 10-ε-α: Emit direct array watcher registration
                             self.output.push_str(";\n");
+
+                            // Generate environment allocation for captured variables
+                            let env_var_name = if captured_vars.is_empty() {
+                                "NULL".to_string()
+                            } else {
+                                let env_struct_name = format!("hilow_array_watcher_env_{}",
+                                    self.watcher_counter - 1);
+                                let env_var = format!("{}_env", c_var_name);
+
+                                // Allocate the environment
+                                self.output.push_str(&format!("    {}* {} = malloc(sizeof({}));\n",
+                                    env_struct_name, env_var, env_struct_name));
+                                self.output.push_str("    hl_alloc_count++;\n");
+
+                                // Pack captured variables by reference
+                                for var_name in &captured_vars {
+                                    let c_var = self.mangle_variable_name(var_name);
+                                    // Check if this variable is an array type
+                                    if let Some(var_type) = self.variable_types.get(var_name) {
+                                        if matches!(var_type, Type::DynamicArray(_)) {
+                                            // For arrays, store the pointer directly
+                                            self.output.push_str(&format!("    {}->{} = {};\n",
+                                                env_var, var_name, c_var));
+                                        } else {
+                                            // For scalars, store pointer for by-reference access
+                                            self.output.push_str(&format!("    {}->{} = &{};\n",
+                                                env_var, var_name, c_var));
+                                        }
+                                    } else {
+                                        // Default to by-reference for unknown types
+                                        self.output.push_str(&format!("    {}->{} = &{};\n",
+                                            env_var, var_name, c_var));
+                                    }
+                                }
+
+                                // Track the environment for scope cleanup
+                                self.track_heap_owner(&env_var, HeapType::Environment);
+
+                                env_var
+                            };
+
                             for subscription in &subscriptions {
                                 let c_modifier = match subscription.modifier {
                                     SubscriptionModifier::Changed => "HL_ARR_CHANGED",
@@ -1132,8 +1173,8 @@ impl CodeGenerator {
                                 };
                                 let arr_var = self.mangle_variable_name(&subscription.variable_name);
                                 self.output.push_str(&format!(
-                                    "    hl_array_register_watcher({}, {}, {}, {});\n",
-                                    arr_var, c_modifier, body_fn_name, c_var_name
+                                    "    hl_array_register_watcher({}, {}, {}, {}, {});\n",
+                                    arr_var, c_modifier, body_fn_name, env_var_name, c_var_name
                                 ));
                             }
                         } else {
@@ -2083,15 +2124,41 @@ impl CodeGenerator {
                 }
 
                 // Check if this variable is hoisted to an environment
-                if let Some((env_var, _env_struct)) = self.hoisted_variables.get(name) {
+                if let Some((env_var, env_struct)) = self.hoisted_variables.get(name) {
                     // Variable is hoisted - use environment access
-                    self.output.push_str(&format!("{}->", env_var));
+                    let is_array_watcher_env = env_struct.contains("array_watcher_env");
+
+                    if is_array_watcher_env {
+                        // For array watcher environments, check if this is an array type
+                        let is_array_type = self.variable_types.get(name)
+                            .map(|ty| matches!(ty, Type::DynamicArray(_)))
+                            .unwrap_or(false);
+
+                        if is_array_type {
+                            // Arrays are stored directly, no dereferencing needed
+                            self.output.push_str(&format!("{}->", env_var));
+                        } else {
+                            // Scalars are stored as pointers, need dereferencing
+                            self.output.push_str("(*");
+                            self.output.push_str(&format!("{}->", env_var));
+                        }
+                    } else {
+                        self.output.push_str(&format!("{}->", env_var));
+                    }
+
                     if let Some(ref refined) = refined_type {
                         // If the variable is narrowed, emit unwrap for the refined type
                         let types_refined = Type::from_ast_type(refined);
                         self.emit_refined_variable_access(name, &types_refined);
                     } else {
                         self.output.push_str(name);
+                    }
+
+                    if is_array_watcher_env && !self.variable_types.get(name)
+                        .map(|ty| matches!(ty, Type::DynamicArray(_)))
+                        .unwrap_or(false) {
+                        // Close the dereference paren for scalars
+                        self.output.push_str(")");
                     }
                 } else if self.scalar_watcher_captures.contains(name) {
                     // Phase 10a: Captured variable in scalar watcher - use pointer dereference
@@ -2269,13 +2336,14 @@ impl CodeGenerator {
                 let mut has_scalars = false;
                 for subscription in &watcher_expr.subscriptions {
                     if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                        if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
+                            if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
                             has_arrays = true;
                         } else {
                             has_scalars = true;
                         }
                     }
                 }
+
 
                 if has_arrays && has_scalars {
                     return Err(CodegenError::UnsupportedFeature {
@@ -2292,11 +2360,11 @@ impl CodeGenerator {
                 self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
 
                 if has_arrays {
-                    // Array watcher: uniform signature with delta parameter (Phase 10-ε-β)
+                    // Array watcher: env-struct signature for closure capture (void* env first)
                     // Array parameter is always the variable name; alias (if any) binds to delta element
                     let first_subscription = &watcher_expr.subscriptions[0];
                     let param_name = &first_subscription.variable_name;
-                    self.watcher_bodies.push_str(&format!("HiLowArray* {}, void* delta", param_name));
+                    self.watcher_bodies.push_str(&format!("void* env, HiLowArray* {}, void* delta", param_name));
                 } else {
                     // Scalar watcher: watched variables as value parameters
                     for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
@@ -2359,6 +2427,10 @@ impl CodeGenerator {
                 // Save current variable_types and add watcher parameters to scope
                 let old_variable_types = self.variable_types.clone();
 
+                // Save hoisted variables state for array watchers (before any modification)
+                let old_hoisted_variables = self.hoisted_variables.clone();
+                let old_current_env_var = self.current_env_var.clone();
+
                 if has_arrays {
                     // Array watcher: add the array parameter to scope
                     // Array parameter is always the variable name; alias (if any) binds to delta element
@@ -2385,6 +2457,42 @@ impl CodeGenerator {
                                 self.variable_types.insert(alias_name.clone(), tuple_type);
                             }
                         }
+                    }
+
+                    // Array watcher: Add captured variables via env struct (like function expressions)
+                    let captures = watcher_expr.captures.borrow();
+                    if !captures.is_empty() {
+                        // Generate env struct name for this watcher
+                        let env_struct_name = format!("hilow_array_watcher_env_{}", self.watcher_counter - 1);
+
+                        // Generate environment struct definition
+                        self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
+                        for (var_name, ast_type, _pos) in captures.iter() {
+                            let c_type = self.ast_type_to_c(ast_type);
+                            // For scalar types, store pointers for by-reference access
+                            // For array types, store the array pointer directly
+                            if matches!(ast_type, crate::ast::Type::DynamicArray(_)) {
+                                self.environment_structs.push_str(&format!("    {} {};\n", c_type, var_name));
+                            } else {
+                                self.environment_structs.push_str(&format!("    {}* {};\n", c_type, var_name));
+                            }
+                        }
+                        self.environment_structs.push_str(&format!("}} {};\n\n", env_struct_name));
+
+                        // Set up hoisted variables for captured variables (using env_cast)
+                        self.hoisted_variables.clear();
+                        self.current_env_var = Some("env_cast".to_string());
+
+                        for (var_name, ast_type, _pos) in captures.iter() {
+                            self.hoisted_variables.insert(var_name.clone(), ("env_cast".to_string(), env_struct_name.clone()));
+                            // Add captured variable types to variable_types
+                            let hilow_type = Type::from_ast_type(ast_type);
+                            self.variable_types.insert(var_name.clone(), hilow_type);
+                        }
+
+                        // Emit env cast at the beginning of the body generation (before body statements)
+                        self.output.push_str(&format!("  {}* env_cast = ({}*)env;\n",
+                            env_struct_name, env_struct_name));
                     }
                 } else {
                     // Scalar watcher: watched variables as value parameters
@@ -2416,6 +2524,10 @@ impl CodeGenerator {
                 // Restore original variable_types and clear capture tracking
                 self.variable_types = old_variable_types;
                 self.scalar_watcher_captures.clear();
+
+                // Restore hoisted variables state
+                self.hoisted_variables = old_hoisted_variables;
+                self.current_env_var = old_current_env_var;
 
                 self.watcher_bodies.push_str(&self.output);
                 self.watcher_bodies.push_str("}\n\n");

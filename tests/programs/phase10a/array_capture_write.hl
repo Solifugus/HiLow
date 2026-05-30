@@ -1,0 +1,8 @@
+high program(): i32 {
+    let xs = []: [i32]
+    let y = 0
+    let w = watcher((changed)xs) { y = 99 }
+    xs.push(1)
+    print(y)
+    return 0
+}

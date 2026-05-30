@@ -1699,7 +1699,7 @@ void hl_array_push(HiLowArray* arr, void* elem) {
             else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
-            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
         }
         }
     }
@@ -1746,7 +1746,7 @@ void* hl_array_pop(HiLowArray* arr) {
             else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
-            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
         }
         }
     }
@@ -1790,7 +1790,7 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
                 delta = NULL; fires = 1;
             }
             // Note: set fires DEEP and CHANGED only (no size change)
-            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
         }
         }
     }
@@ -1833,7 +1833,7 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
             else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
-            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
         }
         }
     }
@@ -1890,7 +1890,7 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
             else if (w->modifier == HL_ARR_CHANGED) {
                 delta = NULL; fires = 1;
             }
-            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta);
+            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
         }
         }
     }
@@ -2000,7 +2000,7 @@ void hl_array_clear(HiLowArray* arr) {
                 HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
             if (state != NULL && state->active && !state->ended) {
                 if (w->modifier == HL_ARR_CHANGED) {
-                    ((void(*)(HiLowArray*, void*))w->body_fn)(arr, NULL);
+                    ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, NULL);
                 }
             }
         }
@@ -2008,11 +2008,11 @@ void hl_array_clear(HiLowArray* arr) {
 }
 
 // Array watcher registration (Phase 10-ε-α)
-void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state) {
+void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* env, void* watcher_state) {
     HiLowArrayWatcher* new_watcher = malloc(sizeof(HiLowArrayWatcher));
     new_watcher->modifier = modifier;
     new_watcher->body_fn = body_fn;
-    new_watcher->captured_vars = NULL;  // Not supported this phase
+    new_watcher->env = env;
     new_watcher->watcher_state = watcher_state;
     new_watcher->next = arr->watchers;
     arr->watchers = new_watcher;  // Prepend to list

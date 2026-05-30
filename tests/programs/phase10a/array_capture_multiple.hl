@@ -1,0 +1,9 @@
+high program(): i32 {
+    let xs = []: [i32]
+    let a = 10
+    let b = 20
+    let c = 30
+    let w = watcher((changed)xs) { print(a); print(b); print(c) }
+    xs.push(1)
+    return 0
+}

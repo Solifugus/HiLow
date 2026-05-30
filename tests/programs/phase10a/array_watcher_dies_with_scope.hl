@@ -1,0 +1,10 @@
+high program(): i32 {
+    let xs = []: [i32]
+    let local_val = 42
+    let w = watcher((changed)xs) { print(local_val) }
+    // For now, this will test basic functionality
+    // Proper scope-death testing needs function support
+    xs.push(1)
+    print("done")
+    return 0
+}

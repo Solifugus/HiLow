@@ -273,7 +273,7 @@ typedef struct HiLowArray {
 struct HiLowArrayWatcher {
     int modifier;                   // ADDED / REMOVED / CHANGED / DEEP / MOVED (enum values; define a small set)
     void* body_fn;                  // watcher body function pointer (unused until 10-ε)
-    void** captured_vars;           // captured context (unused until 10-ε)
+    void* env;                      // captured context environment struct
     void* watcher_state;            // HiLowWatcher* for active/ended gating (unused until 10-ε)
     HiLowArrayWatcher* next;
 };
@@ -305,7 +305,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element fr
 void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements and setting length to 0
 
 // Array watcher registration (Phase 10-ε-α)
-void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* watcher_state);
+void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* env, void* watcher_state);
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

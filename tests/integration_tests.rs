@@ -4421,3 +4421,117 @@ fn test_no_capture_regression_integration() {
     let _ = fs::remove_file(&executable);
 }
 
+#[test]
+fn test_array_capture_read_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_capture_read.hl")
+        .expect("Failed to compile array_capture_read.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_capture_read.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_capture_read");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_capture_write_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_capture_write.hl")
+        .expect("Failed to compile array_capture_write.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_capture_write.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_capture_write");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_capture_by_reference_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_capture_by_reference.hl")
+        .expect("Failed to compile array_capture_by_reference.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_capture_by_reference.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_capture_by_reference");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_capture_multiple_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_capture_multiple.hl")
+        .expect("Failed to compile array_capture_multiple.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_capture_multiple.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_capture_multiple");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_watcher_dies_with_scope_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_watcher_dies_with_scope.hl")
+        .expect("Failed to compile array_watcher_dies_with_scope.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_watcher_dies_with_scope.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_watcher_dies_with_scope");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_capture_no_leak_integration() {
+    let executable = compile_program("tests/programs/phase10a/array_capture_no_leak.hl")
+        .expect("Failed to compile array_capture_no_leak.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/array_capture_no_leak.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_capture_no_leak");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
