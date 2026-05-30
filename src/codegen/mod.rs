@@ -2067,6 +2067,39 @@ impl CodeGenerator {
             }
 
             // Normal assignment (no watchers)
+            // Phase 11a: Release old value for heap-owned variables on reassignment
+            if assign_stmt.op == AssignOpKind::Assign {
+                if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
+                    if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
+                        // Release old value before assignment, mirroring array reassignment pattern
+                        let c_var_name = self.mangle_variable_name(var_name);
+                        match heap_type {
+                            HeapType::Array => {
+                                self.output.push_str(&format!("  hl_array_release({});\n", c_var_name));
+                            },
+                            HeapType::Object => {
+                                self.output.push_str(&format!("  hl_object_release({});\n", c_var_name));
+                            },
+                            HeapType::Function => {
+                                self.output.push_str(&format!("  hl_function_release({});\n", c_var_name));
+                            },
+                            HeapType::Unknown => {
+                                self.output.push_str(&format!("  hl_unknown_release({});\n", c_var_name));
+                            },
+                            HeapType::Watcher => {
+                                self.output.push_str(&format!("  hl_watcher_release({});\n", c_var_name));
+                            },
+                            HeapType::Optional => {
+                                self.output.push_str(&format!("  hl_optional_release({});\n", c_var_name));
+                            },
+                            _ => {
+                                // Environment and FStringBuffer use free() - handled in scope cleanup
+                            }
+                        }
+                    }
+                }
+            }
+
             self.generate_expression(&assign_stmt.target, type_checker)?;
 
             let op_str = match assign_stmt.op {
