@@ -6,6 +6,16 @@ Most recent first. Each entry: date, phase, commit, headline, key points.
 
 ---
 
+### 2026-05-29 (Friday) — Phase 10a-stealth complete; watcher closure-capture bug discovered
+
+- Commit: fba33d3 (stealth blocks)
+- Tests: 211 → 218 integration (+7 stealth tests)
+- Stealth blocks implemented closing Phase 10a's last piece. Global hl_stealth_depth counter in runtime.c; 9 firing sites (8 array in runtime + 1 scalar emitted from codegen) check the counter and skip firing when non-zero. Dynamic semantics: functions called from inside stealth see the elevated counter. Counter is plain global for now (single-threaded); thread-local in Phase 10b. Early return inside stealth REJECTED as compile error (lift in follow-on). Nested stealth supported. Object/array stealth verified leak-free (suppression doesn't disturb refcounts).
+- Independently verified beyond CC's 7 integration tests: canonical scalar (watcher fires exactly once for outside-stealth write), counter restoration over two consecutive stealth blocks (post-stealth writes both fire normally), object-array stealth with leak check (suppression + refcount intact).
+- BUG FOUND (pre-existing, NOT from this work, NOT yet fixed): watcher bodies cannot reference outer-scope variables OTHER than the watched variable itself. Both reading and writing such variables fail at C compile time with "undeclared identifier" because the watcher body is emitted as a C function (e.g. `hilow_watcher_expr_0_body`) and references to other captured variables don't get translated into closure-environment access. Surfaced during stealth verification when probing the "stealth inside a watcher body" case (which I'd correctly anticipated needed testing) — but the bug exists with or without stealth.
+- See STATUS Known Bugs entry. Deferred to fresh-attention session — closure-capture work is subtle codegen.
+- Methodology lesson reinforced: independent probing of edge cases surfaces latent bugs neither party is hunting for. This is the third such bug this week (Phase 8a heap_owners scope, type-ascription leak tracking, now watcher capture). Pattern: each surfaced not by debugging a known issue, but by writing a verification probe that happened to exercise an untested path.
+
 ### 2026-05-27 (Wednesday) — Type ascription operator + leak fix; nested-function-array-return bug found
 
 - Commits: e372556 (type ascription operator), a4a3a35 (leak fix)

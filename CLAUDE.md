@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Nested-function array-return bug fix**
+**Current phase: Phase 10a complete (Watch System + Stealth)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

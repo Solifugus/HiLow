@@ -6,12 +6,13 @@
 
 ## Current state
 
-Phase: Nested-function array-return bug FIXED.
-Status: `expr : Type` type ascription added (tight postfix, compile-time assertion, no coercion). Empty typed array literals `let xs = []: [i32]` build arrays from empty, leak-free. Old `let x: [i32] = []` form retained. Nested-function array-return bug FIXED: heap_owners save/restore at function boundaries prevents callee's locals from polluting caller's scope-cleanup.
+Phase: Phase 10a complete (Watch System + Stealth). 
+Status: All watcher modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. Stealth blocks (`stealth { ... }`) suppress watcher firing dynamically across function calls. Counter is plain global; thread-local when Phase 10b lands.
+KNOWN BUG (pre-existing, deferred): watcher bodies cannot reference outer-scope variables other than the watched variable — see Known Bugs.
 Branch: main
-Last commit: Fix nested-function array-return: save/restore heap_owners at function boundary
+Last commit: Phase 10a-stealth: stealth blocks suppress watcher firing (closes 10a)
 
-Tests: 211 integration, 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites — all passing.
+Tests: 218 integration, 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites — all passing.
 
 ---
 
@@ -35,6 +36,25 @@ Tests: 211 integration, 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 re
 
 ### Known Bugs
 
+- **Watcher bodies can't reference outer-scope variables other than the watched variable** (pre-existing, found 2026-05-29, NOT yet fixed): a watcher body is emitted as a C function (e.g. `hilow_watcher_expr_0_body`); references to outer-scope variables that aren't the watched variable produce C compile errors ("identifier undeclared"). Affects both reading and writing such variables.
+  - Repro (reading):
+    ```
+    high program(): i32 {
+        let x = 0
+        let y = 42
+        let w = watcher((changed)x) {
+            print(y)   // C compile error: 'y' undeclared
+        }
+        x = 1
+        return 0
+    }
+    ```
+  - Same shape fails for `y = 5;` inside the body (writing).
+  - Surfaced during stealth verification when probing "stealth inside a watcher body" — but the bug exists with or without stealth (stealth never executes because the program fails to compile).
+  - Root cause hypothesis: the watcher body codegen emits the watched variable as a parameter to the body function, but does NOT establish a closure-environment for other captured variables. Function closures (FunctionExpr) likely already have machinery for capturing outer-scope vars via an environment struct (see Phase 7c-δ and FunctionExprContext::LetInitializer in generate_let_statement); watcher bodies need analogous machinery, or to reuse it directly.
+  - Workaround for now: have watcher bodies only reference the watched variable. To affect other state, factor through a function call that receives needed state as parameters (though this may have its own issues depending on how function-from-watcher-body interacts with the watcher firing context — untested).
+  - Fix deferred to a focused fresh session — closure-capture is subtle codegen, same family as the heap_owners scope fix (which was deferred for the same reasons and addressed cleanly with fresh attention).
+
 ---
 
 ## Active deferred work
@@ -57,7 +77,9 @@ Still pending — arrays of functions / optionals / watchers / tuples.
 
 Still pending — array niceties: fixed arrays [T;N], empty typed literals (let xs: [i32] = []), bounds-check graceful handling, equality, slicing, concatenation, comprehensions, value-only for-in syntax (for (let x in arr) — future lightweight revision).
 
-### Phase 10 watcher system (in progress)
+Phase 10 — Watch System. Phase 10a COMPLETE (watchers + stealth). Phase 10b (Async and Shared) — design captured in docs/concurrency-design.md (significant redesign vs. original plan: watcher-integrated structured concurrency with explicit write-capability lists; see design doc). NOT YET implemented.
+
+Note: Phase 10a's "completion" is qualified by the watcher-body closure-capture bug above — the watcher SYSTEM is implemented across all modifiers and all mutation sites, but watcher bodies have a closure-capture limitation that should be addressed before any program relying on watcher bodies accessing surrounding state can be written.
 
 **Resolved (Phases 10-α through 10-δ-γ-fixup):** Declaration-form and expression-form watchers both work end-to-end. Watching numeric/bool primitives with `(changed)` and `(assigned)` modifiers; the four methods (`.pause`/`.resume`/`.end`/`.isActive`); nested watcher declarations with scope-bounded activation; heap-allocated watcher values; the factory pattern (returning watchers from functions) with compile-time reachability checking.
 
@@ -68,11 +90,11 @@ Phase 10-ε — COMPLETE. The collection-mutation watcher system is fully implem
 - 10-ε-γ (moved): ac5af58 — .move fires moved with a (from,to) delta; alias binds Tuple(Usize,Usize).
 All six modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. moved deltas come only from .move (the single-element reorder primitive); bulk reorders (.reverse/.swap/.sort) and their moved-reporting are deferred.
 
-**Still pending — Phase 10-ζ:** Cross-process watchers via `shared` variables.
+Phase 10a-stealth — COMPLETE. Stealth blocks (`stealth { }`) suppress watcher firing dynamically. Global hl_stealth_depth counter checked at 9 firing sites. Thread-local counter deferred to Phase 10b.
+
+**Still pending — Phase 10b:** Cross-process watchers via `shared` variables, structured concurrency.
 
 **Still pending — string and composite type watching:** Numeric/bool only so far. Strings and composite types need their own equality semantics design.
-
-**Still pending — stealth blocks:** `stealth { }` construct that suppresses watcher firing within a region.
 
 ### Other deferred behavior
 
@@ -232,6 +254,9 @@ A fix may need to ripple beyond its stated scope to be correct. Occurrence: the 
 
 ### Fix-pattern precedent in-codebase
 When a bug class has a precise precedent fix already in the codebase, the safe path is to mirror it idiom-for-idiom rather than design a fresh approach. Occurrence: nested-function-array-return bug (2026-05-28) — heap_owners (HashMap<String, (HeapType, usize)>, name-keyed like transferred_vars) was not save/restored at function boundaries, causing scope pollution. The exact same pattern was already solved for transferred_vars in Phase 10-δ-γ-fixup with std::mem::take/restore around the function body. Mirroring that fix idiom-for-idiom solved the heap_owners variant immediately. Reduces design risk, makes intent obvious in the diff, and the explanatory comment can reference the precedent directly.
+
+### Independent probing surfaces latent bugs (pattern, not anomaly)
+Multiple times this week, a verification probe written to test a specific change has surfaced a latent pre-existing bug in machinery the probe happened to exercise. Examples: (1) Phase 8a heap_owners scope bug surfaced by probing type-ascription with nested-function-returned arrays; (2) ascription leak tracking bug found by reading the pasted exit code rather than the prose; (3) watcher closure-capture bug found by probing "stealth inside a watcher body." Each surfaced not by debugging a known issue but by writing a probe that exercised an untested code path. The pattern: well-designed verification probes are MORE valuable than confirming-the-claim probes, because they exercise the neighborhood of the change rather than just the change itself. This is now the third such instance — treat it as the norm, not the exception. Future verification should EXPLICITLY include "probes the change *didn't* touch but that share machinery with what it did."
 
 ---
 
