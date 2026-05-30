@@ -15,6 +15,8 @@ struct WatcherSubscription {
     /// values to the body when this variable triggers it).
     /// Variable name → C identifier the body expects.
     all_subscriptions: Vec<(String, String)>,
+    /// Phase 10a: Captured variables for scalar watchers (passed as &var arguments)
+    captured_vars: Vec<String>,
 }
 
 /// Phase 10-δ-β: Subscription information for heap-allocated watchers
@@ -29,6 +31,8 @@ struct HeapWatcherSubscription {
     /// All subscribed variable names for this watcher, in declaration order
     /// (used to build the arg list for the body call)
     all_subscriptions: Vec<String>,
+    /// Phase 10a: Captured variables for expression watchers (passed as &var for scalar, env for array)
+    captured_vars: Vec<String>,
 }
 
 /// Types of heap allocations for ownership tracking (Phase 8a)
@@ -151,6 +155,10 @@ pub struct CodeGenerator {
     temp_watcher_expr_body_fn: Option<String>,
     /// Phase 10-δ-β: temporary storage for WatcherExpr subscriptions during generation
     temp_watcher_expr_subscriptions: Vec<Subscription>,
+    /// Phase 10a: temporary storage for WatcherExpr captured variables during generation
+    temp_watcher_expr_captured_vars: Vec<String>,
+    /// Phase 10a: tracks captured variables in scalar watchers for pointer-dereference access
+    scalar_watcher_captures: HashSet<String>,
 }
 
 impl CodeGenerator {
@@ -187,6 +195,8 @@ impl CodeGenerator {
             heap_watcher_subscribers: HashMap::new(),
             temp_watcher_expr_body_fn: None,
             temp_watcher_expr_subscriptions: Vec::new(),
+            temp_watcher_expr_captured_vars: Vec::new(),
+            scalar_watcher_captures: HashSet::new(),
         }
     }
 
@@ -1051,9 +1061,10 @@ impl CodeGenerator {
                     self.track_heap_owner(name, HeapType::Watcher);
 
                     // Phase 10-δ-β/10-ε-α: Register heap watcher subscriptions
-                    if let (Some(body_fn_name), subscriptions) = (
+                    if let (Some(body_fn_name), subscriptions, captured_vars) = (
                         self.temp_watcher_expr_body_fn.take(),
-                        std::mem::take(&mut self.temp_watcher_expr_subscriptions)
+                        std::mem::take(&mut self.temp_watcher_expr_subscriptions),
+                        std::mem::take(&mut self.temp_watcher_expr_captured_vars)
                     ) {
                         let c_var_name = self.mangle_variable_name(name);
 
@@ -1098,6 +1109,7 @@ impl CodeGenerator {
                                         body_fn_name: body_fn_name.clone(),
                                         modifier: subscription.modifier.clone(),
                                         all_subscriptions: all_subscriptions.clone(),
+                                        captured_vars: captured_vars.clone(),
                                     });
                             }
                         }
@@ -1809,12 +1821,12 @@ impl CodeGenerator {
                                     if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
                                         self.output.push_str(&format!("            if (hilow_watcher_{}_active) {{\n", watcher_id));
                                         self.output.push_str(&format!("                {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
                                         self.output.push_str(");\n");
                                         self.output.push_str("            }\n");
                                     } else {
                                         self.output.push_str(&format!("            {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
                                         self.output.push_str(");\n");
                                     }
                                 }
@@ -1828,7 +1840,7 @@ impl CodeGenerator {
                                         heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
                                     ));
                                     self.output.push_str(&format!("                {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions, &heap_sub.captured_vars)?;
                                     self.output.push_str(");\n");
                                     self.output.push_str("            }\n");
                                 }
@@ -1842,12 +1854,12 @@ impl CodeGenerator {
                                     if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
                                         self.output.push_str(&format!("        if (hilow_watcher_{}_active) {{\n", watcher_id));
                                         self.output.push_str(&format!("            {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
                                         self.output.push_str(");\n");
                                         self.output.push_str("        }\n");
                                     } else {
                                         self.output.push_str(&format!("        {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
                                         self.output.push_str(");\n");
                                     }
                                 }
@@ -1860,7 +1872,7 @@ impl CodeGenerator {
                                         heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
                                     ));
                                     self.output.push_str(&format!("            {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions, &heap_sub.captured_vars)?;
                                     self.output.push_str(");\n");
                                     self.output.push_str("        }\n");
                                 }
@@ -1882,12 +1894,12 @@ impl CodeGenerator {
                                     if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
                                         self.output.push_str(&format!("    if (hilow_watcher_{}_active) {{\n", watcher_id));
                                         self.output.push_str(&format!("      {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
                                         self.output.push_str(");\n");
                                         self.output.push_str("    }\n");
                                     } else {
                                         self.output.push_str(&format!("    {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions)?;
+                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
                                         self.output.push_str(");\n");
                                     }
                                 }
@@ -1901,7 +1913,7 @@ impl CodeGenerator {
                                         heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
                                     ));
                                     self.output.push_str(&format!("      {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions)?;
+                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions, &heap_sub.captured_vars)?;
                                     self.output.push_str(");\n");
                                     self.output.push_str("    }\n");
                                 }
@@ -2038,6 +2050,17 @@ impl CodeGenerator {
                         self.emit_refined_variable_access(name, &types_refined);
                     } else {
                         self.output.push_str(name);
+                    }
+                } else if self.scalar_watcher_captures.contains(name) {
+                    // Phase 10a: Captured variable in scalar watcher - use pointer dereference
+                    if let Some(ref refined) = refined_type {
+                        // If the variable is narrowed, emit unwrap for the refined type
+                        let types_refined = Type::from_ast_type(refined);
+                        // Note: For captures, we need to dereference first then apply refinements
+                        // This is a simplified approach - may need refinement
+                        self.output.push_str(&format!("(*_cap_{})", name));
+                    } else {
+                        self.output.push_str(&format!("(*_cap_{})", name));
                     }
                 } else {
                     // Normal variable reference
@@ -2233,7 +2256,7 @@ impl CodeGenerator {
                     let param_name = &first_subscription.variable_name;
                     self.watcher_bodies.push_str(&format!("HiLowArray* {}, void* delta", param_name));
                 } else {
-                    // Scalar watcher: existing logic
+                    // Scalar watcher: watched variables as value parameters
                     for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
                         if i > 0 {
                             self.watcher_bodies.push_str(", ");
@@ -2247,6 +2270,16 @@ impl CodeGenerator {
                             let c_type = self.ast_type_to_c(var_type);
                             self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
                         }
+                    }
+
+                    // Phase 10a: Add captured variables as pointer parameters for by-reference access
+                    let captures = watcher_expr.captures.borrow();
+                    for (i, (var_name, ast_type, _pos)) in captures.iter().enumerate() {
+                        if !watcher_expr.subscriptions.is_empty() || i > 0 {
+                            self.watcher_bodies.push_str(", ");
+                        }
+                        let c_type = self.ast_type_to_c(ast_type);
+                        self.watcher_bodies.push_str(&format!("{}* _cap_{}", c_type, var_name));
                     }
                 }
 
@@ -2312,7 +2345,7 @@ impl CodeGenerator {
                         }
                     }
                 } else {
-                    // Scalar watcher: existing logic
+                    // Scalar watcher: watched variables as value parameters
                     for subscription in &watcher_expr.subscriptions {
                         let var_name = &subscription.variable_name;
                         let param_name = subscription.alias.as_ref().unwrap_or(var_name);
@@ -2323,12 +2356,24 @@ impl CodeGenerator {
                             self.variable_types.insert(param_name.clone(), types_var_type);
                         }
                     }
+
+                    // Phase 10a: Add captured variables as pointer-dereferenced variables
+                    let captures = watcher_expr.captures.borrow();
+                    for (var_name, ast_type, _pos) in captures.iter() {
+                        // Add captured variable type to variable_types
+                        let hilow_type = Type::from_ast_type(ast_type);
+                        self.variable_types.insert(var_name.clone(), hilow_type);
+
+                        // Mark this variable as captured for special access handling
+                        self.scalar_watcher_captures.insert(var_name.clone());
+                    }
                 }
 
                 self.generate_block(&watcher_expr.body, type_checker)?;
 
-                // Restore original variable_types
+                // Restore original variable_types and clear capture tracking
                 self.variable_types = old_variable_types;
+                self.scalar_watcher_captures.clear();
 
                 self.watcher_bodies.push_str(&self.output);
                 self.watcher_bodies.push_str("}\n\n");
@@ -2337,9 +2382,15 @@ impl CodeGenerator {
                 self.output = saved_output;
                 self.output.push_str("hl_watcher_new()");
 
-                // Store function name and subscriptions for let statement to register
+                // Store function name, subscriptions, and captures for let statement to register
                 self.temp_watcher_expr_body_fn = Some(body_fn_name);
                 self.temp_watcher_expr_subscriptions = watcher_expr.subscriptions.clone();
+
+                // Phase 10a: Store captured variables
+                let captures = watcher_expr.captures.borrow();
+                self.temp_watcher_expr_captured_vars = captures.iter()
+                    .map(|(var_name, _ast_type, _pos)| var_name.clone())
+                    .collect();
             }
             Expression::ArrayLit(elements, _) => {
                 // Infer element type from first element
@@ -6049,6 +6100,7 @@ impl CodeGenerator {
                 fn_name: func_name.clone(),
                 modifier: subscription.modifier.clone(),
                 all_subscriptions: all_subscriptions.clone(),
+                captured_vars: Vec::new(), // Phase 10a: Declared watchers don't have captures yet
             };
 
             self.watcher_subscribers
@@ -6060,22 +6112,38 @@ impl CodeGenerator {
 
     /// Phase 10-γ: Emit arguments for a watcher function call (current values of all subscribed variables)
     /// Phase 10-δ-β: Emit arguments for heap watcher body calls from variable names
-    fn emit_watcher_call_args_from_names(&mut self, var_names: &[String]) -> Result<(), CodegenError> {
+    fn emit_watcher_call_args_from_names(&mut self, var_names: &[String], captured_vars: &[String]) -> Result<(), CodegenError> {
         for (i, var_name) in var_names.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
             }
             self.output.push_str(var_name);
         }
+
+        // Phase 10a: Add captured variables as &var arguments for scalar watchers
+        for (i, var_name) in captured_vars.iter().enumerate() {
+            if !var_names.is_empty() || i > 0 {
+                self.output.push_str(", ");
+            }
+            self.output.push_str(&format!("&{}", self.mangle_variable_name(var_name)));
+        }
         Ok(())
     }
 
-    fn emit_watcher_call_args(&mut self, all_subscriptions: &[(String, String)]) -> Result<(), CodegenError> {
+    fn emit_watcher_call_args(&mut self, all_subscriptions: &[(String, String)], captured_vars: &[String]) -> Result<(), CodegenError> {
         for (i, (var_name, _param_name)) in all_subscriptions.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
             }
             self.output.push_str(var_name);
+        }
+
+        // Phase 10a: Add captured variables as &var arguments for scalar watchers
+        for (i, var_name) in captured_vars.iter().enumerate() {
+            if !all_subscriptions.is_empty() || i > 0 {
+                self.output.push_str(", ");
+            }
+            self.output.push_str(&format!("&{}", self.mangle_variable_name(var_name)));
         }
         Ok(())
     }

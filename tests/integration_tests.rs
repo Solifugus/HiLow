@@ -4268,3 +4268,79 @@ fn test_stealth_leak_check() {
     let _ = fs::remove_file(&executable);
 }
 
+#[test]
+fn test_scalar_watcher_capture_read_integration() {
+    let executable = compile_program("tests/programs/phase10a/scalar_capture_read.hl")
+        .expect("Failed to compile scalar_capture_read.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/scalar_capture_read.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run scalar_capture_read");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_scalar_watcher_capture_write_integration() {
+    let executable = compile_program("tests/programs/phase10a/scalar_capture_write.hl")
+        .expect("Failed to compile scalar_capture_write.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/scalar_capture_write.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run scalar_capture_write");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_by_reference_sees_current_integration() {
+    let executable = compile_program("tests/programs/phase10a/by_reference_sees_current.hl")
+        .expect("Failed to compile by_reference_sees_current.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/by_reference_sees_current.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run by_reference_sees_current");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_multiple_captures_integration() {
+    let executable = compile_program("tests/programs/phase10a/multiple_captures.hl")
+        .expect("Failed to compile multiple_captures.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/multiple_captures.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run multiple_captures");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+

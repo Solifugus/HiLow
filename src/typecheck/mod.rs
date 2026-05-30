@@ -3007,11 +3007,28 @@ impl TypeChecker {
     }
 
     fn check_watcher_expression(&mut self, watcher_expr: &WatcherExpr) -> Type {
+        // Record the scope depth before entering the watcher - variables from outer scopes are captures
+        let outer_scope_depth = self.scopes.len();
+
         self.enter_scope();
 
         for sub in &watcher_expr.subscriptions {
             self.check_subscription_and_bind(sub, &watcher_expr.position);
         }
+
+        // Phase 10a: Collect capture metadata before checking for errors
+        let mut captures = Vec::new();
+        for statement in watcher_expr.body.statements_iter() {
+            self.collect_captures_in_statement(statement, outer_scope_depth, &mut captures);
+        }
+
+        // Convert from types::Type to ast::Type for storage in AST
+        let ast_captures: Vec<(String, ast::Type, Position)> = captures.iter()
+            .map(|(name, ty, pos)| (name.clone(), ty.to_ast_type(), pos.clone()))
+            .collect();
+
+        // Store captures in the AST node (using RefCell for interior mutability)
+        watcher_expr.captures.borrow_mut().clone_from(&ast_captures);
 
         self.check_block(&watcher_expr.body);
         self.check_no_return_with_value(&watcher_expr.body, watcher_expr.position.clone());
@@ -3189,9 +3206,9 @@ impl TypeChecker {
             Expression::TypeAscription(inner, _, _) => {
                 self.check_for_captures_in_expression(inner, outer_scope_depth);
             }
-            Expression::WatcherExpr(_) => {
-                // Watcher expressions are not yet implemented in Phase 10-α
-                // Skip capture checking
+            Expression::WatcherExpr(watcher_expr) => {
+                // Phase 10a: Watcher expressions get their own capture check
+                self.check_watcher_expression(watcher_expr);
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |
@@ -3383,9 +3400,9 @@ impl TypeChecker {
             Expression::TypeAscription(inner, _, _) => {
                 self.collect_captures_in_expression(inner, outer_scope_depth, captures);
             }
-            Expression::WatcherExpr(_) => {
-                // Watcher expressions are not yet implemented in Phase 10-α
-                // Skip capture collection
+            Expression::WatcherExpr(watcher_expr) => {
+                // Phase 10a: Watcher expressions get their own capture check
+                self.check_watcher_expression(watcher_expr);
             }
             // Literal expressions don't contain variable references
             Expression::IntLit(_, _) | Expression::FloatLit(_, _) | Expression::DurationLit(_, _, _) |

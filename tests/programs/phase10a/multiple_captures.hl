@@ -1,0 +1,11 @@
+high program(): i32 {
+    let x = 0
+    let y = 42
+    let z = 7
+    let w = watcher((changed)x) {
+        print(y)
+        print(z)
+    }
+    x = 1
+    return 0
+}
