@@ -627,14 +627,33 @@ impl CodeGenerator {
         // Same family as the transferred_vars fix above.
         let saved_heap_owners = std::mem::take(&mut self.heap_owners);
 
-        // Watcher subscribers are also local to a function. Without this save/restore, a nested
-        // function's watchers pollute the caller's watcher_subscribers maps, so the nested
-        // function's assignments fire both the nested and caller watchers (cross-scope leak).
-        // Same family as the transferred_vars/heap_owners fix above.
-        // NOTE: This prevents watcher factory patterns that register watchers for outer-scope
-        // variables within inner functions. Such patterns may need redesign.
-        let saved_watcher_subscribers = std::mem::take(&mut self.watcher_subscribers);
-        let saved_heap_watcher_subscribers = std::mem::take(&mut self.heap_watcher_subscribers);
+        // Watcher subscribers: use surgical masking to prevent cross-scope leaks while allowing
+        // in-function watchers to fire. Collect names declared locally in this function (params + locals),
+        // then save and remove only those shadowed names from inherited subscriber maps.
+        let mut local_names = std::collections::HashSet::new();
+
+        // Function parameters are local names
+        for param in &function.params {
+            local_names.insert(param.name.clone());
+        }
+
+        // Variables declared in function body are also local names
+        if let Some(body) = &function.body {
+            let body_locals = self.collect_local_variable_names(&body.items);
+            local_names.extend(body_locals);
+        }
+
+        // Save and remove entries for shadowed names only
+        let mut saved_shadowed_subscribers = HashMap::new();
+        let mut saved_shadowed_heap_subscribers = HashMap::new();
+        for name in &local_names {
+            if let Some(entry) = self.watcher_subscribers.remove(name) {
+                saved_shadowed_subscribers.insert(name.clone(), entry);
+            }
+            if let Some(entry) = self.heap_watcher_subscribers.remove(name) {
+                saved_shadowed_heap_subscribers.insert(name.clone(), entry);
+            }
+        }
 
         // Generate function body
         if let Some(body) = &function.body {
@@ -645,9 +664,20 @@ impl CodeGenerator {
         self.transferred_vars = saved_transferred;
         // Restore caller's heap-ownership state
         self.heap_owners = saved_heap_owners;
-        // Restore caller's watcher-subscriber state
-        self.watcher_subscribers = saved_watcher_subscribers;
-        self.heap_watcher_subscribers = saved_heap_watcher_subscribers;
+        // Restore caller's watcher-subscriber state: put back shadowed entries and remove
+        // any local entries to prevent outward leakage
+        for name in &local_names {
+            // Remove any local entries added during function execution
+            self.watcher_subscribers.remove(name);
+            self.heap_watcher_subscribers.remove(name);
+        }
+        // Restore the shadowed entries we saved earlier
+        for (name, entry) in saved_shadowed_subscribers {
+            self.watcher_subscribers.insert(name, entry);
+        }
+        for (name, entry) in saved_shadowed_heap_subscribers {
+            self.heap_watcher_subscribers.insert(name, entry);
+        }
 
         // Clear function return type context
         self.current_function_return_type = None;
@@ -6184,12 +6214,8 @@ impl CodeGenerator {
                 for param in &func.params {
                     local_vars.insert(param.name.clone());
                 }
-                // Recursively collect from function body
-                if let Some(body) = &func.body {
-                    for body_item in &body.items {
-                        self.collect_local_vars_from_block_item(body_item, local_vars);
-                    }
-                }
+                // Do NOT descend into nested function bodies - their locals belong to their own scope
+                // A nested function declaration contributes no variables to the current scope
             }
             Watcher(_) => {
                 // Watchers don't declare variables by themselves

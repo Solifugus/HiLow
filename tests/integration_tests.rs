@@ -2848,6 +2848,26 @@ fn test_watcher_factory_with_methods() {
 }
 
 #[test]
+fn test_three_level_shadow_probe() {
+    let executable = compile_program("tests/programs/phase10a/three_level_shadow_probe.hl")
+        .expect("Failed to compile three level shadow probe test");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run three level shadow probe test");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+
+    let expected = fs::read_to_string("tests/expected/phase10a/three_level_shadow_probe.expected.txt")
+        .expect("Failed to read expected output");
+
+    assert_eq!(stdout.trim(), expected.trim());
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
 fn test_watcher_escape_function_local_rejected() {
     let result = compile_program("tests/programs/watcher/escape_function_local_rejected/main.hl");
 
@@ -4335,6 +4355,63 @@ fn test_multiple_captures_integration() {
 
     let (stdout, stderr, exit_code) = run_program(&executable)
         .expect("Failed to run multiple_captures");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_same_name_caller_callee_integration() {
+    let executable = compile_program("tests/programs/phase10a/same_name_caller_callee.hl")
+        .expect("Failed to compile same_name_caller_callee.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/same_name_caller_callee.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run same_name_caller_callee");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_nested_watchers_integration() {
+    let executable = compile_program("tests/programs/phase10a/nested_watchers.hl")
+        .expect("Failed to compile nested_watchers.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/nested_watchers.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run nested_watchers");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected");
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    // Clean up
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_no_capture_regression_integration() {
+    let executable = compile_program("tests/programs/phase10a/no_capture_regression.hl")
+        .expect("Failed to compile no_capture_regression.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/phase10a/no_capture_regression.expected.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run no_capture_regression");
 
     assert_eq!(exit_code, 0, "Program should exit with code 0");
     assert!(stderr.is_empty(), "No stderr output expected");

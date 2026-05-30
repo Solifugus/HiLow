@@ -1,0 +1,9 @@
+high program(): i32 {
+    let x = 0
+    let y = 10
+    let z = 20
+    let w1 = watcher((changed)x) { print(y) }
+    let w2 = watcher((changed)x) { print(z) }
+    x = 1
+    return 0
+}
