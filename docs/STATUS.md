@@ -9,7 +9,7 @@
 Phase: Phase 11a managed strings sub-phase 1 CORE complete (named-string lifetime valgrind-clean) — expression-temporary cleanup DEFERRED, BLOCKS sub-phase 2
 Status: Core managed string lifetime is valgrind-clean (literals, scope cleanup, reassignment old-value release). String literals, bytelength, indexing, equality (?=), concatenation (+), and reassignment all functional. String reassignment now properly releases old buffer before assignment, mirroring array reassignment pattern.
 Branch: main  
-Last commit: Phase 11a managed strings sub-phase 1 COMPLETE: fixed string reassignment old-value leak
+Last commit: Phase 11a managed strings sub-phase 1 CORE complete (reassignment leak fixed); expression temporaries deferred, block sub-phase 2
 
 Tests: 232 integration (many failing on unrelated compile issues), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites. Core string lifetime tests valgrind-clean.
 
