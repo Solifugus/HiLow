@@ -6,16 +6,18 @@
 
 ## Current state
 
-Phase: Phase 10a complete (Watch System + Stealth + Closure Capture). 
-Status: All watcher modifiers (changed/assigned/deep/added/removed/moved) work for scalar and array (primitive/object/nested) targets. Stealth blocks (`stealth { ... }`) suppress watcher firing dynamically across function calls. Cross-scope watcher firing leak fixed with surgical shadow masking. Array watcher closure-capture implemented with by-reference semantics via environment structs. Array watcher lifetime use-after-free fixed with proper unregister-before-free.
-Branch: main
-Last commit: Fix array watcher use-after-free on scope death
+Phase: Phase 11a managed strings sub-phase 1 CORE complete (named-string lifetime valgrind-clean) — expression-temporary cleanup DEFERRED, BLOCKS sub-phase 2
+Status: Core managed string lifetime is valgrind-clean (literals, scope cleanup, reassignment old-value release). String literals, bytelength, indexing, equality (?=), concatenation (+), and reassignment all functional. String reassignment now properly releases old buffer before assignment, mirroring array reassignment pattern.
+Branch: main  
+Last commit: Phase 11a managed strings sub-phase 1 COMPLETE: fixed string reassignment old-value leak
 
-Tests: 232 integration (all passing), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites. Valgrind-clean lifetime verification.
+Tests: 232 integration (many failing on unrelated compile issues), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites. Core string lifetime tests valgrind-clean.
 
 ---
 
 ## Recent sessions
+
+**2026-05-30 Managed Strings Sub-phase 1 COMPLETE: string reassignment old-value release fixed**: Fixed critical memory leak in string variable reassignment where old buffer wasn't released before assigning new value. Root cause: assignment logic at lines 2069-2083 in codegen did simple `target = value` without old-value cleanup, while scope cleanup properly called `hl_array_release`. Solution: added old-value release logic before assignment for heap-owned variables, mirroring array reassignment pattern. Now `let s = "a"; s = "bb"` properly releases the `"a"` buffer. Valgrind results: string_reassign.hl now 0 leaks (was 64+1 bytes), string_scope_lifetime.hl stays 0 leaks (regression test). Expression temporaries still leak correctly as expected: string_concat.hl 128 bytes/2 blocks, string_equality.hl multiple blocks - these are unbound operands needing general temporary-cleanup design, properly deferred. Core string lifetime (literals, scope, reassignment) now valgrind-clean. Sub-phase 1 substrate complete.
 
 **2026-05-30 Managed Strings Sub-phase 1 PROGRESS (core functional, memory cleanup pending)**: Resumed from WIP commit dfde306 and completed core string functionality. Implemented string equality (?=/!=) by fixing test to use correct HiLow operators, string concatenation (+) by fixing type inference in codegen for BinaryOp expressions, and string indexing (s[i]→u8) by adding Type::String→Type::U8 mapping in infer_expression_type_for_codegen. Added heap ownership tracking for string concatenation results. Fixed string literal test syntax (function scoping). All core operations functionally correct: string_literal_basic, string_bytelength, string_index_byte pass; equality/concat produce correct output. However, memory leaks remain: temporary string literals in expressions not cleaned up (not assigned to variables), causing valgrind failures. Progress: allocated N freed 0→1 (partial cleanup working). Architecture confirmed: strings as tagged HiLowArray<u8> with inherited array allocation/cleanup. Runtime helpers: hl_string_eq/ne/concat, print_string. Need temporary literal cleanup mechanism for full valgrind-clean completion. Test status: 3/7 string tests pass, others fail on memory leak exit codes.
 
@@ -37,7 +39,7 @@ Tests: 232 integration (all passing), 68 parser, 28 typecheck_module, 62 typeche
 
 ## Open questions
 
-**String temporary cleanup strategy** (Managed Strings Sub-phase 1): Current implementation leaks temporary string literals used in expressions (not assigned to variables). Need mechanism to track and cleanup temporaries like `"foo"` and `"bar"` in `print("foo" ?= "bar")`. Options: (1) Expression-level cleanup tracking, (2) Stack-allocated temporaries instead of heap, (3) Reference counting for literals. Choice affects complexity vs. performance trade-offs.
+**Expression temporary cleanup — unbound heap temporaries in expressions**: String operations like concatenation (+) and equality (?=) leak their operand literals when used in expressions. First instance of expression-internal heap temporaries in HiLow. Needs a general cleanup mechanism (not string-specific). Examples: string_concat.hl leaks 128 bytes in 2 blocks (the `"foo"` and `"bar"` operands), string_equality.hl leaks multiple blocks. This is the next design decision blocking string sub-phase 2.
 
 **Argument type checking at call sites** (general gap, not module-specific): Existing call-arg type checking is incomplete. Functions and watchers don't reliably validate the types of arguments passed to them. Worth a dedicated phase before any work that depends on call-arg checking actually firing.
 
