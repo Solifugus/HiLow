@@ -17,6 +17,8 @@ Tests: 232 integration (all passing), 68 parser, 28 typecheck_module, 62 typeche
 
 ## Recent sessions
 
+**2026-05-30 Managed Strings Sub-phase 1 PROGRESS (core functional, memory cleanup pending)**: Resumed from WIP commit dfde306 and completed core string functionality. Implemented string equality (?=/!=) by fixing test to use correct HiLow operators, string concatenation (+) by fixing type inference in codegen for BinaryOp expressions, and string indexing (s[i]→u8) by adding Type::String→Type::U8 mapping in infer_expression_type_for_codegen. Added heap ownership tracking for string concatenation results. Fixed string literal test syntax (function scoping). All core operations functionally correct: string_literal_basic, string_bytelength, string_index_byte pass; equality/concat produce correct output. However, memory leaks remain: temporary string literals in expressions not cleaned up (not assigned to variables), causing valgrind failures. Progress: allocated N freed 0→1 (partial cleanup working). Architecture confirmed: strings as tagged HiLowArray<u8> with inherited array allocation/cleanup. Runtime helpers: hl_string_eq/ne/concat, print_string. Need temporary literal cleanup mechanism for full valgrind-clean completion. Test status: 3/7 string tests pass, others fail on memory leak exit codes.
+
 **2026-05-30 Fix array watcher use-after-free on scope death**: Fixed critical use-after-free bug in array watchers when declaring scope dies before array. Previously env was freed at scope cleanup but watcher remained in array's watcher list, causing segfault when array fired watchers. Solution: added hl_array_unregister_watcher() runtime function, tracked array watcher registrations in codegen, emitted unregister calls before env free during scope cleanup. Key insight: only unregister when array and watcher are in different scopes to avoid double-free in flat-scope cases. Rewrote array_watcher_dies_with_scope test with real nested-function lifetime structure (was flat no-op), added array_watcher_multiple_fires test. Verified valgrind-clean. Corrected premature "Phase 10a complete" claim from prior commit. Test count: 231→232 integration. This is the FIRST point Phase 10a closure-capture can honestly be called complete.
 
 **2026-05-30 Array watcher closure-capture via env struct**: Implemented array watcher closure-capture using environment struct mechanism adapted from function expressions. Array watchers can now reference outer-scope variables with by-reference semantics (captures see current values at fire-time, not creation-time snapshots). Memory model: env owned by declaring scope, freed at scope exit, no cross-scope transfer. Technical approach: extend hl_array_register_watcher with env parameter, generate array watcher bodies with (void* env, HiLowArray*, void*) signature, differentiated env storage (scalars as pointers for by-reference access, arrays directly for identity capture), update variable access with conditional dereferencing. Fixed C compilation issues with array/scalar storage type mismatches. Integration tests: basic read/write capture, by-reference semantics verification, multiple captures, simplified scope lifetime test, leak verification. Test count: 225→231 integration. PREMATURE completion claim - had use-after-free bug that wasn't tested.
@@ -34,6 +36,8 @@ Tests: 232 integration (all passing), 68 parser, 28 typecheck_module, 62 typeche
 ---
 
 ## Open questions
+
+**String temporary cleanup strategy** (Managed Strings Sub-phase 1): Current implementation leaks temporary string literals used in expressions (not assigned to variables). Need mechanism to track and cleanup temporaries like `"foo"` and `"bar"` in `print("foo" ?= "bar")`. Options: (1) Expression-level cleanup tracking, (2) Stack-allocated temporaries instead of heap, (3) Reference counting for literals. Choice affects complexity vs. performance trade-offs.
 
 **Argument type checking at call sites** (general gap, not module-specific): Existing call-arg type checking is incomplete. Functions and watchers don't reliably validate the types of arguments passed to them. Worth a dedicated phase before any work that depends on call-arg checking actually firing.
 
@@ -292,7 +296,7 @@ Decided 2026-05-30. Level 1 UTF-8.
 - **Mode model**: byte substrate + u32 codepoints + scalar byte indexing is Low-mode-native. High mode adds helpers on the SAME representation. One representation crosses the mode boundary with no conversion.
 
 ### Sub-phase breakdown (each finished + valgrind-verified before next)
-1. Substrate: string-as-tagged-array-of-u8, literals, s[i]->u8, .bytelength, equality, concat. [WIP commit dfde306 partial: literals + bytelength done, indexing wired; equality/concat/verification pending — see resume prompt]
+1. Substrate: string-as-tagged-array-of-u8, literals, s[i]->u8, .bytelength, equality, concat. [PARTIAL commit d9f7268: core functionality working, memory cleanup needed for valgrind-clean completion]
 2. Codepoint layer: .length (codepoint count), .chars/iteration, codepoint_at, from_codepoint/to_string.
 3. Manipulation API: slice, split, trim, replace, case ops, search/contains.
 4. Watcher integration: (changed)s firing on in-place mutation, mirroring array path. Done last (riskiest — watcher lifetime is where bugs hide).
