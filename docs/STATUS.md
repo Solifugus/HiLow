@@ -277,3 +277,22 @@ These items were intentional duplications introduced to keep phase boundaries ad
 - **`docs/CLAUDE.md`** — session-start brief, discipline rules
 - **`docs/hilow-design.md`** — language design specification
 - **`docs/development-plan.md`** — phase-by-phase development plan
+
+## Managed Strings — locked design (Sub-phases 1-4)
+
+Decided 2026-05-30. Level 1 UTF-8.
+
+- **Storage**: a string IS a `HiLowArray<u8>` of UTF-8 bytes with a string type tag. Inherits array allocation, refcounted ownership, scope-death cleanup, and (later) watcher machinery. NO separate HeapType::String, NO parallel allocation path. (Package A.)
+- **Mutable**, array-style (in-place ops grow/modify the buffer).
+- **Indexing**: `s[i]` -> u8 byte, O(1). NOT codepoint indexing.
+- **Codepoints**: represented as `u32`. NO `char` primitive type (Option 2). Codepoint access via explicit helpers (.chars, codepoint_at, iteration), O(n), cost visible at call site. Conversions: from_codepoint / to_string.
+- **Length**: `.length` = codepoint count (sub-phase 2). `.bytelength` = byte count.
+- **API surface** (High-mode ergonomics): slice, split, trim, replace, concat, etc. Helpers on the byte substrate, not a different type.
+- **Watchers**: whole-language (Low mode too). `(changed)s` fires on in-place mutation, array-style. GC-free, codegen-driven — consistent with existing watcher machinery.
+- **Mode model**: byte substrate + u32 codepoints + scalar byte indexing is Low-mode-native. High mode adds helpers on the SAME representation. One representation crosses the mode boundary with no conversion.
+
+### Sub-phase breakdown (each finished + valgrind-verified before next)
+1. Substrate: string-as-tagged-array-of-u8, literals, s[i]->u8, .bytelength, equality, concat. [WIP commit dfde306 partial: literals + bytelength done, indexing wired; equality/concat/verification pending — see resume prompt]
+2. Codepoint layer: .length (codepoint count), .chars/iteration, codepoint_at, from_codepoint/to_string.
+3. Manipulation API: slice, split, trim, replace, case ops, search/contains.
+4. Watcher integration: (changed)s firing on in-place mutation, mirroring array path. Done last (riskiest — watcher lifetime is where bugs hide).
