@@ -2031,3 +2031,47 @@ void hl_array_unregister_watcher(HiLowArray* arr, void* env) {
         current = &(*current)->next;
     }
 }
+
+// String operations (Managed Strings Sub-phase 1)
+bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs) {
+    // Bytewise string comparison
+    if (lhs->length != rhs->length) {
+        return false;
+    }
+
+    // Compare bytes
+    return memcmp(lhs->data, rhs->data, lhs->length) == 0;
+}
+
+bool hl_string_ne(HiLowArray* lhs, HiLowArray* rhs) {
+    return !hl_string_eq(lhs, rhs);
+}
+
+HiLowArray* hl_string_concat(HiLowArray* lhs, HiLowArray* rhs) {
+    // Create new string with combined length
+    size_t new_length = lhs->length + rhs->length;
+    HiLowArray* result = hl_array_new(sizeof(uint8_t), new_length, NULL, NULL);
+
+    // Copy lhs bytes
+    for (size_t i = 0; i < lhs->length; i++) {
+        uint8_t byte = *((uint8_t*)lhs->data + i);
+        hl_array_push(result, &byte);
+    }
+
+    // Copy rhs bytes
+    for (size_t i = 0; i < rhs->length; i++) {
+        uint8_t byte = *((uint8_t*)rhs->data + i);
+        hl_array_push(result, &byte);
+    }
+
+    return result;
+}
+
+void print_string(HiLowArray* str) {
+    // Print the UTF-8 bytes as a null-terminated string
+    for (size_t i = 0; i < str->length; i++) {
+        uint8_t byte = *((uint8_t*)str->data + i);
+        putchar(byte);
+    }
+    putchar('\n');  // Add newline like other print functions
+}

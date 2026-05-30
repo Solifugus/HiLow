@@ -1103,6 +1103,9 @@ impl CodeGenerator {
                 Expression::ArrayLit(_, _) => {
                     self.track_heap_owner(name, HeapType::Array);
                 }
+                Expression::StringLit(_, _) => {
+                    self.track_heap_owner(name, HeapType::Array); // String is HiLowArray<u8>
+                }
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
 
@@ -2079,26 +2082,19 @@ impl CodeGenerator {
                 self.output.push_str(&value.to_string());
             }
             Expression::StringLit(value, _) => {
-                // Emit C string literal with UTF-8 support
-                self.output.push('"');
-                for ch in value.chars() {
-                    match ch {
-                        '"' => self.output.push_str("\\\""),
-                        '\\' => self.output.push_str("\\\\"),
-                        '\n' => self.output.push_str("\\n"),
-                        '\t' => self.output.push_str("\\t"),
-                        '\r' => self.output.push_str("\\r"),
-                        c if (c as u32) < 0x20 && c != '\n' && c != '\t' && c != '\r' => {
-                            // Escape control characters below 0x20 (except \n, \t, \r already handled)
-                            self.output.push_str(&format!("\\x{:02x}", c as u8));
-                        }
-                        c => {
-                            // Emit UTF-8 bytes directly - C99/C11 supports arbitrary bytes in string literals
-                            self.output.push(c);
-                        }
-                    }
+                // String as HiLowArray<u8> - create array with UTF-8 bytes
+                let utf8_bytes = value.as_bytes();
+                let byte_count = utf8_bytes.len();
+
+                // Use GCC statement-expression for inline string construction
+                self.output.push_str(&format!("({{ HiLowArray* __str = hl_array_new(sizeof(uint8_t), {}, NULL, NULL);\n", byte_count));
+
+                // Push each UTF-8 byte
+                for (i, &byte_val) in utf8_bytes.iter().enumerate() {
+                    self.output.push_str(&format!("     uint8_t __b{} = {}; hl_array_push(__str, &__b{});\n", i, byte_val, i));
                 }
-                self.output.push('"');
+
+                self.output.push_str("     __str; })");
             }
             Expression::DurationLit(nanos, _, _) => {
                 // Emit duration as struct initializer
@@ -2211,14 +2207,15 @@ impl CodeGenerator {
                 self.generate_member_access(member_access, type_checker)?;
             }
             Expression::IndexAccess(index_access) => {
-                // Infer element type from the array type
+                // Infer element type from the array or string type
                 let array_type = self.infer_expression_type_for_codegen(&index_access.object);
                 let elem_type = match array_type {
                     Type::DynamicArray(inner) => *inner,
+                    Type::String => Type::U8, // String indexing returns u8 bytes
                     _ => {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: "index access on non-array types".to_string(),
-                            phase: "only arrays supported in Array Phase A".to_string(),
+                            phase: "only arrays and strings supported".to_string(),
                         });
                     }
                 };
@@ -3016,6 +3013,34 @@ impl CodeGenerator {
                 return Ok(());
             }
 
+            // String equality comparisons
+            (Type::String, Type::String, BinaryOpKind::Eq) => {
+                self.output.push_str("hl_string_eq(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+            (Type::String, Type::String, BinaryOpKind::NotEq) => {
+                self.output.push_str("hl_string_ne(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
+            // String concatenation
+            (Type::String, Type::String, BinaryOpKind::Add) => {
+                self.output.push_str("hl_string_concat(");
+                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.output.push_str(", ");
+                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.output.push_str(")");
+                return Ok(());
+            }
+
             _ => {
                 // Fall through to regular binary operation
             }
@@ -3372,7 +3397,7 @@ impl CodeGenerator {
             Type::F32 => "print_f32",
             Type::F64 => "print_f64",
             Type::Bool => "print_bool",
-            Type::String => "print_str",
+            Type::String => "print_string",
             Type::Time => "print_time",
             Type::Duration => "print_duration",
             Type::Money => "print_money",
@@ -3393,7 +3418,7 @@ impl CodeGenerator {
                     Type::F32 => "print_f32",
                     Type::F64 => "print_f64",
                     Type::Bool => "print_bool",
-                    Type::String => "print_str",
+                    Type::String => "print_string",
                     _ => {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: format!("print() for optional type {}", inner_type),
@@ -3602,7 +3627,7 @@ impl CodeGenerator {
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
             Type::Bool => "bool".to_string(),
-            Type::String => "const char*".to_string(),
+            Type::String => "HiLowArray*".to_string(), // String as HiLowArray<u8>
             Type::Usize => "size_t".to_string(),
             Type::Isize => "ssize_t".to_string(),
             Type::Nothing => "void*".to_string(),
@@ -4052,6 +4077,13 @@ impl CodeGenerator {
                         // Arrays have .length property
                         match member_access.member.as_str() {
                             "length" => Type::Usize,
+                            _ => Type::Unknown,
+                        }
+                    }
+                    Type::String => {
+                        // Strings have .bytelength property
+                        match member_access.member.as_str() {
+                            "bytelength" => Type::Usize,
                             _ => Type::Unknown,
                         }
                     }
@@ -5064,6 +5096,24 @@ impl CodeGenerator {
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("unknown array property '{}'", member_access.member),
                         phase: "Array Phase B".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Special case: string properties
+        if let Type::String = &object_type {
+            match member_access.member.as_str() {
+                "bytelength" => {
+                    self.output.push_str("((uint32_t)hl_array_len(");
+                    self.generate_expression(&member_access.object, type_checker)?;
+                    self.output.push_str("))");
+                    return Ok(());
+                }
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("unknown string property '{}'", member_access.member),
+                        phase: "Managed Strings Sub-phase 1".to_string(),
                     });
                 }
             }

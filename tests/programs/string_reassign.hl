@@ -1,0 +1,6 @@
+high program(): i32 {
+  let s = "a"
+  s = "bb"
+  print(s)
+  return 0
+}

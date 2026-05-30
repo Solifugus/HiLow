@@ -1,0 +1,8 @@
+high program(): i32 {
+  print("abc" == "abc")
+  print("abc" == "abd")
+  print("abc" == "ab")
+  print("abc" != "abc")
+  print("abc" != "abd")
+  return 0
+}

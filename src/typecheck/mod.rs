@@ -1315,12 +1315,13 @@ impl TypeChecker {
                     return Type::Unknown;
                 }
 
-                // Check if object is an array
+                // Check if object is an array or string
                 match object_type {
                     Type::DynamicArray(elem_type) => *elem_type,
+                    Type::String => Type::U8, // String indexing returns u8 bytes
                     _ => {
                         self.add_error(
-                            format!("index access is only supported on arrays, found {}", object_type),
+                            format!("index access is only supported on arrays and strings, found {}", object_type),
                             index_access.object.position()
                         );
                         Type::Unknown
@@ -1514,6 +1515,8 @@ impl TypeChecker {
                     (Type::Money, Type::MoneyOf(currency)) | (Type::MoneyOf(currency), Type::Money) => {
                         Type::MoneyOf(currency.clone()) // specific currency takes precedence
                     }
+                    // String concatenation
+                    (Type::String, Type::String) => Type::String,
                     _ => {
                         // Regular numeric addition
                         if !lhs_type.is_numeric() || !rhs_type.is_numeric() {
@@ -2893,6 +2896,19 @@ impl TypeChecker {
                     _ => {
                         self.add_error(
                             format!("Arrays do not have a property named '{}'", member_access.member),
+                            member_access.position.clone()
+                        );
+                        Type::Unknown
+                    }
+                }
+            },
+            Type::String => {
+                // Strings have .bytelength property
+                match member_access.member.as_str() {
+                    "bytelength" => Type::Usize,
+                    _ => {
+                        self.add_error(
+                            format!("Strings do not have a property named '{}'", member_access.member),
                             member_access.position.clone()
                         );
                         Type::Unknown

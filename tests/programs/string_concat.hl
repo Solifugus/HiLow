@@ -1,0 +1,5 @@
+high program(): i32 {
+  let result = "foo" + "bar"
+  print(result)
+  return 0
+}

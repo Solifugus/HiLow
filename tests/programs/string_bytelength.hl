@@ -1,0 +1,7 @@
+high program(): i32 {
+  let s1 = "hello"
+  let s2 = "café"
+  print(s1.bytelength)
+  print(s2.bytelength)
+  return 0
+}

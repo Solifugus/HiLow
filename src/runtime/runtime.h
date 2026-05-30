@@ -437,4 +437,10 @@ bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs);
 // Becomes thread-local in Phase 10b when async is added.
 extern int hl_stealth_depth;
 
+// String operations (Managed Strings Sub-phase 1)
+bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs);
+bool hl_string_ne(HiLowArray* lhs, HiLowArray* rhs);
+HiLowArray* hl_string_concat(HiLowArray* lhs, HiLowArray* rhs);
+void print_string(HiLowArray* str);
+
 #endif // HILOW_RUNTIME_H
