@@ -2075,3 +2075,22 @@ void print_string(HiLowArray* str) {
     }
     putchar('\n');  // Add newline like other print functions
 }
+
+void hl_array_append_bytes(HiLowArray* dst, const uint8_t* src, size_t n) {
+    if (n == 0) return;
+
+    // Ensure capacity for n additional bytes
+    size_t new_length = dst->length + n;
+    if (new_length > dst->capacity) {
+        size_t new_capacity = dst->capacity;
+        while (new_capacity < new_length) {
+            new_capacity *= 2;
+        }
+        dst->data = realloc(dst->data, new_capacity * dst->elem_size);
+        dst->capacity = new_capacity;
+    }
+
+    // Copy bytes efficiently using memcpy
+    memcpy((uint8_t*)dst->data + dst->length, src, n);
+    dst->length = new_length;
+}

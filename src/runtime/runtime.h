@@ -441,6 +441,7 @@ extern int hl_stealth_depth;
 bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs);
 bool hl_string_ne(HiLowArray* lhs, HiLowArray* rhs);
 HiLowArray* hl_string_concat(HiLowArray* lhs, HiLowArray* rhs);
+void hl_array_append_bytes(HiLowArray* dst, const uint8_t* src, size_t n);
 void print_string(HiLowArray* str);
 
 #endif // HILOW_RUNTIME_H

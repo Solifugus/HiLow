@@ -1133,7 +1133,7 @@ impl CodeGenerator {
                     self.track_heap_owner(name, HeapType::Function);
                 }
                 Expression::FString(_) => {
-                    self.track_heap_owner(name, HeapType::FStringBuffer);
+                    self.track_heap_owner(name, HeapType::Array);
                 }
                 Expression::Unknown(_) => {
                     self.track_heap_owner(name, HeapType::Unknown);
@@ -2131,7 +2131,7 @@ impl CodeGenerator {
                                 self.output.push_str(&format!("  hl_optional_release({});\n", c_var_name));
                             },
                             _ => {
-                                // Environment and FStringBuffer use free() - handled in scope cleanup
+                                // Environment uses free() - handled in scope cleanup
                             }
                         }
                     }
@@ -3649,11 +3649,11 @@ impl CodeGenerator {
         // Phase 8a: Handle f-string cleanup for inline usage
         if matches!(arg, Expression::FString(_)) {
             // F-string used inline in print - need to free buffer after use
-            self.output.push_str("({ char* __inline_fstr = ");
+            self.output.push_str("({ HiLowArray* __inline_fstr = ");
             self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
             self.output.push_str("; ");
             self.output.push_str(runtime_func);
-            self.output.push_str("(__inline_fstr); free(__inline_fstr); hl_free_count++; })");
+            self.output.push_str("(__inline_fstr); hl_array_release(__inline_fstr); })");
         } else {
             // Regular argument - no special cleanup needed
             self.output.push_str(runtime_func);
@@ -4668,24 +4668,16 @@ impl CodeGenerator {
     }
 
     fn generate_fstring(&mut self, fstring: &FString, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Use malloc'd buffer approach as specified in Phase 6b-i requirements
-        // Memory leak is acceptable for Phase 6b-i, will be fixed in Phase 8
-
-        // Calculate buffer size estimate (4KB default with some buffer)
-        let buffer_size = 4096;
-
-        // Generate: malloc'd buffer with snprintf chain
-        self.output.push_str("({ char* __fstring_buf = malloc(");
-        self.output.push_str(&buffer_size.to_string());
-        self.output.push_str("); hl_alloc_count++; __fstring_buf[0] = '\\0'; ");
-
-        // Track position for potential future use
+        // Create a HiLowArray<u8> for the f-string result
+        // This replaces the old malloc'd char* approach with proper HiLowArray
+        self.output.push_str("({ HiLowArray* __fstring_arr = hl_array_new(sizeof(uint8_t), 0, NULL, NULL); ");
 
         for part in &fstring.parts {
             match part {
                 FStringPart::Text(text) => {
                     if !text.is_empty() {
-                        self.output.push_str("strcat(__fstring_buf, ");
+                        // Convert text to bytes and append
+                        self.output.push_str("{ const char* __text = ");
                         // Emit C string literal for text part
                         self.output.push('"');
                         for ch in text.chars() {
@@ -4703,7 +4695,7 @@ impl CodeGenerator {
                                 }
                             }
                         }
-                        self.output.push_str("\"); ");
+                        self.output.push_str("\"; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__text, strlen(__text)); } ");
                     }
                 }
                 FStringPart::Expression(expr, format_spec) => {
@@ -4719,7 +4711,7 @@ impl CodeGenerator {
                             // Handle alignment for binary format
                             if format_spec.align == Some(Align::Center) && format_spec.width.is_some() {
                                 self.output.push_str(&format!("char* __centered_buf = hl_format_center(__tmp_buf, {}); ", format_spec.width.unwrap()));
-                                self.output.push_str("strcat(__fstring_buf, __centered_buf); free(__tmp_buf); free(__centered_buf); } ");
+                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__centered_buf, strlen(__centered_buf)); free(__tmp_buf); free(__centered_buf); } ");
                             } else {
                                 // For binary format, we'll implement basic left/right alignment here
                                 if let Some(width) = format_spec.width {
@@ -4729,10 +4721,10 @@ impl CodeGenerator {
                                         // Right align or default - pad on left
                                         self.output.push_str("{ char __padded_buf[128]; ");
                                         self.output.push_str(&format!("sprintf(__padded_buf, \"%*s\", {}, __tmp_buf); ", width));
-                                        self.output.push_str("strcat(__fstring_buf, __padded_buf); } ");
+                                        self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__padded_buf, strlen(__padded_buf)); } ");
                                     }
                                 } else {
-                                    self.output.push_str("strcat(__fstring_buf, __tmp_buf); ");
+                                    self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                 }
                                 self.output.push_str("free(__tmp_buf); } ");
                             }
@@ -4750,9 +4742,9 @@ impl CodeGenerator {
                                 self.output.push_str("); ");
                                 if let Some(width) = format_spec.width {
                                     self.output.push_str(&format!("char* __centered_buf = hl_format_center(__tmp_buf, {}); ", width));
-                                    self.output.push_str("strcat(__fstring_buf, __centered_buf); free(__centered_buf); } ");
+                                    self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__centered_buf, strlen(__centered_buf)); free(__centered_buf); } ");
                                 } else {
-                                    self.output.push_str("strcat(__fstring_buf, __tmp_buf); } ");
+                                    self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                                 }
                             } else {
                                 // Standard sprintf with possible alignment
@@ -4760,95 +4752,95 @@ impl CodeGenerator {
                                 self.output.push_str(&c_format);
                                 self.output.push_str("\", ");
                                 self.generate_format_expression_with_cast(&expr_type, expr, type_checker)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                         }
                     } else {
                         // No format specifier - use default formatting
                         match expr_type {
                             Type::String => {
-                                // String: concatenate directly
-                                self.output.push_str("strcat(__fstring_buf, ");
+                                // String: concatenate directly (String is HiLowArray<u8>)
+                                self.output.push_str("{ HiLowArray* __str_expr = ");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); ");
+                                self.output.push_str("; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__str_expr->data, __str_expr->length); } ");
                             }
                             Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                                 // 32-bit integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", (int)");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                             Type::I64 => {
                                 // 64-bit integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", (long long)");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                             Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                                 // 32-bit unsigned integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", (unsigned int)");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                             Type::U64 => {
                                 // 64-bit unsigned integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", (unsigned long long)");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                             Type::F32 => {
                                 // 32-bit floats
                                 self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", (double)");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                             Type::F64 => {
                                 // 64-bit floats
                                 self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } ");
                             }
                             Type::Bool => {
                                 // Boolean: "true" or "false"
-                                self.output.push_str("strcat(__fstring_buf, (");
+                                self.output.push_str("{ const char* __bool_str = (");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str(") ? \"true\" : \"false\"); ");
+                                self.output.push_str(") ? \"true\" : \"false\"; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__bool_str, strlen(__bool_str)); } ");
                             }
                             Type::Nothing => {
                                 // Nothing: just emit "nothing"
-                                self.output.push_str("strcat(__fstring_buf, \"nothing\"); ");
+                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"nothing\", 7); ");
                             }
                             Type::UnknownType => {
                                 // Unknown: emit "unknown: " + reason
-                                self.output.push_str("{ strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(");
+                                self.output.push_str("{ hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"unknown: \", 9); const char* __reason = hl_unknown_get_reason(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str(")); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__reason, strlen(__reason)); } ");
                             }
                             Type::Time => {
                                 // Time: format using hl_time_format helper
                                 self.output.push_str("{ const char* __tmp_str = hl_time_format(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_str); free((char*)__tmp_str); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_str, strlen(__tmp_str)); free((char*)__tmp_str); } ");
                             }
                             Type::Duration => {
                                 // Duration: format using hl_duration_format helper
                                 self.output.push_str("{ const char* __tmp_str = hl_duration_format(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); strcat(__fstring_buf, __tmp_str); free((char*)__tmp_str); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_str, strlen(__tmp_str)); free((char*)__tmp_str); } ");
                             }
                             Type::Unknown => {
                                 // Route through normal expression codegen for property access, etc.
                                 self.output.push_str("{ const char* __tmp_str = ");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("; strcat(__fstring_buf, __tmp_str); } ");
+                                self.output.push_str("; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_str, strlen(__tmp_str)); } ");
                             }
                             Type::Optional(inner_type) => {
                                 // Optional: runtime dispatch between unknown and inner type
                                 self.output.push_str("{ if (hl_is_unknown(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str(")) { strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(hl_optional_unwrap_unknown(");
+                                self.output.push_str(")) { hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"unknown: \", 9); const char* __reason = hl_unknown_get_reason(hl_optional_unwrap_unknown(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("))); } else { ");
+                                self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__reason, strlen(__reason)); } else { ");
 
                                 match inner_type.as_ref() {
                                     Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
@@ -4882,14 +4874,14 @@ impl CodeGenerator {
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::Bool => {
-                                        self.output.push_str("strcat(__fstring_buf, hl_optional_unwrap_bool(");
+                                        self.output.push_str("const char* __bool_str = hl_optional_unwrap_bool(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(") ? \"true\" : \"false\"); ");
+                                        self.output.push_str(") ? \"true\" : \"false\"; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__bool_str, strlen(__bool_str)); ");
                                     }
                                     Type::String => {
-                                        self.output.push_str("strcat(__fstring_buf, hl_optional_unwrap_string(");
+                                        self.output.push_str("const char* __opt_str = hl_optional_unwrap_string(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); ");
+                                        self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__opt_str, strlen(__opt_str)); ");
                                     }
                                     Type::Time => {
                                         // Use print_time functionality for time formatting
@@ -4988,7 +4980,7 @@ impl CodeGenerator {
             }
         }
 
-        self.output.push_str("__fstring_buf; })");
+        self.output.push_str("__fstring_arr; })");
 
         Ok(())
     }
