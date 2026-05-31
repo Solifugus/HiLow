@@ -3730,55 +3730,59 @@ impl CodeGenerator {
                 self.output.push_str("      case TYPE_I32: {\n");
                 self.output.push_str("        char __tmp_buf[32];\n");
                 self.output.push_str("        sprintf(__tmp_buf, \"%d\", hl_object_property_value_i32_at(__iter_obj, __iter_i));\n");
-                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf));\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
                 self.output.push_str("      case TYPE_I64: {\n");
                 self.output.push_str("        char __tmp_buf[32];\n");
                 self.output.push_str("        sprintf(__tmp_buf, \"%ld\", hl_object_property_value_i64_at(__iter_obj, __iter_i));\n");
-                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf));\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
                 self.output.push_str("      case TYPE_U32: {\n");
                 self.output.push_str("        char __tmp_buf[32];\n");
                 self.output.push_str("        sprintf(__tmp_buf, \"%u\", hl_object_property_value_u32_at(__iter_obj, __iter_i));\n");
-                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf));\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
                 self.output.push_str("      case TYPE_U64: {\n");
                 self.output.push_str("        char __tmp_buf[32];\n");
                 self.output.push_str("        sprintf(__tmp_buf, \"%lu\", hl_object_property_value_u64_at(__iter_obj, __iter_i));\n");
-                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf));\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
                 self.output.push_str("      case TYPE_F32: {\n");
                 self.output.push_str("        char __tmp_buf[32];\n");
                 self.output.push_str("        sprintf(__tmp_buf, \"%g\", hl_object_property_value_f32_at(__iter_obj, __iter_i));\n");
-                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf));\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
                 self.output.push_str("      case TYPE_F64: {\n");
                 self.output.push_str("        char __tmp_buf[32];\n");
                 self.output.push_str("        sprintf(__tmp_buf, \"%g\", hl_object_property_value_f64_at(__iter_obj, __iter_i));\n");
-                self.output.push_str("        strcat(__fstring_buf, __tmp_buf);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf));\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
-                self.output.push_str("      case TYPE_BOOL:\n");
-                self.output.push_str("        strcat(__fstring_buf, hl_object_property_value_bool_at(__iter_obj, __iter_i) ? \"true\" : \"false\");\n");
+                self.output.push_str("      case TYPE_BOOL: {\n");
+                self.output.push_str("        const char* __bool_str = hl_object_property_value_bool_at(__iter_obj, __iter_i) ? \"true\" : \"false\";\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__bool_str, strlen(__bool_str));\n");
                 self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
 
-                self.output.push_str("      case TYPE_STR:\n");
-                self.output.push_str("        strcat(__fstring_buf, hl_object_property_value_str_at(__iter_obj, __iter_i));\n");
+                self.output.push_str("      case TYPE_STR: {\n");
+                self.output.push_str("        const char* __str_val = hl_object_property_value_str_at(__iter_obj, __iter_i);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__str_val, strlen(__str_val));\n");
                 self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
 
                 self.output.push_str("      default:\n");
-                self.output.push_str("        strcat(__fstring_buf, \"<unknown value>\");\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"<unknown value>\", 15);\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("    } } ");
                 return Ok(());
@@ -4846,32 +4850,32 @@ impl CodeGenerator {
                                     Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", hl_optional_unwrap_i32(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                        self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                     }
                                     Type::I64 => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", hl_optional_unwrap_i64(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                        self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                     }
                                     Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", hl_optional_unwrap_u32(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                        self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                     }
                                     Type::U64 => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", hl_optional_unwrap_u64(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                        self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                     }
                                     Type::F32 => {
                                         self.output.push_str("char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", hl_optional_unwrap_f32(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                        self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                     }
                                     Type::F64 => {
                                         self.output.push_str("char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", hl_optional_unwrap_f64(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
+                                        self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
                                     }
                                     Type::Bool => {
                                         self.output.push_str("const char* __bool_str = hl_optional_unwrap_bool(");
@@ -4887,13 +4891,13 @@ impl CodeGenerator {
                                         // Use print_time functionality for time formatting
                                         self.output.push_str("{ HiLowTime __time_tmp = hl_optional_unwrap_time(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str("); char __tmp_buf[64]; struct tm *tm = gmtime(&(time_t){__time_tmp.nanos_since_epoch / 1000000000}); strftime(__tmp_buf, 64, \"%Y-%m-%dT%H:%M:%S\", tm); strcat(__fstring_buf, __tmp_buf); }");
+                                        self.output.push_str("); char __tmp_buf[64]; struct tm *tm = gmtime(&(time_t){__time_tmp.nanos_since_epoch / 1000000000}); strftime(__tmp_buf, 64, \"%Y-%m-%dT%H:%M:%S\", tm); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }");
                                     }
                                     Type::Duration => {
                                         // Use print_duration functionality for duration formatting
                                         self.output.push_str("{ HiLowDuration __dur_tmp = hl_optional_unwrap_duration(");
                                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                        self.output.push_str("); char __tmp_buf[64]; int64_t nanos = __dur_tmp.nanos; if (nanos == 0) { strcat(__fstring_buf, \"0s\"); } else { sprintf(__tmp_buf, \"%lldns\", nanos); strcat(__fstring_buf, __tmp_buf); } }");
+                                        self.output.push_str("); char __tmp_buf[64]; int64_t nanos = __dur_tmp.nanos; if (nanos == 0) { hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"0s\", 2); } else { sprintf(__tmp_buf, \"%lldns\", nanos); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); } }");
                                     }
                                     _ => {
                                         return Err(CodegenError::UnsupportedFeature {
@@ -4909,10 +4913,10 @@ impl CodeGenerator {
                                 // Use tuple print function to format the tuple
                                 self.ensure_tuple_print_function(&element_types);
                                 // Generate inline tuple formatting like: (1, 2, 3)
-                                self.output.push_str("{ strcat(__fstring_buf, \"(\"); ");
+                                self.output.push_str("{ hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"(\", 1); ");
                                 for (i, element_type) in element_types.iter().enumerate() {
                                     if i > 0 {
-                                        self.output.push_str("strcat(__fstring_buf, \", \"); ");
+                                        self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)\", \", 2); ");
                                     }
 
                                     // Generate element-specific formatting
@@ -4920,49 +4924,49 @@ impl CodeGenerator {
                                         Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                            self.output.push_str(&format!("._{}); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }}", i));
                                         }
                                         Type::I64 => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%ld\", ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                            self.output.push_str(&format!("._{}); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }}", i));
                                         }
                                         Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                            self.output.push_str(&format!("._{}); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }}", i));
                                         }
                                         Type::U64 => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lu\", ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                            self.output.push_str(&format!("._{}); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }}", i));
                                         }
                                         Type::F32 => {
                                             self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                            self.output.push_str(&format!("._{}); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }}", i));
                                         }
                                         Type::F64 => {
                                             self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
+                                            self.output.push_str(&format!("._{}); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); }}", i));
                                         }
                                         Type::Bool => {
-                                            self.output.push_str("strcat(__fstring_buf, ");
+                                            self.output.push_str("{ const char* __bool_str = ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{} ? \"true\" : \"false\"); ", i));
+                                            self.output.push_str(&format!("._{} ? \"true\" : \"false\"; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__bool_str, strlen(__bool_str)); }}", i));
                                         }
                                         Type::String => {
-                                            self.output.push_str("strcat(__fstring_buf, ");
+                                            self.output.push_str("{ HiLowArray* __str_expr = ");
                                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                            self.output.push_str(&format!("._{}); ", i));
+                                            self.output.push_str(&format!("._{}; hl_array_append_bytes(__fstring_arr, (const uint8_t*)__str_expr->data, __str_expr->length); }}", i));
                                         }
                                         _ => {
-                                            self.output.push_str("strcat(__fstring_buf, \"<unknown>\"); ");
+                                            self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"<unknown>\", 9); ");
                                         }
                                     }
                                 }
-                                self.output.push_str("strcat(__fstring_buf, \")\"); } ");
+                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)\")\", 1); } ");
                             }
                             Type::ObjectIterValue => {
                                 // Runtime dispatch for iteration value

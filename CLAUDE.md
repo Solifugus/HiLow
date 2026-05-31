@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Restore lost parser-modifier test coverage**
+**Current phase: Fix char*/HiLowArray* representation split test failures**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

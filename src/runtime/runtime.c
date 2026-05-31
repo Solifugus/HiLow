@@ -2082,10 +2082,10 @@ void hl_array_append_bytes(HiLowArray* dst, const uint8_t* src, size_t n) {
     // Ensure capacity for n additional bytes
     size_t new_length = dst->length + n;
     if (new_length > dst->capacity) {
-        size_t new_capacity = dst->capacity;
-        while (new_capacity < new_length) {
-            new_capacity *= 2;
-        }
+size_t new_capacity = dst->capacity == 0 ? 1 : dst->capacity;
+    while (new_capacity < new_length) {
+        new_capacity *= 2;
+    }
         dst->data = realloc(dst->data, new_capacity * dst->elem_size);
         dst->capacity = new_capacity;
     }
