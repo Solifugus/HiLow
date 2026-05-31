@@ -48,6 +48,13 @@ pub enum HeapType {
     Array,          // HiLowArray*
 }
 
+/// Expression context for temporary tracking (Phase 11a expression-temporary cleanup)
+#[derive(Debug, Clone, PartialEq)]
+enum ExprContext {
+    Owned,      // Expression result will be bound/returned - track in heap_owners
+    Temporary,  // Expression result is a temporary - track in temp_owners for statement-end cleanup
+}
+
 /// Context for function expression generation to detect escaping closures (Phase 8a)
 #[derive(Debug, Clone, PartialEq)]
 pub enum FunctionExprContext {
@@ -116,6 +123,13 @@ pub struct CodeGenerator {
     /// Phase 8a: Ownership tracking for heap allocations
     /// Maps variable name to (heap_type, scope_depth) where heap_type is the type of heap allocation
     heap_owners: HashMap<String, (HeapType, usize)>,
+    /// Phase 11a expression-temporary cleanup: Temporary heap values for statement-end cleanup
+    /// Maps temp variable name to (heap_type, scope_depth)
+    temp_owners: HashMap<String, (HeapType, usize)>,
+    /// Phase 11a expression-temporary cleanup: Counter for generating unique temporary variable names
+    temp_counter: usize,
+    /// Phase 11a expression-temporary cleanup: Pending C declarations to hoist to statement scope
+    pending_statement_decls: Vec<String>,
     /// Phase 8a: Current scope depth for ownership tracking
     scope_depth: usize,
     /// Phase 8a: Variables that have had ownership transferred (don't free these)
@@ -180,6 +194,9 @@ impl CodeGenerator {
             in_string_switch: false,
             current_iter_value_name: None,
             heap_owners: HashMap::new(),
+            temp_owners: HashMap::new(),
+            temp_counter: 0,
+            pending_statement_decls: Vec::new(),
             scope_depth: 0,
             transferred_vars: HashSet::new(),
             in_main_program: false,
@@ -545,7 +562,7 @@ impl CodeGenerator {
                 self.output.clear();
 
                 // Generate initializer
-                self.generate_expression(initializer, type_checker)?;
+                self.generate_expression(initializer, type_checker, ExprContext::Temporary)?;
 
                 // Move generated initializer to generated_functions
                 self.generated_functions.push_str(&self.output);
@@ -906,6 +923,8 @@ impl CodeGenerator {
     }
 
     fn generate_statement(&mut self, statement: &Statement, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 11a expression-temporary cleanup: Buffer the statement body, then emit declarations first
+        let saved_output = std::mem::take(&mut self.output);
 
         match statement {
             Statement::Let(let_decl) => {
@@ -938,12 +957,12 @@ impl CodeGenerator {
                     let temp_var = format!("temp_{}", self.var_counter);
                     self.var_counter += 1;
                     self.output.push_str(&format!("  {{ HiLowObject* {} = ", temp_var));
-                    self.generate_expression(expr, type_checker)?;
+                    self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(&format!("; hl_object_release({}); }}\n", temp_var));
                 } else {
                     // Normal expression statement
                     self.output.push_str("  ");
-                    self.generate_expression(expr, type_checker)?;
+                    self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(";\n");
                 }
             }
@@ -987,6 +1006,25 @@ impl CodeGenerator {
                 self.generate_stealth_block(block, position, type_checker)?;
             }
         }
+
+        // Phase 11a expression-temporary cleanup: Emit in correct order - declarations first, then statement body, then cleanup
+        let statement_body = std::mem::take(&mut self.output);
+        self.output = saved_output;
+
+        // Emit pending declarations first (temp variables need to be declared before use)
+        for decl in &self.pending_statement_decls {
+            self.output.push_str("  ");
+            self.output.push_str(decl);
+            self.output.push_str("\n");
+        }
+        self.pending_statement_decls.clear();
+
+        // Emit the statement body that uses the temps
+        self.output.push_str(&statement_body);
+
+        // Emit cleanup for all temps used in this statement
+        self.emit_temp_cleanup();
+
         Ok(())
     }
 
@@ -1053,7 +1091,7 @@ impl CodeGenerator {
                 // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::LetInitializer;
-                self.generate_expression(initializer, type_checker)?;
+                self.generate_expression(initializer, type_checker, ExprContext::Owned)?;
                 self.function_expr_context = old_context;
             } else {
                 // Uninitialized variable gets nothing value
@@ -1072,7 +1110,7 @@ impl CodeGenerator {
                 // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::LetInitializer;
-                self.generate_expression(initializer, type_checker)?;
+                self.generate_expression(initializer, type_checker, ExprContext::Owned)?;
                 self.function_expr_context = old_context;
             } else {
                 // Uninitialized variable gets nothing value
@@ -1395,7 +1433,7 @@ impl CodeGenerator {
 
                 // Generate temporary variable assignment
                 self.output.push_str(&format!("  {} {} = ", struct_name, temp_var));
-                self.generate_expression(init, type_checker)?;
+                self.generate_expression(init, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(";\n");
 
                 // Extract each component into the destructured variables
@@ -1452,7 +1490,7 @@ impl CodeGenerator {
                 // Phase 8a: Set context for escaping closure detection
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::ReturnValue;
-                self.generate_expression(value, type_checker)?;
+                self.generate_expression(value, type_checker, ExprContext::Owned)?;
                 self.function_expr_context = old_context;
             } else {
                 self.output.push_str("0");
@@ -1523,7 +1561,7 @@ impl CodeGenerator {
                 }
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::ReturnValue;
-                self.generate_expression(value, type_checker)?;
+                self.generate_expression(value, type_checker, ExprContext::Owned)?;
                 self.function_expr_context = old_context;
                 if need_optional_wrap {
                     self.output.push_str(")");
@@ -1607,7 +1645,7 @@ impl CodeGenerator {
 
                 // Generate the iterable object
                 self.output.push_str("    HiLowObject* __iter_obj = ");
-                self.generate_expression(&for_in_stmt.iterable, type_checker)?;
+                self.generate_expression(&for_in_stmt.iterable, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(";\n");
 
                 // Get property count
@@ -1652,7 +1690,7 @@ impl CodeGenerator {
 
                 // Store the iterable array in a temporary to avoid re-evaluating complex expressions
                 self.output.push_str("    HiLowArray* __iter_arr = ");
-                self.generate_expression(&for_in_stmt.iterable, type_checker)?;
+                self.generate_expression(&for_in_stmt.iterable, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(";\n");
 
                 // Generate the iteration loop with live length re-read (allows mutation during iteration)
@@ -1698,7 +1736,7 @@ impl CodeGenerator {
             Type::Bool => {
                 // For integers and booleans, emit a C switch statement with fallthrough
                 self.output.push_str("  switch (");
-                self.generate_expression(&switch_stmt.value, type_checker)?;
+                self.generate_expression(&switch_stmt.value, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(") {\n");
 
                 // Generate cases
@@ -1734,7 +1772,7 @@ impl CodeGenerator {
 
                 self.output.push_str("  {\n");
                 self.output.push_str(&format!("    const char* {} = ", temp_var));
-                self.generate_expression(&switch_stmt.value, type_checker)?;
+                self.generate_expression(&switch_stmt.value, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(";\n");
 
                 let mut first_case = true;
@@ -1847,11 +1885,11 @@ impl CodeGenerator {
             }
 
             // Generate: object, property name, value
-            self.generate_expression(&member_access.object, type_checker)?;
+            self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
             self.output.push_str(", \"");
             self.output.push_str(&member_access.member);
             self.output.push_str("\", ");
-            self.generate_expression(&assign_stmt.value, type_checker)?;
+            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
             self.output.push_str(");\n");
 
             // Phase 8c: For weak object assignments, register the weak reference
@@ -1859,7 +1897,7 @@ impl CodeGenerator {
                 // Get the address of the property slot and register weak reference
                 self.output.push_str("{\n");
                 self.output.push_str("    HiLowObject** prop_addr = hl_object_property_addr(");
-                self.generate_expression(&member_access.object, type_checker)?;
+                self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", \"");
                 self.output.push_str(&member_access.member);
                 self.output.push_str("\");\n");
@@ -1867,7 +1905,7 @@ impl CodeGenerator {
                 self.output.push_str("        hl_object_weak_register(");
                 // Generate the actual object being assigned (unwrapped from weak)
                 if let Expression::WeakRef(inner_expr, _) = &assign_stmt.value {
-                    self.generate_expression(inner_expr, type_checker)?;
+                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
                 }
                 self.output.push_str(", prop_addr);\n");
                 self.output.push_str("    }\n");
@@ -1899,12 +1937,12 @@ impl CodeGenerator {
             if let Type::DynamicArray(elem_type) = &array_type {
                 let elem_c_type = self.hilow_type_to_c(elem_type);
                 self.output.push_str(&format!("  {} {} = ", elem_c_type, temp_var));
-                self.generate_expression(&assign_stmt.value, type_checker)?;
+                self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
                 self.output.push_str(";\n");
                 self.output.push_str("  hl_array_set(");
-                self.generate_expression(&index_access.object, type_checker)?;
+                self.generate_expression(&index_access.object, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&index_access.index, type_checker)?;
+                self.generate_expression(&index_access.index, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(&format!(", &{});\n", temp_var));
 
                 // Release temporary object reference after set (Phase C)
@@ -1949,7 +1987,7 @@ impl CodeGenerator {
                             self.output.push_str("{\n");
                             self.output.push_str(&format!("    {} {} = {};\n", c_type, old_var, var_name));
                             self.output.push_str(&format!("    {} = ", var_name));
-                            self.generate_expression(&assign_stmt.value, type_checker)?;
+                            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
                             self.output.push_str(";\n");
 
                             // Emit notifications inside the changed check
@@ -2023,9 +2061,9 @@ impl CodeGenerator {
                             self.output.push_str("}\n");
                         } else {
                             // Assigned-only path - no old value tracking needed
-                            self.generate_expression(&assign_stmt.target, type_checker)?;
+                            self.generate_expression(&assign_stmt.target, type_checker, ExprContext::Temporary)?;
                             self.output.push_str(" = ");
-                            self.generate_expression(&assign_stmt.value, type_checker)?;
+                            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
                             self.output.push_str(";\n");
 
                             self.output.push_str("  if (hl_stealth_depth == 0) {\n");
@@ -2100,7 +2138,7 @@ impl CodeGenerator {
                 }
             }
 
-            self.generate_expression(&assign_stmt.target, type_checker)?;
+            self.generate_expression(&assign_stmt.target, type_checker, ExprContext::Temporary)?;
 
             let op_str = match assign_stmt.op {
                 AssignOpKind::Assign => " = ",
@@ -2112,7 +2150,7 @@ impl CodeGenerator {
             };
 
             self.output.push_str(op_str);
-            self.generate_expression(&assign_stmt.value, type_checker)?;
+            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
             self.output.push_str(";\n");
         }
         Ok(())
@@ -2126,14 +2164,14 @@ impl CodeGenerator {
         match condition_type {
             Type::Bool => {
                 // For bool, just generate the expression directly
-                self.generate_expression(condition, type_checker)?;
+                self.generate_expression(condition, type_checker, ExprContext::Temporary)?;
             }
             Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::I128 |
             Type::U8 | Type::U16 | Type::U32 | Type::U64 | Type::U128 |
             Type::Isize | Type::Usize | Type::F32 | Type::F64 => {
                 // For numeric types, emit (expr != 0) for truthy/falsy check
                 self.output.push_str("(");
-                self.generate_expression(condition, type_checker)?;
+                self.generate_expression(condition, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(" != 0)");
             }
             Type::Nothing => {
@@ -2151,7 +2189,7 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn generate_expression(&mut self, expression: &Expression, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+    fn generate_expression(&mut self, expression: &Expression, type_checker: &TypeChecker, context: ExprContext) -> Result<(), CodegenError> {
         match expression {
             Expression::IntLit(value, _) => {
                 self.output.push_str(&value.to_string());
@@ -2164,15 +2202,40 @@ impl CodeGenerator {
                 let utf8_bytes = value.as_bytes();
                 let byte_count = utf8_bytes.len();
 
-                // Use GCC statement-expression for inline string construction
-                self.output.push_str(&format!("({{ HiLowArray* __str = hl_array_new(sizeof(uint8_t), {}, NULL, NULL);\n", byte_count));
+                let str_var_name = if context == ExprContext::Temporary {
+                    // Use tracked temporary name
+                    let temp_name = self.next_temp_name();
+                    self.temp_owners.insert(temp_name.clone(), (HeapType::Array, self.scope_depth));
+                    temp_name
+                } else {
+                    // Use untracked name for owned context
+                    "__str".to_string()
+                };
 
-                // Push each UTF-8 byte
-                for (i, &byte_val) in utf8_bytes.iter().enumerate() {
-                    self.output.push_str(&format!("     uint8_t __b{} = {}; hl_array_push(__str, &__b{});\n", i, byte_val, i));
+                if matches!(context, ExprContext::Temporary) {
+                    // Hoist temp declaration to statement scope for cleanup visibility
+                    let mut decl = format!("HiLowArray* {} = hl_array_new(sizeof(uint8_t), {}, NULL, NULL);", str_var_name, byte_count);
+
+                    // Push each UTF-8 byte
+                    for (i, &byte_val) in utf8_bytes.iter().enumerate() {
+                        decl.push_str(&format!(" {{ uint8_t __b{} = {}; hl_array_push({}, &__b{}); }}", i, byte_val, str_var_name, i));
+                    }
+
+                    self.pending_statement_decls.push(decl);
+
+                    // Emit just the reference
+                    self.output.push_str(&str_var_name);
+                } else {
+                    // Use GCC statement-expression for inline string construction (owned context)
+                    self.output.push_str(&format!("({{ HiLowArray* {} = hl_array_new(sizeof(uint8_t), {}, NULL, NULL);\n", str_var_name, byte_count));
+
+                    // Push each UTF-8 byte
+                    for (i, &byte_val) in utf8_bytes.iter().enumerate() {
+                        self.output.push_str(&format!("     uint8_t __b{} = {}; hl_array_push({}, &__b{});\n", i, byte_val, str_var_name, i));
+                    }
+
+                    self.output.push_str(&format!("     {}; }})", str_var_name));
                 }
-
-                self.output.push_str("     __str; })");
             }
             Expression::DurationLit(nanos, _, _) => {
                 // Emit duration as struct initializer
@@ -2273,7 +2336,7 @@ impl CodeGenerator {
                 self.output.push_str("this_obj");
             }
             Expression::BinaryOp(binary_op) => {
-                self.generate_binary_op(binary_op, type_checker)?;
+                self.generate_binary_op(binary_op, type_checker, context)?;
             }
             Expression::UnaryOp(unary_op) => {
                 self.generate_unary_op(unary_op, type_checker)?;
@@ -2302,9 +2365,9 @@ impl CodeGenerator {
 
                 // Generate (*(ELEM_C_TYPE*)hl_array_get(arr_expr, index_expr))
                 self.output.push_str(&format!("(*({}*)hl_array_get(", elem_c_type));
-                self.generate_expression(&index_access.object, type_checker)?;
+                self.generate_expression(&index_access.object, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&index_access.index, type_checker)?;
+                self.generate_expression(&index_access.index, type_checker, ExprContext::Temporary)?;
                 self.output.push_str("))");
             }
             Expression::IsCheck(is_check) => {
@@ -2328,7 +2391,7 @@ impl CodeGenerator {
             Expression::WeakRef(expr, _) => {
                 // For Phase 8c, weak references generate the same code as the underlying expression
                 // The weak behavior is handled at the assignment level
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Expression::Nothing(_) => {
                 // Emit reference to the global nothing singleton
@@ -2355,13 +2418,13 @@ impl CodeGenerator {
                     if i > 0 {
                         self.output.push_str(", ");
                     }
-                    self.generate_expression(element, type_checker)?;
+                    self.generate_expression(element, type_checker, ExprContext::Temporary)?;
                 }
                 self.output.push_str(" })");
             }
             Expression::TupleAccess(tuple_expr, index, _) => {
                 // Generate struct field access
-                self.generate_expression(tuple_expr, type_checker)?;
+                self.generate_expression(tuple_expr, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(&format!("._{}", index));
             }
             Expression::WatcherExpr(watcher_expr) => {
@@ -2658,7 +2721,7 @@ impl CodeGenerator {
                 // Push each element
                 for (i, element) in elements.iter().enumerate() {
                     self.output.push_str(&format!("     {} __e{} = ", elem_c_type, i));
-                    self.generate_expression(element, type_checker)?;
+                    self.generate_expression(element, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(&format!("; hl_array_push(__arr, &__e{});\n", i));
                 }
 
@@ -2707,7 +2770,7 @@ impl CodeGenerator {
                         }
                     }
                     // Non-empty array: generate normally
-                    self.generate_expression(inner, type_checker)?;
+                    self.generate_expression(inner, type_checker, ExprContext::Temporary)?;
                     return Ok(());
                 }
 
@@ -2727,13 +2790,13 @@ impl CodeGenerator {
                 }
 
                 // Default case: just generate the inner expression (ascription is compile-time only)
-                self.generate_expression(inner, type_checker)?;
+                self.generate_expression(inner, type_checker, ExprContext::Temporary)?;
             }
         }
         Ok(())
     }
 
-    fn generate_binary_op(&mut self, binary_op: &BinaryOp, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+    fn generate_binary_op(&mut self, binary_op: &BinaryOp, type_checker: &TypeChecker, context: ExprContext) -> Result<(), CodegenError> {
         // Check for time/duration arithmetic that needs runtime function calls
         let lhs_type = self.infer_expression_type_for_codegen(&binary_op.lhs);
         let rhs_type = self.infer_expression_type_for_codegen(&binary_op.rhs);
@@ -2743,41 +2806,41 @@ impl CodeGenerator {
             // Time arithmetic
             (Type::Time, Type::Duration, BinaryOpKind::Add) => {
                 self.output.push_str("hl_time_add_duration(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Time, BinaryOpKind::Add) => {
                 self.output.push_str("hl_time_add_duration(");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Duration, BinaryOpKind::Sub) => {
                 self.output.push_str("hl_time_sub_duration(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::Sub) => {
                 self.output.push_str("hl_time_sub_time(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::Add) => {
                 self.output.push_str("hl_duration_add(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -2785,65 +2848,65 @@ impl CodeGenerator {
             // Time comparisons
             (Type::Time, Type::Time, BinaryOpKind::Eq) => {
                 self.output.push_str("hl_time_eq(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::NotEq) => {
                 self.output.push_str("hl_time_ne(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::Less) => {
                 self.output.push_str("hl_time_lt(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::LessEq) => {
                 self.output.push_str("hl_time_le(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::Greater) => {
                 self.output.push_str("hl_time_gt(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::GreaterEq) => {
                 self.output.push_str("hl_time_ge(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::NotLess) => {
                 self.output.push_str("hl_time_ge(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Time, Type::Time, BinaryOpKind::NotGreater) => {
                 self.output.push_str("hl_time_le(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -2851,65 +2914,65 @@ impl CodeGenerator {
             // Duration comparisons
             (Type::Duration, Type::Duration, BinaryOpKind::Eq) => {
                 self.output.push_str("hl_duration_eq(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::NotEq) => {
                 self.output.push_str("hl_duration_ne(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::Less) => {
                 self.output.push_str("hl_duration_lt(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::LessEq) => {
                 self.output.push_str("hl_duration_le(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::Greater) => {
                 self.output.push_str("hl_duration_gt(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::GreaterEq) => {
                 self.output.push_str("hl_duration_ge(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::NotLess) => {
                 self.output.push_str("hl_duration_ge(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::Duration, Type::Duration, BinaryOpKind::NotGreater) => {
                 self.output.push_str("hl_duration_le(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -2920,9 +2983,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::Add) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::Add) => {
                 self.output.push_str("hl_money_add(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -2931,60 +2994,60 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::Sub) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::Sub) => {
                 self.output.push_str("hl_money_sub(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             // Money * scalar (need separate patterns to check is_numeric properly)
             (Type::Money, rhs_t, BinaryOpKind::Mul) if rhs_t.is_numeric() => {
                 self.output.push_str("hl_money_mul_scalar(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::MoneyOf(_), rhs_t, BinaryOpKind::Mul) if rhs_t.is_numeric() => {
                 self.output.push_str("hl_money_mul_scalar(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             // scalar * Money
             (lhs_t, Type::Money, BinaryOpKind::Mul) if lhs_t.is_numeric() => {
                 self.output.push_str("hl_money_mul_scalar(");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (lhs_t, Type::MoneyOf(_), BinaryOpKind::Mul) if lhs_t.is_numeric() => {
                 self.output.push_str("hl_money_mul_scalar(");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             // Money / scalar
             (Type::Money, rhs_t, BinaryOpKind::Div) if rhs_t.is_numeric() => {
                 self.output.push_str("hl_money_div_scalar(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::MoneyOf(_), rhs_t, BinaryOpKind::Div) if rhs_t.is_numeric() => {
                 self.output.push_str("hl_money_div_scalar(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -2994,9 +3057,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::Div) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::Div) => {
                 self.output.push_str("hl_money_div_money(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3007,9 +3070,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::Eq) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::Eq) => {
                 self.output.push_str("hl_money_eq(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3018,9 +3081,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::NotEq) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::NotEq) => {
                 self.output.push_str("hl_money_ne(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3029,9 +3092,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::Less) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::Less) => {
                 self.output.push_str("hl_money_lt(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3040,9 +3103,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::LessEq) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::LessEq) => {
                 self.output.push_str("hl_money_le(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3051,9 +3114,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::Greater) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::Greater) => {
                 self.output.push_str("hl_money_gt(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3062,9 +3125,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::GreaterEq) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::GreaterEq) => {
                 self.output.push_str("hl_money_ge(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3073,9 +3136,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::NotLess) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::NotLess) => {
                 self.output.push_str("hl_money_ge(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3084,9 +3147,9 @@ impl CodeGenerator {
             (Type::Money, Type::MoneyOf(_), BinaryOpKind::NotGreater) |
             (Type::MoneyOf(_), Type::Money, BinaryOpKind::NotGreater) => {
                 self.output.push_str("hl_money_le(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3094,28 +3157,68 @@ impl CodeGenerator {
             // String equality comparisons
             (Type::String, Type::String, BinaryOpKind::Eq) => {
                 self.output.push_str("hl_string_eq(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
             (Type::String, Type::String, BinaryOpKind::NotEq) => {
                 self.output.push_str("hl_string_ne(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
+                self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
+                self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
 
             // String concatenation
             (Type::String, Type::String, BinaryOpKind::Add) => {
-                self.output.push_str("hl_string_concat(");
-                self.generate_expression(&binary_op.lhs, type_checker)?;
-                self.output.push_str(", ");
-                self.generate_expression(&binary_op.rhs, type_checker)?;
-                self.output.push_str(")");
+                if context == ExprContext::Temporary {
+                    // Hoist temp declaration to statement scope for cleanup visibility
+                    let temp_name = self.next_temp_name();
+
+                    // Build the declaration with the hl_string_concat call
+                    let mut decl = format!("HiLowArray* {} = hl_string_concat(", temp_name);
+
+                    // Temporarily capture the arguments
+                    let mut lhs_output = String::new();
+                    let mut rhs_output = String::new();
+
+                    let saved_output = std::mem::take(&mut self.output);
+
+                    // Generate LHS
+                    self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
+                    lhs_output = std::mem::take(&mut self.output);
+
+                    // Generate RHS
+                    self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
+                    rhs_output = std::mem::take(&mut self.output);
+
+                    // Restore output
+                    self.output = saved_output;
+
+                    // Complete the declaration
+                    decl.push_str(&lhs_output);
+                    decl.push_str(", ");
+                    decl.push_str(&rhs_output);
+                    decl.push_str(");");
+
+                    self.pending_statement_decls.push(decl);
+
+                    // Track for statement-end cleanup
+                    self.temp_owners.insert(temp_name.clone(), (HeapType::Array, self.scope_depth));
+
+                    // Emit just the reference
+                    self.output.push_str(&temp_name);
+                } else {
+                    // Owned context - emit directly
+                    self.output.push_str("hl_string_concat(");
+                    self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(", ");
+                    self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(")");
+                }
                 return Ok(());
             }
 
@@ -3126,7 +3229,7 @@ impl CodeGenerator {
 
         // Regular binary operation
         self.output.push_str("(");
-        self.generate_expression(&binary_op.lhs, type_checker)?;
+        self.generate_expression(&binary_op.lhs, type_checker, ExprContext::Temporary)?;
 
         let op_str = match binary_op.op {
             BinaryOpKind::Add => " + ",
@@ -3158,7 +3261,7 @@ impl CodeGenerator {
         };
 
         self.output.push_str(op_str);
-        self.generate_expression(&binary_op.rhs, type_checker)?;
+        self.generate_expression(&binary_op.rhs, type_checker, ExprContext::Temporary)?;
         self.output.push_str(")");
         Ok(())
     }
@@ -3174,16 +3277,16 @@ impl CodeGenerator {
                 } else {
                     // Regular not operator
                     self.output.push_str("!");
-                    self.generate_expression(&unary_op.operand, type_checker)?;
+                    self.generate_expression(&unary_op.operand, type_checker, ExprContext::Temporary)?;
                 }
             }
             UnaryOpKind::Neg => {
                 self.output.push_str("-");
-                self.generate_expression(&unary_op.operand, type_checker)?;
+                self.generate_expression(&unary_op.operand, type_checker, ExprContext::Temporary)?;
             }
             UnaryOpKind::BitNot => {
                 self.output.push_str("~");
-                self.generate_expression(&unary_op.operand, type_checker)?;
+                self.generate_expression(&unary_op.operand, type_checker, ExprContext::Temporary)?;
             }
         }
         Ok(())
@@ -3207,7 +3310,7 @@ impl CodeGenerator {
                     if i > 0 {
                         self.output.push_str(", ");
                     }
-                    self.generate_expression(arg, type_checker)?;
+                    self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
                 }
                 self.output.push_str(")");
                 return Ok(());
@@ -3249,10 +3352,10 @@ impl CodeGenerator {
 
                         self.output.push_str("{\n");
                         self.output.push_str(&format!("    {} {} = ", elem_c_type, temp_var));
-                        self.generate_expression(&call.args[0], type_checker)?;
+                        self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;
                         self.output.push_str(";\n");
                         self.output.push_str("    hl_array_push(");
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
 
                         // Release temporary reference after push (Phase C + C-2)
@@ -3282,7 +3385,7 @@ impl CodeGenerator {
 
                         let elem_c_type = self.hilow_type_to_c(&elem_type);
                         self.output.push_str(&format!("(*({}*)hl_array_pop(", elem_c_type));
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str("))");
                         return Ok(());
                     }
@@ -3297,9 +3400,9 @@ impl CodeGenerator {
 
                         let elem_c_type = self.hilow_type_to_c(&elem_type);
                         self.output.push_str(&format!("(*({}*)hl_array_remove(", elem_c_type));
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(", ");
-                        self.generate_expression(&call.args[0], type_checker)?;
+                        self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;
                         self.output.push_str("))");
                         return Ok(());
                     }
@@ -3319,12 +3422,12 @@ impl CodeGenerator {
 
                         self.output.push_str("{\n");
                         self.output.push_str(&format!("    {} {} = ", elem_c_type, temp_var));
-                        self.generate_expression(&call.args[1], type_checker)?;
+                        self.generate_expression(&call.args[1], type_checker, ExprContext::Temporary)?;
                         self.output.push_str(";\n");
                         self.output.push_str("    hl_array_insert(");
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(", ");
-                        self.generate_expression(&call.args[0], type_checker)?;
+                        self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
 
                         // Release temporary object reference after insert (Phase C)
@@ -3345,11 +3448,11 @@ impl CodeGenerator {
                         }
 
                         self.output.push_str("hl_array_move(");
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(", ");
-                        self.generate_expression(&call.args[0], type_checker)?;  // from
+                        self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;  // from
                         self.output.push_str(", ");
-                        self.generate_expression(&call.args[1], type_checker)?;  // to
+                        self.generate_expression(&call.args[1], type_checker, ExprContext::Temporary)?;  // to
                         self.output.push_str(")");
                         return Ok(());
                     }
@@ -3363,7 +3466,7 @@ impl CodeGenerator {
                         }
 
                         self.output.push_str("hl_array_clear(");
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(")");
                         return Ok(());
                     }
@@ -3434,7 +3537,7 @@ impl CodeGenerator {
             let c_func_name = self.mangle_function_name(func_name);
             self.output.push_str(&c_func_name);
         } else {
-            self.generate_expression(&call.callee, type_checker)?;
+            self.generate_expression(&call.callee, type_checker, ExprContext::Temporary)?;
         }
         self.output.push_str("(");
 
@@ -3442,7 +3545,7 @@ impl CodeGenerator {
             if i > 0 {
                 self.output.push_str(", ");
             }
-            self.generate_expression(arg, type_checker)?;
+            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
         }
 
         self.output.push_str(")");
@@ -3517,7 +3620,7 @@ impl CodeGenerator {
                         Type::String => "string",
                         _ => unreachable!()
                     }));
-                self.generate_expression(arg, type_checker)?;
+                self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3527,7 +3630,7 @@ impl CodeGenerator {
                 let print_func_name = self.get_tuple_print_function_name(&element_types);
                 self.output.push_str(&print_func_name);
                 self.output.push_str("(");
-                self.generate_expression(arg, type_checker)?;
+                self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 return Ok(());
             }
@@ -3547,7 +3650,7 @@ impl CodeGenerator {
         if matches!(arg, Expression::FString(_)) {
             // F-string used inline in print - need to free buffer after use
             self.output.push_str("({ char* __inline_fstr = ");
-            self.generate_expression(arg, type_checker)?;
+            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
             self.output.push_str("; ");
             self.output.push_str(runtime_func);
             self.output.push_str("(__inline_fstr); free(__inline_fstr); hl_free_count++; })");
@@ -3561,7 +3664,7 @@ impl CodeGenerator {
                 self.output.push_str("(uint32_t)");
             }
 
-            self.generate_expression(arg, type_checker)?;
+            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
             self.output.push_str(")");
         }
 
@@ -3905,11 +4008,11 @@ impl CodeGenerator {
         if matches!(target_type, Type::Nothing) {
             if is_check.negated {
                 self.output.push_str("(");
-                self.generate_expression(&is_check.expression, type_checker)?;
+                self.generate_expression(&is_check.expression, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(" != &the_nothing)");
             } else {
                 self.output.push_str("(");
-                self.generate_expression(&is_check.expression, type_checker)?;
+                self.generate_expression(&is_check.expression, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(" == &the_nothing)");
             }
             return Ok(());
@@ -3957,15 +4060,15 @@ impl CodeGenerator {
             // Handle is nothing as pointer comparison
             if obj_is_check.negated {
                 self.output.push_str("(");
-                self.generate_expression(&obj_is_check.lhs, type_checker)?;
+                self.generate_expression(&obj_is_check.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(" != ");
-                self.generate_expression(&obj_is_check.rhs, type_checker)?;
+                self.generate_expression(&obj_is_check.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
             } else {
                 self.output.push_str("(");
-                self.generate_expression(&obj_is_check.lhs, type_checker)?;
+                self.generate_expression(&obj_is_check.lhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(" == ");
-                self.generate_expression(&obj_is_check.rhs, type_checker)?;
+                self.generate_expression(&obj_is_check.rhs, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
             }
             return Ok(());
@@ -3976,9 +4079,9 @@ impl CodeGenerator {
             self.output.push_str("!");
         }
         self.output.push_str("hl_object_is(");
-        self.generate_expression(&obj_is_check.lhs, type_checker)?;
+        self.generate_expression(&obj_is_check.lhs, type_checker, ExprContext::Temporary)?;
         self.output.push_str(", ");
-        self.generate_expression(&obj_is_check.rhs, type_checker)?;
+        self.generate_expression(&obj_is_check.rhs, type_checker, ExprContext::Temporary)?;
         self.output.push_str(")");
         Ok(())
     }
@@ -3987,6 +4090,33 @@ impl CodeGenerator {
         let name = format!("_v{}", self.var_counter);
         self.var_counter += 1;
         name
+    }
+
+    /// Generate unique temporary variable name for expression-temporary cleanup
+    fn next_temp_name(&mut self) -> String {
+        let name = format!("__tmp_{}", self.temp_counter);
+        self.temp_counter += 1;
+        name
+    }
+
+    /// Check if an expression produces a heap value that needs cleanup
+    fn expression_produces_heap_value(&self, expression: &Expression) -> Option<HeapType> {
+        match expression {
+            Expression::StringLit(_, _) => Some(HeapType::Array),
+            Expression::BinaryOp(binary_op) => {
+                let lhs_type = self.infer_expression_type_for_codegen(&binary_op.lhs);
+                let rhs_type = self.infer_expression_type_for_codegen(&binary_op.rhs);
+                match (&lhs_type, &rhs_type, &binary_op.op) {
+                    (Type::String, Type::String, BinaryOpKind::Add) => Some(HeapType::Array), // String concatenation
+                    _ => None,
+                }
+            }
+            Expression::Call(_) => {
+                // Some function calls might return heap values, but we'll handle this more specifically later
+                None
+            }
+            _ => None,
+        }
     }
 
     fn mangle_function_name(&self, name: &str) -> String {
@@ -4479,9 +4609,9 @@ impl CodeGenerator {
         let qualifier = &qualified_op.qualifiers[0];
 
         // Generate: lhs = lhs op rhs
-        self.generate_expression(&qualified_op.lhs, type_checker)?;
+        self.generate_expression(&qualified_op.lhs, type_checker, ExprContext::Temporary)?;
         self.output.push_str(" = ");
-        self.generate_expression(&qualified_op.lhs, type_checker)?;
+        self.generate_expression(&qualified_op.lhs, type_checker, ExprContext::Temporary)?;
 
         // Map qualifier to C operator
         let c_operator = match qualifier.name.as_str() {
@@ -4499,7 +4629,7 @@ impl CodeGenerator {
         };
 
         self.output.push_str(c_operator);
-        self.generate_expression(&qualified_op.rhs, type_checker)?;
+        self.generate_expression(&qualified_op.rhs, type_checker, ExprContext::Temporary)?;
 
         Ok(())
     }
@@ -4583,7 +4713,7 @@ impl CodeGenerator {
                         // Handle special binary format case
                         if format_spec.type_code == Some('b') {
                             self.output.push_str("{ char* __tmp_buf = hl_format_binary((unsigned long long)");
-                            self.generate_expression(expr, type_checker)?;
+                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                             self.output.push_str("); ");
 
                             // Handle alignment for binary format
@@ -4639,49 +4769,49 @@ impl CodeGenerator {
                             Type::String => {
                                 // String: concatenate directly
                                 self.output.push_str("strcat(__fstring_buf, ");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); ");
                             }
                             Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                                 // 32-bit integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", (int)");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
                             }
                             Type::I64 => {
                                 // 64-bit integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", (long long)");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
                             }
                             Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                                 // 32-bit unsigned integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", (unsigned int)");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
                             }
                             Type::U64 => {
                                 // 64-bit unsigned integers
                                 self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", (unsigned long long)");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
                             }
                             Type::F32 => {
                                 // 32-bit floats
                                 self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", (double)");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
                             }
                             Type::F64 => {
                                 // 64-bit floats
                                 self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_buf); } ");
                             }
                             Type::Bool => {
                                 // Boolean: "true" or "false"
                                 self.output.push_str("strcat(__fstring_buf, (");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str(") ? \"true\" : \"false\"); ");
                             }
                             Type::Nothing => {
@@ -4691,86 +4821,86 @@ impl CodeGenerator {
                             Type::UnknownType => {
                                 // Unknown: emit "unknown: " + reason
                                 self.output.push_str("{ strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str(")); } ");
                             }
                             Type::Time => {
                                 // Time: format using hl_time_format helper
                                 self.output.push_str("{ const char* __tmp_str = hl_time_format(");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_str); free((char*)__tmp_str); } ");
                             }
                             Type::Duration => {
                                 // Duration: format using hl_duration_format helper
                                 self.output.push_str("{ const char* __tmp_str = hl_duration_format(");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("); strcat(__fstring_buf, __tmp_str); free((char*)__tmp_str); } ");
                             }
                             Type::Unknown => {
                                 // Route through normal expression codegen for property access, etc.
                                 self.output.push_str("{ const char* __tmp_str = ");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("; strcat(__fstring_buf, __tmp_str); } ");
                             }
                             Type::Optional(inner_type) => {
                                 // Optional: runtime dispatch between unknown and inner type
                                 self.output.push_str("{ if (hl_is_unknown(");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str(")) { strcat(__fstring_buf, \"unknown: \"); strcat(__fstring_buf, hl_unknown_get_reason(hl_optional_unwrap_unknown(");
-                                self.generate_expression(expr, type_checker)?;
+                                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                 self.output.push_str("))); } else { ");
 
                                 match inner_type.as_ref() {
                                     Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", hl_optional_unwrap_i32(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::I64 => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%lld\", hl_optional_unwrap_i64(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", hl_optional_unwrap_u32(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::U64 => {
                                         self.output.push_str("char __tmp_buf[32]; sprintf(__tmp_buf, \"%llu\", hl_optional_unwrap_u64(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::F32 => {
                                         self.output.push_str("char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", hl_optional_unwrap_f32(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::F64 => {
                                         self.output.push_str("char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", hl_optional_unwrap_f64(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); strcat(__fstring_buf, __tmp_buf); ");
                                     }
                                     Type::Bool => {
                                         self.output.push_str("strcat(__fstring_buf, hl_optional_unwrap_bool(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(") ? \"true\" : \"false\"); ");
                                     }
                                     Type::String => {
                                         self.output.push_str("strcat(__fstring_buf, hl_optional_unwrap_string(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str(")); ");
                                     }
                                     Type::Time => {
                                         // Use print_time functionality for time formatting
                                         self.output.push_str("{ HiLowTime __time_tmp = hl_optional_unwrap_time(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str("); char __tmp_buf[64]; struct tm *tm = gmtime(&(time_t){__time_tmp.nanos_since_epoch / 1000000000}); strftime(__tmp_buf, 64, \"%Y-%m-%dT%H:%M:%S\", tm); strcat(__fstring_buf, __tmp_buf); }");
                                     }
                                     Type::Duration => {
                                         // Use print_duration functionality for duration formatting
                                         self.output.push_str("{ HiLowDuration __dur_tmp = hl_optional_unwrap_duration(");
-                                        self.generate_expression(expr, type_checker)?;
+                                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                         self.output.push_str("); char __tmp_buf[64]; int64_t nanos = __dur_tmp.nanos; if (nanos == 0) { strcat(__fstring_buf, \"0s\"); } else { sprintf(__tmp_buf, \"%lldns\", nanos); strcat(__fstring_buf, __tmp_buf); } }");
                                     }
                                     _ => {
@@ -4797,42 +4927,42 @@ impl CodeGenerator {
                                     match element_type {
                                         Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%d\", ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
                                         }
                                         Type::I64 => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%ld\", ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
                                         }
                                         Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%u\", ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
                                         }
                                         Type::U64 => {
                                             self.output.push_str("{ char __tmp_buf[32]; sprintf(__tmp_buf, \"%lu\", ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
                                         }
                                         Type::F32 => {
                                             self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
                                         }
                                         Type::F64 => {
                                             self.output.push_str("{ char __tmp_buf[64]; sprintf(__tmp_buf, \"%g\", ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); strcat(__fstring_buf, __tmp_buf); }}", i));
                                         }
                                         Type::Bool => {
                                             self.output.push_str("strcat(__fstring_buf, ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{} ? \"true\" : \"false\"); ", i));
                                         }
                                         Type::String => {
                                             self.output.push_str("strcat(__fstring_buf, ");
-                                            self.generate_expression(expr, type_checker)?;
+                                            self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                                             self.output.push_str(&format!("._{}); ", i));
                                         }
                                         _ => {
@@ -4953,37 +5083,37 @@ impl CodeGenerator {
         match expr_type {
             Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
                 self.output.push_str("(int)");
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::I64 => {
                 self.output.push_str("(long long)");
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::U8 | Type::U16 | Type::U32 | Type::Usize => {
                 self.output.push_str("(unsigned int)");
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::U64 => {
                 self.output.push_str("(unsigned long long)");
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::F32 => {
                 self.output.push_str("(double)");
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::F64 => {
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::String => {
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
             Type::Bool => {
                 self.output.push_str("(");
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(") ? \"true\" : \"false\"");
             }
             _ => {
-                self.generate_expression(expr, type_checker)?;
+                self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
             }
         }
         Ok(())
@@ -5024,70 +5154,70 @@ impl CodeGenerator {
                     self.output.push_str("i32(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::I64 => {
                     self.output.push_str("i64(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::U32 => {
                     self.output.push_str("u32(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::U64 => {
                     self.output.push_str("u64(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::F32 => {
                     self.output.push_str("f32(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::F64 => {
                     self.output.push_str("f64(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::Bool => {
                     self.output.push_str("bool(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::String => {
                     self.output.push_str("str(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::Object(_) => {
                     self.output.push_str("object(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 Type::Function(_, _) => {
                     self.output.push_str("function(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker)?;
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
                 _ => {
@@ -5161,7 +5291,7 @@ impl CodeGenerator {
             match member_access.member.as_str() {
                 "length" => {
                     self.output.push_str("hl_array_len(");
-                    self.generate_expression(&member_access.object, type_checker)?;
+                    self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(")");
                     return Ok(());
                 }
@@ -5187,7 +5317,7 @@ impl CodeGenerator {
             match member_access.member.as_str() {
                 "bytelength" => {
                     self.output.push_str("((uint32_t)hl_array_len(");
-                    self.generate_expression(&member_access.object, type_checker)?;
+                    self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                     self.output.push_str("))");
                     return Ok(());
                 }
@@ -5212,10 +5342,10 @@ impl CodeGenerator {
                     // If this is a narrowed optional, unwrap the unknown first
                     if matches!(object_type, Type::Optional(_)) {
                         self.output.push_str("hl_optional_unwrap_unknown(");
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(")");
                     } else {
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                     }
                     self.output.push_str(")");
                     return Ok(());
@@ -5225,10 +5355,10 @@ impl CodeGenerator {
                     // If this is a narrowed optional, unwrap the unknown first
                     if matches!(object_type, Type::Optional(_)) {
                         self.output.push_str("hl_optional_unwrap_unknown(");
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(")");
                     } else {
-                        self.generate_expression(&member_access.object, type_checker)?;
+                        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                     }
                     self.output.push_str(")");
                     return Ok(());
@@ -5266,7 +5396,7 @@ impl CodeGenerator {
         }
 
         // Generate the object expression
-        self.generate_expression(&member_access.object, type_checker)?;
+        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
 
         // Generate the property name as a string literal
         self.output.push_str(", \"");
@@ -5423,17 +5553,17 @@ impl CodeGenerator {
         }
 
         self.output.push_str("))(((HiLowFunction*)");
-        self.generate_expression(&call.callee, type_checker)?;
+        self.generate_expression(&call.callee, type_checker, ExprContext::Temporary)?;
         self.output.push_str(")->fn_ptr))(((HiLowFunction*)");
 
         // Generate the callee expression again to get the environment
-        self.generate_expression(&call.callee, type_checker)?;
+        self.generate_expression(&call.callee, type_checker, ExprContext::Temporary)?;
         self.output.push_str(")->env");
 
         // Generate user arguments
         for arg in call.args.iter() {
             self.output.push_str(", ");
-            self.generate_expression(arg, type_checker)?;
+            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
         }
 
         self.output.push_str(")");
@@ -5465,7 +5595,7 @@ impl CodeGenerator {
                     });
                 }
                 self.output.push_str("hl_time_parse(");
-                self.generate_expression(&call.args[0], _type_checker)?;
+                self.generate_expression(&call.args[0], _type_checker, ExprContext::Temporary)?;
                 self.output.push_str(")");
                 Ok(())
             }
@@ -5508,22 +5638,22 @@ impl CodeGenerator {
         }
 
         self.output.push_str("))(hl_object_get_function(");
-        self.generate_expression(&member_access.object, type_checker)?;
+        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
         self.output.push_str(&format!(", \"{}\")->fn_ptr))(", member_access.member));
 
         // Pass the environment as first argument
         self.output.push_str("hl_object_get_function(");
-        self.generate_expression(&member_access.object, type_checker)?;
+        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
         self.output.push_str(&format!(", \"{}\")->env", member_access.member));
 
         // Pass the receiver object as this_obj (second argument)
         self.output.push_str(", ");
-        self.generate_expression(&member_access.object, type_checker)?;
+        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
 
         // Generate user arguments
         for arg in call.args.iter() {
             self.output.push_str(", ");
-            self.generate_expression(arg, type_checker)?;
+            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
         }
 
         self.output.push_str(")");
@@ -5800,7 +5930,7 @@ impl CodeGenerator {
 
         // Emit temp variable declaration and assignment
         self.output.push_str(&format!("    {} __match_val = ", c_type));
-        self.generate_expression(&match_expr.value, type_checker)?;
+        self.generate_expression(&match_expr.value, type_checker, ExprContext::Temporary)?;
         self.output.push_str(";\n");
 
         // For match-as-expression, also declare result variable
@@ -5837,11 +5967,11 @@ impl CodeGenerator {
                 MatchBody::Expression(expr) => {
                     if need_result {
                         self.output.push_str("        __match_result = ");
-                        self.generate_expression(expr, type_checker)?;
+                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(";\n");
                     } else {
                         self.output.push_str("        ");
-                        self.generate_expression(expr, type_checker)?;
+                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(";\n");
                     }
                 }
@@ -5931,7 +6061,7 @@ impl CodeGenerator {
 
         // Generate: hl_unknown_new("reason")
         self.output.push_str("hl_unknown_new(");
-        self.generate_expression(&unknown_construction.reason, type_checker)?;
+        self.generate_expression(&unknown_construction.reason, type_checker, ExprContext::Temporary)?;
         self.output.push(')');
 
         Ok(())
@@ -6027,6 +6157,51 @@ impl CodeGenerator {
             // Also clean up array watcher registrations for freed environments
             self.array_watcher_registrations.remove(var_name);
         }
+    }
+
+    /// Emit release calls for statement-end temporary cleanup (Phase 11a expression-temporary)
+    fn emit_temp_cleanup(&mut self) {
+        // Collect all temporary variables for release
+        let mut temps_to_release: Vec<String> = Vec::new();
+
+        for (temp_name, (_heap_type, _scope_depth)) in &self.temp_owners {
+            temps_to_release.push(temp_name.clone());
+        }
+
+        // Emit release calls in reverse order (LIFO cleanup)
+        for temp_name in temps_to_release.iter().rev() {
+            if let Some((heap_type, _)) = self.temp_owners.get(temp_name) {
+                match heap_type {
+                    HeapType::Object => {
+                        self.output.push_str(&format!("  hl_object_release({});\n", temp_name));
+                    }
+                    HeapType::Function => {
+                        self.output.push_str(&format!("  hl_function_release({});\n", temp_name));
+                    }
+                    HeapType::Environment => {
+                        self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
+                    }
+                    HeapType::FStringBuffer => {
+                        self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
+                    }
+                    HeapType::Unknown => {
+                        self.output.push_str(&format!("  hl_unknown_release({});\n", temp_name));
+                    }
+                    HeapType::Optional => {
+                        self.output.push_str(&format!("  hl_optional_release({});\n", temp_name));
+                    }
+                    HeapType::Watcher => {
+                        self.output.push_str(&format!("  hl_watcher_release({});\n", temp_name));
+                    }
+                    HeapType::Array => {
+                        self.output.push_str(&format!("  hl_array_release({});\n", temp_name));
+                    }
+                }
+            }
+        }
+
+        // Clear the temporary tracking after cleanup
+        self.temp_owners.clear();
     }
 
     /// Emit release calls for early returns without modifying heap_owners
@@ -6198,7 +6373,7 @@ impl CodeGenerator {
             }
             _ => {
                 // For non-identifier expressions, use normal generation
-                self.generate_expression(expression, type_checker)?;
+                self.generate_expression(expression, type_checker, ExprContext::Temporary)?;
             }
         }
         Ok(())
