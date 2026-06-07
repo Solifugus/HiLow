@@ -2342,10 +2342,10 @@ impl CodeGenerator {
                 self.generate_unary_op(unary_op, type_checker)?;
             }
             Expression::Call(call) => {
-                self.generate_call(call, type_checker)?;
+                self.generate_call(call, type_checker, context)?;
             }
             Expression::MemberAccess(member_access) => {
-                self.generate_member_access(member_access, type_checker)?;
+                self.generate_member_access(member_access, type_checker, context)?;
             }
             Expression::IndexAccess(index_access) => {
                 // Infer element type from the array or string type
@@ -3292,7 +3292,7 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn generate_call(&mut self, call: &Call, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+    fn generate_call(&mut self, call: &Call, type_checker: &TypeChecker, context: ExprContext) -> Result<(), CodegenError> {
         // Check if this is the special print() function
         if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
             if func_name == "print" {
@@ -3332,7 +3332,7 @@ impl CodeGenerator {
             let object_type = self.infer_expression_type_for_codegen(&member_access.object);
             if let Type::Object(_) = object_type {
                 // Object method calls
-                return self.generate_member_function_call(call, member_access, type_checker);
+                return self.generate_member_function_call(call, member_access, type_checker, context);
             } else if let Type::DynamicArray(elem_type) = object_type {
                 // Array Phase B: Array method calls (.push, .pop)
                 match member_access.member.as_str() {
@@ -3480,7 +3480,7 @@ impl CodeGenerator {
             } else if let Expression::Ident { name, .. } = member_access.object.as_ref() {
                 if name == "time" {
                     // Built-in time method calls
-                    return self.generate_member_function_call(call, member_access, type_checker);
+                    return self.generate_member_function_call(call, member_access, type_checker, context);
                 }
 
                 // Phase 10-γ-fixup: Declaration-form watcher method calls
@@ -3531,24 +3531,89 @@ impl CodeGenerator {
             }
         }
 
-        // Regular function call - handle nested function name mangling
-        if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
-            // Use mangled name for nested functions
-            let c_func_name = self.mangle_function_name(func_name);
-            self.output.push_str(&c_func_name);
+        // Check if this function call returns a heap value and needs temp tracking
+        let return_type = if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
+            self.functions.get(func_name).cloned()
         } else {
-            self.generate_expression(&call.callee, type_checker, ExprContext::Temporary)?;
-        }
-        self.output.push_str("(");
+            None
+        };
 
-        for (i, arg) in call.args.iter().enumerate() {
-            if i > 0 {
-                self.output.push_str(", ");
+        let needs_temp_tracking = context == ExprContext::Temporary &&
+            return_type.as_ref().map_or(false, |t| matches!(t, Type::String | Type::Object(_) |
+                Type::Function(_, _) | Type::Optional(_) | Type::DynamicArray(_) | Type::UnknownType));
+
+        if needs_temp_tracking {
+            // Create temp variable for heap-returning function call
+            let temp_name = self.next_temp_name();
+            let heap_type = match return_type.as_ref().unwrap() {
+                Type::String | Type::DynamicArray(_) => HeapType::Array,
+                Type::Object(_) => HeapType::Object,
+                Type::Function(_, _) => HeapType::Function,
+                Type::Optional(_) => HeapType::Optional,
+                Type::UnknownType => HeapType::Unknown,
+                _ => unreachable!("checked above"),
+            };
+
+            // Register temp for cleanup
+            self.temp_owners.insert(temp_name.clone(), (heap_type, self.scope_depth));
+
+            // Get C type for the temp declaration
+            let temp_c_type = self.hilow_type_to_c(return_type.as_ref().unwrap());
+
+            // Build declaration with function call
+            let mut decl = format!("{} {} = ", temp_c_type, temp_name);
+
+            // Temporarily capture function name and args
+            let saved_output = std::mem::take(&mut self.output);
+
+            // Generate function name/expression
+            if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
+                let c_func_name = self.mangle_function_name(func_name);
+                self.output.push_str(&c_func_name);
+            } else {
+                self.generate_expression(&call.callee, type_checker, ExprContext::Temporary)?;
             }
-            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
+            self.output.push_str("(");
+
+            for (i, arg) in call.args.iter().enumerate() {
+                if i > 0 {
+                    self.output.push_str(", ");
+                }
+                self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
+            }
+            self.output.push_str(")");
+
+            let call_expr = std::mem::take(&mut self.output);
+            decl.push_str(&call_expr);
+            decl.push_str(";");
+
+            // Hoist declaration to statement scope
+            self.pending_statement_decls.push(decl);
+
+            // Restore output and emit temp reference
+            self.output = saved_output;
+            self.output.push_str(&temp_name);
+        } else {
+            // Direct emission for non-heap types or owned context
+            if let Expression::Ident { name: func_name, .. } = call.callee.as_ref() {
+                // Use mangled name for nested functions
+                let c_func_name = self.mangle_function_name(func_name);
+                self.output.push_str(&c_func_name);
+            } else {
+                self.generate_expression(&call.callee, type_checker, ExprContext::Temporary)?;
+            }
+            self.output.push_str("(");
+
+            for (i, arg) in call.args.iter().enumerate() {
+                if i > 0 {
+                    self.output.push_str(", ");
+                }
+                self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
+            }
+
+            self.output.push_str(")");
         }
 
-        self.output.push_str(")");
         Ok(())
     }
 
@@ -5236,7 +5301,7 @@ impl CodeGenerator {
         Ok(())
     }
 
-    fn generate_member_access(&mut self, member_access: &MemberAccess, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+    fn generate_member_access(&mut self, member_access: &MemberAccess, type_checker: &TypeChecker, context: ExprContext) -> Result<(), CodegenError> {
         // Generate property access: hl_object_get_TYPE(obj, "property")
 
         // Determine the type of the property using prototype chain lookup (Phase 7b)
@@ -5367,37 +5432,92 @@ impl CodeGenerator {
             }
         }
 
-        match member_type {
-            Type::I32 => self.output.push_str("hl_object_get_i32("),
-            Type::I64 => self.output.push_str("hl_object_get_i64("),
-            Type::U32 => self.output.push_str("hl_object_get_u32("),
-            Type::U64 => self.output.push_str("hl_object_get_u64("),
-            Type::F32 => self.output.push_str("hl_object_get_f32("),
-            Type::F64 => self.output.push_str("hl_object_get_f64("),
-            Type::Bool => self.output.push_str("hl_object_get_bool("),
-            Type::String => self.output.push_str("hl_object_get_str("),
-            Type::Object(_) => self.output.push_str("hl_object_get_object("),
-            Type::Function(_, _) => self.output.push_str("hl_object_get_function("),
-            Type::Nothing => {
-                // Property doesn't exist, return the nothing singleton
-                self.output.push_str("&the_nothing");
-                return Ok(()); // Don't emit object or property name
+        // Check if this property access returns a heap value and needs temp tracking
+        let needs_temp_tracking = context == ExprContext::Temporary &&
+            matches!(member_type, Type::String | Type::Object(_) | Type::Function(_, _));
+
+        if needs_temp_tracking {
+            // Create temp variable for heap-returning property access
+            let temp_name = self.next_temp_name();
+            let heap_type = match &member_type {
+                Type::String => HeapType::Array,
+                Type::Object(_) => HeapType::Object,
+                Type::Function(_, _) => HeapType::Function,
+                _ => unreachable!("checked above"),
+            };
+
+            // Register temp for cleanup
+            self.temp_owners.insert(temp_name.clone(), (heap_type, self.scope_depth));
+
+            // Build the declaration with the appropriate getter call
+            let getter_func = match member_type {
+                Type::String => "hl_object_get_str",
+                Type::Object(_) => "hl_object_get_object",
+                Type::Function(_, _) => "hl_object_get_function",
+                _ => unreachable!("checked above"),
+            };
+
+            let temp_type = match &member_type {
+                Type::String => "HiLowArray*",
+                Type::Object(_) => "HiLowObject*",
+                Type::Function(_, _) => "HiLowFunction*",
+                _ => unreachable!("checked above"),
+            };
+
+            // Create declaration
+            let mut decl = format!("{} {} = {}(", temp_type, temp_name, getter_func);
+
+            // Temporarily capture the object and property expressions
+            let saved_output = std::mem::take(&mut self.output);
+
+            // Generate object
+            self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
+            let object_expr = std::mem::take(&mut self.output);
+
+            // Complete declaration
+            decl.push_str(&object_expr);
+            decl.push_str(&format!(", \"{}\");", member_access.member));
+
+            // Hoist declaration to statement scope
+            self.pending_statement_decls.push(decl);
+
+            // Restore output and emit just the temp reference
+            self.output = saved_output;
+            self.output.push_str(&temp_name);
+        } else {
+            // Direct emission for non-heap types or owned context
+            match member_type {
+                Type::I32 => self.output.push_str("hl_object_get_i32("),
+                Type::I64 => self.output.push_str("hl_object_get_i64("),
+                Type::U32 => self.output.push_str("hl_object_get_u32("),
+                Type::U64 => self.output.push_str("hl_object_get_u64("),
+                Type::F32 => self.output.push_str("hl_object_get_f32("),
+                Type::F64 => self.output.push_str("hl_object_get_f64("),
+                Type::Bool => self.output.push_str("hl_object_get_bool("),
+                Type::String => self.output.push_str("hl_object_get_str("),
+                Type::Object(_) => self.output.push_str("hl_object_get_object("),
+                Type::Function(_, _) => self.output.push_str("hl_object_get_function("),
+                Type::Nothing => {
+                    // Property doesn't exist, return the nothing singleton
+                    self.output.push_str("&the_nothing");
+                    return Ok(()); // Don't emit object or property name
+                }
+                _ => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("member access for type {}", member_type),
+                        phase: "future phases".to_string(),
+                    });
+                }
             }
-            _ => {
-                return Err(CodegenError::UnsupportedFeature {
-                    feature: format!("member access for type {}", member_type),
-                    phase: "future phases".to_string(),
-                });
-            }
+
+            // Generate the object expression
+            self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
+
+            // Generate the property name as a string literal
+            self.output.push_str(", \"");
+            self.output.push_str(&member_access.member);
+            self.output.push_str("\")");
         }
-
-        // Generate the object expression
-        self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
-
-        // Generate the property name as a string literal
-        self.output.push_str(", \"");
-        self.output.push_str(&member_access.member);
-        self.output.push_str("\")");
 
         Ok(())
     }
@@ -5570,7 +5690,8 @@ impl CodeGenerator {
         &mut self,
         call: &Call,
         member_access: &MemberAccess,
-        _type_checker: &TypeChecker
+        _type_checker: &TypeChecker,
+        context: ExprContext
     ) -> Result<(), CodegenError> {
         match member_access.member.as_str() {
             "now" => {
@@ -5590,9 +5711,36 @@ impl CodeGenerator {
                         phase: "Phase 9c".to_string(),
                     });
                 }
-                self.output.push_str("hl_time_parse(");
-                self.generate_expression(&call.args[0], _type_checker, ExprContext::Temporary)?;
-                self.output.push_str(")");
+
+                if context == ExprContext::Temporary {
+                    // time.parse() returns optional, which is heap-allocated - track as temp
+                    let temp_name = self.next_temp_name();
+                    self.temp_owners.insert(temp_name.clone(), (HeapType::Optional, self.scope_depth));
+
+                    // Build declaration with hl_time_parse call
+                    let mut decl = format!("HiLowOptional* {} = hl_time_parse(", temp_name);
+
+                    // Temporarily capture the argument
+                    let saved_output = std::mem::take(&mut self.output);
+                    self.generate_expression(&call.args[0], _type_checker, ExprContext::Temporary)?;
+                    let arg_output = std::mem::take(&mut self.output);
+
+                    // Complete declaration
+                    decl.push_str(&arg_output);
+                    decl.push_str(");");
+
+                    // Hoist declaration to statement scope
+                    self.pending_statement_decls.push(decl);
+
+                    // Restore output and emit temp reference
+                    self.output = saved_output;
+                    self.output.push_str(&temp_name);
+                } else {
+                    // Direct emission for owned context
+                    self.output.push_str("hl_time_parse(");
+                    self.generate_expression(&call.args[0], _type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(")");
+                }
                 Ok(())
             }
             _ => Err(CodegenError::UnsupportedFeature {
@@ -5606,12 +5754,13 @@ impl CodeGenerator {
         &mut self,
         call: &Call,
         member_access: &MemberAccess,
-        type_checker: &TypeChecker
+        type_checker: &TypeChecker,
+        context: ExprContext
     ) -> Result<(), CodegenError> {
         // Special handling for time builtin methods
         if let Expression::Ident { name, .. } = member_access.object.as_ref() {
             if name == "time" {
-                return self.generate_time_builtin_call(call, member_access, type_checker);
+                return self.generate_time_builtin_call(call, member_access, type_checker, context);
             }
         }
 

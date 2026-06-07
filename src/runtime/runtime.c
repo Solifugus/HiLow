@@ -1233,6 +1233,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
         snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
         HiLowUnknown* error = hl_unknown_new(buf);
         free((void*)iso_string);  // Free the temporary C string
+        hl_free_count++;
         return hl_optional_new_unknown(error);
     }
 
@@ -1242,6 +1243,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
         snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
         HiLowUnknown* error = hl_unknown_new(buf);
         free((void*)iso_string);  // Free the temporary C string
+        hl_free_count++;
         return hl_optional_new_unknown(error);
     }
 
@@ -1304,6 +1306,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
     if (epoch_time == -1) {
         HiLowUnknown* error = hl_unknown_new("invalid time: could not convert to timestamp");
         free((void*)iso_string);  // Free the temporary C string
+        hl_free_count++;
         return hl_optional_new_unknown(error);
     }
 
@@ -1314,6 +1317,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
 
     // Return a successful time using the proper time optional constructor
     free((void*)iso_string);  // Free the temporary C string
+    hl_free_count++;
     return hl_optional_new_time(time);
 }
 
