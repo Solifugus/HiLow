@@ -5261,14 +5261,7 @@ impl CodeGenerator {
                 None
             };
 
-            // Capture any pending declarations before generating the property expression
-            let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
-
-            // Generate the property assignment but capture the output
-            let saved_output = std::mem::take(&mut self.output);
-
-            // Generate the setter call and property expression
-            self.output.push_str(&format!("hl_object_set_"));
+            self.output.push_str(&format!("    hl_object_set_"));
 
             // Determine the type of the property to call the right setter
             let expr_type = self.infer_expression_type_for_codegen(prop_expr);
@@ -5351,25 +5344,7 @@ impl CodeGenerator {
                 }
             }
 
-            // Capture the property assignment that was generated
-            let property_assignment = std::mem::take(&mut self.output);
-
-            // Restore the main output
-            self.output = saved_output;
-
-            // Emit any pending declarations first (before the assignment that uses them)
-            for decl in &self.pending_statement_decls {
-                self.output.push_str("    ");
-                self.output.push_str(decl);
-                self.output.push_str("\n");
-            }
-
-            // Then emit the property assignment
-            self.output.push_str("    ");
-            self.output.push_str(&property_assignment);
-
-            // Restore pending declarations and receiver type
-            self.pending_statement_decls = saved_pending_decls;
+            // Restore old receiver type if it was changed
             if matches!(prop_expr, Expression::FunctionExpr(_)) {
                 self.method_receiver_type = old_receiver_type;
             }
@@ -6190,38 +6165,15 @@ impl CodeGenerator {
             // Generate body
             match &arm.body {
                 MatchBody::Expression(expr) => {
-                    // Handle pending declarations for expression arms
-                    let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
-
-                    // Generate the expression first to capture pending declarations
-                    let saved_output = std::mem::take(&mut self.output);
-
                     if need_result {
-                        self.output.push_str("__match_result = ");
+                        self.output.push_str("        __match_result = ");
                         self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(";");
+                        self.output.push_str(";\n");
                     } else {
-                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(";");
-                    }
-
-                    let expression_output = std::mem::take(&mut self.output);
-                    self.output = saved_output;
-
-                    // Emit any pending declarations first
-                    for decl in &self.pending_statement_decls {
                         self.output.push_str("        ");
-                        self.output.push_str(decl);
-                        self.output.push_str("\n");
+                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(";\n");
                     }
-
-                    // Then emit the expression
-                    self.output.push_str("        ");
-                    self.output.push_str(&expression_output);
-                    self.output.push_str("\n");
-
-                    // Restore pending declarations
-                    self.pending_statement_decls = saved_pending_decls;
                 }
                 MatchBody::Block(block) => {
                     // Generate block statements with proper indentation
