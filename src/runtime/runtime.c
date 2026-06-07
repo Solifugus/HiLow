@@ -48,7 +48,8 @@ int hl_stealth_depth = 0;
 
 // Unknown type support (Phase 9b)
 
-HiLowUnknown* hl_unknown_new(const char* reason) {
+// Internal helper for C string literals
+static HiLowUnknown* hl_unknown_new_internal(const char* reason) {
     HiLowUnknown* unknown = malloc(sizeof(HiLowUnknown));
     hl_alloc_count++;
 
@@ -61,7 +62,22 @@ HiLowUnknown* hl_unknown_new(const char* reason) {
     return unknown;
 }
 
-HiLowUnknown* hl_unknown_new_with_options(const char* reason, const char** options, int options_count) {
+HiLowUnknown* hl_unknown_new(HiLowArray* reason) {
+    HiLowUnknown* unknown = malloc(sizeof(HiLowUnknown));
+    hl_alloc_count++;
+
+    unknown->refcount = 1;
+    // Create null-terminated C string from HiLowArray data
+    unknown->reason = malloc(reason->length + 1);
+    memcpy((char*)unknown->reason, reason->data, reason->length);
+    ((char*)unknown->reason)[reason->length] = '\0';  // Add null terminator
+    unknown->options = NULL;
+    unknown->options_count = 0;
+
+    return unknown;
+}
+
+HiLowUnknown* hl_unknown_new_with_options(HiLowArray* reason, const char** options, int options_count) {
     HiLowUnknown* unknown = hl_unknown_new(reason);  // This sets refcount to 1
 
     if (options_count > 0) {
@@ -1231,7 +1247,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
     if (strlen(iso_string) < 10) {
         char buf[256];
         snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
-        HiLowUnknown* error = hl_unknown_new(buf);
+        HiLowUnknown* error = hl_unknown_new_internal(buf);
         free((void*)iso_string);  // Free the temporary C string
         hl_free_count++;
         return hl_optional_new_unknown(error);
@@ -1241,7 +1257,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
     if (sscanf(iso_string, "%d-%d-%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday) != 3) {
         char buf[256];
         snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
-        HiLowUnknown* error = hl_unknown_new(buf);
+        HiLowUnknown* error = hl_unknown_new_internal(buf);
         free((void*)iso_string);  // Free the temporary C string
         hl_free_count++;
         return hl_optional_new_unknown(error);
@@ -1304,7 +1320,7 @@ HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
     // Convert to time_t and then to nanoseconds (treat as UTC)
     time_t epoch_time = timegm(&tm);
     if (epoch_time == -1) {
-        HiLowUnknown* error = hl_unknown_new("invalid time: could not convert to timestamp");
+        HiLowUnknown* error = hl_unknown_new_internal("invalid time: could not convert to timestamp");
         free((void*)iso_string);  // Free the temporary C string
         hl_free_count++;
         return hl_optional_new_unknown(error);

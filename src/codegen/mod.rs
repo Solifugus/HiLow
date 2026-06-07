@@ -6259,7 +6259,7 @@ impl CodeGenerator {
             });
         }
 
-        // Generate: hl_unknown_new("reason")
+        // Generate: hl_unknown_new(reason) - pass HiLowArray directly
         self.output.push_str("hl_unknown_new(");
         self.generate_expression(&unknown_construction.reason, type_checker, ExprContext::Temporary)?;
         self.output.push(')');

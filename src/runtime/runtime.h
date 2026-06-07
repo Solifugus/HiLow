@@ -41,8 +41,8 @@ typedef struct HiLowUnknown {
 } HiLowUnknown;
 
 // Unknown constructor functions
-HiLowUnknown* hl_unknown_new(const char* reason);
-HiLowUnknown* hl_unknown_new_with_options(const char* reason, const char** options, int options_count);
+HiLowUnknown* hl_unknown_new(HiLowArray* reason);
+HiLowUnknown* hl_unknown_new_with_options(HiLowArray* reason, const char** options, int options_count);
 
 // Unknown memory management
 void hl_unknown_retain(HiLowUnknown* unknown);
