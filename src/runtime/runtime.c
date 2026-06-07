@@ -2094,3 +2094,27 @@ size_t new_capacity = dst->capacity == 0 ? 1 : dst->capacity;
     memcpy((uint8_t*)dst->data + dst->length, src, n);
     dst->length = new_length;
 }
+
+// String-to-cstr helper for internal C APIs
+// Returns a malloc'd null-terminated copy of the array's bytes
+// Caller must free() the returned string
+const char* hl_array_to_cstr(HiLowArray* arr) {
+    if (!arr) {
+        char* empty = malloc(1);
+        hl_alloc_count++;
+        empty[0] = '\0';
+        return empty;
+    }
+
+    // Allocate space for bytes + null terminator
+    char* cstr = malloc(arr->length + 1);
+    hl_alloc_count++;
+
+    // Copy bytes from array
+    memcpy(cstr, arr->data, arr->length);
+
+    // Add null terminator
+    cstr[arr->length] = '\0';
+
+    return cstr;
+}

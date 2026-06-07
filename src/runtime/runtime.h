@@ -444,4 +444,7 @@ HiLowArray* hl_string_concat(HiLowArray* lhs, HiLowArray* rhs);
 void hl_array_append_bytes(HiLowArray* dst, const uint8_t* src, size_t n);
 void print_string(HiLowArray* str);
 
+// String-to-cstr helper for internal C APIs
+const char* hl_array_to_cstr(HiLowArray* arr);
+
 #endif // HILOW_RUNTIME_H
