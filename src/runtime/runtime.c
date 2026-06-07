@@ -141,12 +141,12 @@ HiLowOptional* hl_optional_new_i32(int32_t v) {
     return opt;
 }
 
-HiLowOptional* hl_optional_new_string(const char* s) {
+HiLowOptional* hl_optional_new_string(HiLowArray* s) {
     HiLowOptional* opt = malloc(sizeof(HiLowOptional));
     hl_alloc_count++;
     opt->refcount = 1;
     opt->kind = HL_OPT_STRING;
-    opt->payload.str_val = s;  // Take ownership of the string
+    opt->payload.str_val = s;  // Take ownership of the string array
     return opt;
 }
 
@@ -196,9 +196,11 @@ void hl_optional_release(HiLowOptional* opt) {
     if (opt) {
         opt->refcount--;
         if (opt->refcount <= 0) {
-            // Release the inner unknown if applicable
+            // Release the inner value if applicable
             if (opt->kind == HL_OPT_UNKNOWN && opt->payload.unk_val) {
                 hl_unknown_release(opt->payload.unk_val);
+            } else if (opt->kind == HL_OPT_STRING && opt->payload.str_val) {
+                hl_array_release(opt->payload.str_val);
             }
             free(opt);
             hl_free_count++;
@@ -206,58 +208,81 @@ void hl_optional_release(HiLowOptional* opt) {
     }
 }
 
-char* hl_format_binary(unsigned long long value) {
-    // Allocate enough space for 64 bits + null terminator
-    char* result = malloc(65);
-    hl_alloc_count++;
-    result[64] = '\0';
+HiLowArray* hl_format_binary(unsigned long long value) {
+    // Use temporary char buffer for formatting
+    char temp[65];
+    temp[64] = '\0';
 
     // Handle zero case
     if (value == 0) {
-        result[0] = '0';
-        result[1] = '\0';
+        temp[0] = '0';
+        temp[1] = '\0';
+
+        // Create HiLowArray with 1 byte
+        HiLowArray* result = hl_array_new(sizeof(uint8_t), 1, NULL, NULL);
+        uint8_t byte = '0';
+        hl_array_push(result, &byte);
         return result;
     }
 
     int pos = 63;
     while (value > 0 && pos >= 0) {
-        result[pos] = (value & 1) ? '1' : '0';
+        temp[pos] = (value & 1) ? '1' : '0';
         value >>= 1;
         pos--;
     }
 
-    // Move the result to the beginning
+    // Create HiLowArray and copy the relevant portion
     int start = pos + 1;
     int len = 64 - start;
+    HiLowArray* result = hl_array_new(sizeof(uint8_t), len, NULL, NULL);
+
     for (int i = 0; i < len; i++) {
-        result[i] = result[start + i];
+        uint8_t byte = (uint8_t)temp[start + i];
+        hl_array_push(result, &byte);
     }
-    result[len] = '\0';
 
     return result;
 }
 
-char* hl_format_center(const char* value, int width) {
-    int len = strlen(value);
-    if (len >= width) {
-        // If value is already wider than or equal to the desired width, return as-is
-        char* result = malloc(len + 1);
-        hl_alloc_count++;
-        strcpy(result, value);
-        return result;
+HiLowArray* hl_format_center(HiLowArray* value, int width) {
+    size_t len = value ? value->length : 0;
+    if ((int)len >= width) {
+        // If value is already wider than or equal to the desired width, return retained copy
+        if (value) {
+            hl_array_retain(value);
+            return value;
+        } else {
+            // Return empty array if value is NULL
+            return hl_array_new(sizeof(uint8_t), 0, NULL, NULL);
+        }
     }
 
-    int padding = width - len;
+    int padding = width - (int)len;
     int left_padding = padding / 2;
+
+    // Create result array with the desired width
+    HiLowArray* result = hl_array_new(sizeof(uint8_t), width, NULL, NULL);
+
+    // Add left padding spaces
+    uint8_t space_byte = ' ';
+    for (int i = 0; i < left_padding; i++) {
+        hl_array_push(result, &space_byte);
+    }
+
+    // Copy the value bytes
+    if (value && value->data) {
+        for (size_t i = 0; i < value->length; i++) {
+            uint8_t byte = *((uint8_t*)value->data + i);
+            hl_array_push(result, &byte);
+        }
+    }
+
+    // Add right padding spaces
     int right_padding = padding - left_padding;
-
-    char* result = malloc(width + 1);
-    hl_alloc_count++;
-    memset(result, ' ', width);
-    result[width] = '\0';
-
-    // Copy the value into the center
-    memcpy(result + left_padding, value, len);
+    for (int i = 0; i < right_padding; i++) {
+        hl_array_push(result, &space_byte);
+    }
 
     return result;
 }
@@ -1041,9 +1066,13 @@ int32_t hl_optional_unwrap_i32(HiLowOptional* opt) {
     return opt ? opt->payload.i32_val : 0;
 }
 
-const char* hl_optional_unwrap_string(HiLowOptional* opt) {
-    // Safe implementation: read from the wrapper struct's payload
-    return opt ? opt->payload.str_val : "";
+HiLowArray* hl_optional_unwrap_string(HiLowOptional* opt) {
+    // Safe implementation: read from the wrapper struct's payload with retain-on-return
+    if (opt && opt->payload.str_val) {
+        hl_array_retain(opt->payload.str_val);
+        return opt->payload.str_val;
+    }
+    return NULL;
 }
 
 HiLowUnknown* hl_optional_unwrap_unknown(HiLowOptional* opt) {
@@ -1157,7 +1186,11 @@ void print_optional_string(HiLowOptional* opt) {
     if (hl_is_unknown(opt)) {
         print_unknown(hl_optional_unwrap_unknown(opt));
     } else {
-        print_str(hl_optional_unwrap_string(opt));
+        HiLowArray* str_array = hl_optional_unwrap_string(opt);
+        if (str_array) {
+            print_string(str_array);
+            hl_array_release(str_array);  // Release the retained reference
+        }
     }
 }
 
@@ -1186,16 +1219,19 @@ HiLowTime hl_time_now(void) {
 }
 
 // Parse ISO 8601 time string, return time? (time or unknown)
-HiLowOptional* hl_time_parse(const char* iso_string) {
+HiLowOptional* hl_time_parse(HiLowArray* iso_array) {
     HiLowTime time;
     struct tm tm = {0};
-    char* end_ptr;
+
+    // Extract C string from array
+    const char* iso_string = hl_array_to_cstr(iso_array);
 
     // Try to parse the date part: YYYY-MM-DD
     if (strlen(iso_string) < 10) {
         char buf[256];
         snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
         HiLowUnknown* error = hl_unknown_new(buf);
+        free((void*)iso_string);  // Free the temporary C string
         return hl_optional_new_unknown(error);
     }
 
@@ -1204,6 +1240,7 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
         char buf[256];
         snprintf(buf, sizeof(buf), "invalid time format: %s", iso_string);
         HiLowUnknown* error = hl_unknown_new(buf);
+        free((void*)iso_string);  // Free the temporary C string
         return hl_optional_new_unknown(error);
     }
 
@@ -1265,6 +1302,7 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
     time_t epoch_time = timegm(&tm);
     if (epoch_time == -1) {
         HiLowUnknown* error = hl_unknown_new("invalid time: could not convert to timestamp");
+        free((void*)iso_string);  // Free the temporary C string
         return hl_optional_new_unknown(error);
     }
 
@@ -1274,6 +1312,7 @@ HiLowOptional* hl_time_parse(const char* iso_string) {
                              (int64_t)nanos;
 
     // Return a successful time using the proper time optional constructor
+    free((void*)iso_string);  // Free the temporary C string
     return hl_optional_new_time(time);
 }
 
