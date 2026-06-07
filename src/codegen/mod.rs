@@ -46,6 +46,7 @@ pub enum HeapType {
     Optional,       // T? - may contain unknown or success value
     Watcher,        // HiLowWatcher*
     Array,          // HiLowArray*
+    Tuple(Vec<Type>), // Tuple with heap-allocated elements
 }
 
 /// Expression context for temporary tracking (Phase 11a expression-temporary cleanup)
@@ -1144,6 +1145,25 @@ impl CodeGenerator {
                 Expression::StringLit(_, _) => {
                     self.track_heap_owner(name, HeapType::Array); // String is HiLowArray<u8>
                 }
+                Expression::TupleLit(elements, _) => {
+                    // Check if tuple contains heap-allocated elements
+                    let mut element_types = Vec::new();
+                    let mut has_heap_elements = false;
+                    for element in elements {
+                        let element_type = self.infer_expression_type_for_codegen(element);
+                        element_types.push(element_type.clone());
+                        match element_type {
+                            Type::String | Type::Object(_) | Type::Function(_, _) | Type::DynamicArray(_) |
+                            Type::Optional(_) | Type::UnknownType => {
+                                has_heap_elements = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if has_heap_elements {
+                        self.track_heap_owner(name, HeapType::Tuple(element_types));
+                    }
+                }
                 Expression::BinaryOp(binary_op) => {
                     // Track heap ownership for binary operations that return heap types
                     let result_type = self.infer_expression_type_for_codegen(initializer);
@@ -2130,6 +2150,34 @@ impl CodeGenerator {
                             HeapType::Optional => {
                                 self.output.push_str(&format!("  hl_optional_release({});\n", c_var_name));
                             },
+                            HeapType::Tuple(element_types) => {
+                                // Release heap-allocated elements in the tuple
+                                for (i, element_type) in element_types.iter().enumerate() {
+                                    match element_type {
+                                        Type::String | Type::DynamicArray(_) => {
+                                            self.output.push_str(&format!("  hl_array_release({}._{});\n", c_var_name, i));
+                                        },
+                                        Type::Object(_) => {
+                                            self.output.push_str(&format!("  hl_object_release({}._{});\n", c_var_name, i));
+                                        },
+                                        Type::Function(_, _) => {
+                                            self.output.push_str(&format!("  hl_function_release({}._{});\n", c_var_name, i));
+                                        },
+                                        Type::Unknown => {
+                                            self.output.push_str(&format!("  hl_unknown_release({}._{});\n", c_var_name, i));
+                                        },
+                                        Type::Optional(_) => {
+                                            self.output.push_str(&format!("  hl_optional_release({}._{});\n", c_var_name, i));
+                                        },
+                                        Type::UnknownType => {
+                                            self.output.push_str(&format!("  hl_unknown_release({}._{});\n", c_var_name, i));
+                                        },
+                                        _ => {
+                                            // Primitive types don't need release
+                                        }
+                                    }
+                                }
+                            },
                             _ => {
                                 // Environment uses free() - handled in scope cleanup
                             }
@@ -2418,7 +2466,14 @@ impl CodeGenerator {
                     if i > 0 {
                         self.output.push_str(", ");
                     }
-                    self.generate_expression(element, type_checker, ExprContext::Temporary)?;
+                    // Use Owned context for heap-allocated elements since they become owned by the tuple
+                    let element_type = self.infer_expression_type_for_codegen(element);
+                    let element_context = match element_type {
+                        Type::String | Type::Object(_) | Type::Function(_, _) | Type::DynamicArray(_) |
+                        Type::Optional(_) | Type::UnknownType => ExprContext::Owned,
+                        _ => ExprContext::Temporary,
+                    };
+                    self.generate_expression(element, type_checker, element_context)?;
                 }
                 self.output.push_str(" })");
             }
@@ -6292,6 +6347,34 @@ impl CodeGenerator {
                     HeapType::Array => {
                         self.output.push_str(&format!("    hl_array_release({});\n", c_var_name));
                     }
+                    HeapType::Tuple(element_types) => {
+                        // Release heap-allocated elements in the tuple
+                        for (i, element_type) in element_types.iter().enumerate() {
+                            match element_type {
+                                Type::String | Type::DynamicArray(_) => {
+                                    self.output.push_str(&format!("    hl_array_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Object(_) => {
+                                    self.output.push_str(&format!("    hl_object_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Function(_, _) => {
+                                    self.output.push_str(&format!("    hl_function_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Unknown => {
+                                    self.output.push_str(&format!("    hl_unknown_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Optional(_) => {
+                                    self.output.push_str(&format!("    hl_optional_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::UnknownType => {
+                                    self.output.push_str(&format!("    hl_unknown_release({}._{});\n", c_var_name, i));
+                                },
+                                _ => {
+                                    // Primitive types don't need release
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -6340,6 +6423,10 @@ impl CodeGenerator {
                     }
                     HeapType::Array => {
                         self.output.push_str(&format!("  hl_array_release({});\n", temp_name));
+                    }
+                    HeapType::Tuple(_) => {
+                        // Tuples are stack-allocated and shouldn't appear in temp_owners
+                        // This case should not occur, but added for exhaustive matching
                     }
                 }
             }
@@ -6406,6 +6493,34 @@ impl CodeGenerator {
                     }
                     HeapType::Array => {
                         self.output.push_str(&format!("    hl_array_release({});\n", c_var_name));
+                    }
+                    HeapType::Tuple(element_types) => {
+                        // Release heap-allocated elements in the tuple
+                        for (i, element_type) in element_types.iter().enumerate() {
+                            match element_type {
+                                Type::String | Type::DynamicArray(_) => {
+                                    self.output.push_str(&format!("    hl_array_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Object(_) => {
+                                    self.output.push_str(&format!("    hl_object_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Function(_, _) => {
+                                    self.output.push_str(&format!("    hl_function_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Unknown => {
+                                    self.output.push_str(&format!("    hl_unknown_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::Optional(_) => {
+                                    self.output.push_str(&format!("    hl_optional_release({}._{});\n", c_var_name, i));
+                                },
+                                Type::UnknownType => {
+                                    self.output.push_str(&format!("    hl_unknown_release({}._{});\n", c_var_name, i));
+                                },
+                                _ => {
+                                    // Primitive types don't need release
+                                }
+                            }
+                        }
                     }
                 }
             }
