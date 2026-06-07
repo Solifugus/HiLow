@@ -397,6 +397,7 @@ void hl_object_set_bool(HiLowObject* obj, const char* key, bool value) {
 }
 
 void hl_object_set_str(HiLowObject* obj, const char* key, HiLowArray* value) {
+    hl_array_retain(value);  // Retain the incoming array - object takes ownership
     HiLowValue val = { .type = HL_VALUE_STR, .value.str_val = value };
     set_property(obj, key, val);
 }
