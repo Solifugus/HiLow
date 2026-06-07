@@ -6,16 +6,18 @@
 
 ## Current state
 
-Phase: Phase 11a managed strings sub-phase 1 CORE complete (named-string lifetime valgrind-clean) — expression-temporary cleanup DEFERRED, BLOCKS sub-phase 2
-Status: Core managed string lifetime is valgrind-clean (literals, scope cleanup, reassignment old-value release). String literals, bytelength, indexing, equality (?=), concatenation (+), and reassignment all functional. String reassignment now properly releases old buffer before assignment, mirroring array reassignment pattern.
+Phase: Fix char*/HiLowArray* representation split test failures (IN PROGRESS - partial hoist-scope fix applied)
+Status: Working on 13 specific string-related integration test failures. Implemented partial fixes for hoist-scope issues in object literals and match expressions, but introduced regressions. Temporary variable declaration hoisting now works correctly, but temp cleanup scope tracking has issues.
 Branch: main  
-Last commit: Phase 11a managed strings sub-phase 1 CORE complete (reassignment leak fixed); expression temporaries deferred, block sub-phase 2
+Last commit: Partial fix for hoist-scope issues in object literals and match expressions
 
-Tests: 232 integration (many failing on unrelated compile issues), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites. Core string lifetime tests valgrind-clean.
+Tests: 212 passed / 27 failed integration (regression from 226/13). String hoist-scope declaration issue partially fixed, but temp cleanup scope problems introduced. Classification: 7 temp-cleanup scope issues, 3 type mismatch compiles, 1 crash, 2 leaks.
 
 ---
 
 ## Recent sessions
+
+**2026-06-07 Partial fix for hoist-scope issues in string representation split**: Classified 13 string-related test failures into kinds: HOIST-SCOPE (temp undeclared), COMPILE (type mismatch), CRASH (use-after-free), LEAK (memory). Implemented fixes for hoist-scope issues in object literals and match expressions by extending pending_statement_decls mechanism to handle temp declarations within compound statement scopes. Fixed core issue where string literal temps were declared after usage in `hl_object_set_str` calls. However, introduced regression: temp cleanup calls (`hl_array_release`) now generated in wrong scopes, causing 14 previously-passing tests to fail. Test status changed from 226/13 to 212/27. Remaining work: fix temp cleanup scope tracking, resolve type mismatches in string pattern matching (strcmp with HiLowArray*), address use-after-free and leak issues. Key lesson: temp declaration hoisting and temp cleanup scope must be handled together as a unified system.
 
 **2026-05-30 Managed Strings Sub-phase 1 COMPLETE: string reassignment old-value release fixed**: Fixed critical memory leak in string variable reassignment where old buffer wasn't released before assigning new value. Root cause: assignment logic at lines 2069-2083 in codegen did simple `target = value` without old-value cleanup, while scope cleanup properly called `hl_array_release`. Solution: added old-value release logic before assignment for heap-owned variables, mirroring array reassignment pattern. Now `let s = "a"; s = "bb"` properly releases the `"a"` buffer. Valgrind results: string_reassign.hl now 0 leaks (was 64+1 bytes), string_scope_lifetime.hl stays 0 leaks (regression test). Expression temporaries still leak correctly as expected: string_concat.hl 128 bytes/2 blocks, string_equality.hl multiple blocks - these are unbound operands needing general temporary-cleanup design, properly deferred. Core string lifetime (literals, scope, reassignment) now valgrind-clean. Sub-phase 1 substrate complete.
 
