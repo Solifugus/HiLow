@@ -310,6 +310,8 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
             hl_object_release(existing->value.value.obj_val);
         } else if (existing->value.type == HL_VALUE_FUNCTION && existing->value.value.fn_val) {
             hl_function_release(existing->value.value.fn_val);
+        } else if (existing->value.type == HL_VALUE_STR && existing->value.value.str_val) {
+            hl_array_release(existing->value.value.str_val);
         }
         existing->value = value;
 
@@ -318,6 +320,8 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
             hl_object_retain(value.value.obj_val);
         } else if (value.type == HL_VALUE_FUNCTION && value.value.fn_val) {
             hl_function_retain(value.value.fn_val);
+        } else if (value.type == HL_VALUE_STR && value.value.str_val) {
+            hl_array_retain(value.value.str_val);
         }
     } else {
         ensure_capacity(obj);
@@ -367,9 +371,8 @@ void hl_object_set_bool(HiLowObject* obj, const char* key, bool value) {
     set_property(obj, key, val);
 }
 
-void hl_object_set_str(HiLowObject* obj, const char* key, const char* value) {
-    HiLowValue val = { .type = HL_VALUE_STR, .value.str_val = strdup(value) };  // Duplicate string
-    hl_alloc_count++;  // Count strdup allocation
+void hl_object_set_str(HiLowObject* obj, const char* key, HiLowArray* value) {
+    HiLowValue val = { .type = HL_VALUE_STR, .value.str_val = value };
     set_property(obj, key, val);
 }
 
@@ -590,7 +593,7 @@ bool hl_object_get_bool(HiLowObject* obj, const char* key) {
     exit(1);
 }
 
-char* hl_object_get_str(HiLowObject* obj, const char* key) {
+HiLowArray* hl_object_get_str(HiLowObject* obj, const char* key) {
     HiLowObject* current = obj;
     int depth = 0;
 
@@ -598,6 +601,7 @@ char* hl_object_get_str(HiLowObject* obj, const char* key) {
         Property* prop = find_property(current, key);
         if (prop) {
             if (prop->value.type == HL_VALUE_STR) {
+                hl_array_retain(prop->value.value.str_val);  // Retain-on-return
                 return prop->value.value.str_val;
             } else {
                 fprintf(stderr, "type mismatch on property '%s'\n", key);
@@ -866,10 +870,11 @@ bool hl_object_property_value_bool_at(HiLowObject* obj, size_t index) {
     return obj->properties[index].value.value.bool_val;
 }
 
-char* hl_object_property_value_str_at(HiLowObject* obj, size_t index) {
+HiLowArray* hl_object_property_value_str_at(HiLowObject* obj, size_t index) {
     if (!obj || index >= obj->property_count || obj->properties[index].value.type != HL_VALUE_STR) {
         return NULL;
     }
+    hl_array_retain(obj->properties[index].value.value.str_val);  // Retain-on-return
     return obj->properties[index].value.value.str_val;
 }
 
@@ -900,10 +905,9 @@ void hl_object_free(HiLowObject* obj) {
                 free((void*)obj->properties[i].key);
                 hl_free_count++;
 
-                // Free string values that were strdup'd
+                // Release string values (now HiLowArray*)
                 if (obj->properties[i].value.type == HL_VALUE_STR && obj->properties[i].value.value.str_val) {
-                    free(obj->properties[i].value.value.str_val);
-                    hl_free_count++;
+                    hl_array_release(obj->properties[i].value.value.str_val);
                 }
             }
             free(obj->properties);

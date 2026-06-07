@@ -112,7 +112,7 @@ typedef struct HiLowOptional {
     HiLowOptionalKind kind;
     union {
         int32_t i32_val;
-        const char* str_val;
+        HiLowArray* str_val;
         HiLowUnknown* unk_val;
         HiLowTime time_val;
         HiLowDuration duration_val;
@@ -125,7 +125,7 @@ bool hl_is_unknown(HiLowOptional* opt);
 
 // Optional constructor functions
 HiLowOptional* hl_optional_new_i32(int32_t v);
-HiLowOptional* hl_optional_new_string(const char* s);
+HiLowOptional* hl_optional_new_string(HiLowArray* s);
 HiLowOptional* hl_optional_new_unknown(HiLowUnknown* u);
 HiLowOptional* hl_optional_new_time(HiLowTime t);
 HiLowOptional* hl_optional_new_duration(HiLowDuration d);
@@ -136,8 +136,8 @@ void hl_optional_retain(HiLowOptional* opt);
 void hl_optional_release(HiLowOptional* opt);
 
 // F-string format helpers
-char* hl_format_binary(unsigned long long value);
-char* hl_format_center(const char* value, int width);
+HiLowArray* hl_format_binary(unsigned long long value);
+HiLowArray* hl_format_center(HiLowArray* value, int width);
 
 // Function value support (Phase 7c-β)
 typedef struct HiLowFunction {
@@ -179,7 +179,7 @@ typedef struct HiLowValue {
         float f32_val;
         double f64_val;
         bool bool_val;
-        char* str_val;
+        HiLowArray* str_val;
         struct HiLowObject* obj_val;
         HiLowFunction* fn_val;
         HiLowMoney money_val;
@@ -221,7 +221,7 @@ void hl_object_set_u64(HiLowObject* obj, const char* key, uint64_t value);
 void hl_object_set_f32(HiLowObject* obj, const char* key, float value);
 void hl_object_set_f64(HiLowObject* obj, const char* key, double value);
 void hl_object_set_bool(HiLowObject* obj, const char* key, bool value);
-void hl_object_set_str(HiLowObject* obj, const char* key, const char* value);
+void hl_object_set_str(HiLowObject* obj, const char* key, HiLowArray* value);
 void hl_object_set_object(HiLowObject* obj, const char* key, HiLowObject* value);
 void hl_object_set_function(HiLowObject* obj, const char* key, HiLowFunction* value);
 
@@ -232,7 +232,7 @@ uint64_t hl_object_get_u64(HiLowObject* obj, const char* key);
 float hl_object_get_f32(HiLowObject* obj, const char* key);
 double hl_object_get_f64(HiLowObject* obj, const char* key);
 bool hl_object_get_bool(HiLowObject* obj, const char* key);
-char* hl_object_get_str(HiLowObject* obj, const char* key);
+HiLowArray* hl_object_get_str(HiLowObject* obj, const char* key);
 HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key);
 HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key);
 
@@ -322,7 +322,7 @@ uint64_t hl_object_property_value_u64_at(HiLowObject* obj, size_t index);
 float hl_object_property_value_f32_at(HiLowObject* obj, size_t index);
 double hl_object_property_value_f64_at(HiLowObject* obj, size_t index);
 bool hl_object_property_value_bool_at(HiLowObject* obj, size_t index);
-char* hl_object_property_value_str_at(HiLowObject* obj, size_t index);
+HiLowArray* hl_object_property_value_str_at(HiLowObject* obj, size_t index);
 HiLowObject* hl_object_property_value_object_at(HiLowObject* obj, size_t index);
 HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t index);
 
@@ -367,7 +367,7 @@ uint64_t hl_optional_unwrap_u64(HiLowOptional* opt);
 float hl_optional_unwrap_f32(HiLowOptional* opt);
 double hl_optional_unwrap_f64(HiLowOptional* opt);
 bool hl_optional_unwrap_bool(HiLowOptional* opt);
-const char* hl_optional_unwrap_string(HiLowOptional* opt);
+HiLowArray* hl_optional_unwrap_string(HiLowOptional* opt);
 HiLowUnknown* hl_optional_unwrap_unknown(HiLowOptional* opt);
 HiLowTime hl_optional_unwrap_time(HiLowOptional* opt);
 HiLowDuration hl_optional_unwrap_duration(HiLowOptional* opt);
@@ -387,7 +387,7 @@ void print_optional_money(HiLowOptional* opt);
 
 // Time constructor functions
 HiLowTime hl_time_now(void);
-HiLowOptional* hl_time_parse(const char* iso_string);
+HiLowOptional* hl_time_parse(HiLowArray* iso_string);
 
 // Time arithmetic functions
 HiLowTime hl_time_add_duration(HiLowTime time, HiLowDuration duration);
