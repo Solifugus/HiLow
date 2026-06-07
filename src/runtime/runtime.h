@@ -7,6 +7,9 @@
 #include <string.h>  // for strcat
 #include <stdio.h>   // for sprintf
 
+// Forward declarations
+typedef struct HiLowArray HiLowArray;
+
 // Print functions for primitive types
 // Each function prints the value followed by a newline
 
