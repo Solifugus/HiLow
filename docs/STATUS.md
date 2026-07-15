@@ -11,11 +11,15 @@ Status: Core managed string lifetime is valgrind-clean (literals, scope cleanup,
 Branch: main  
 Last commit: Phase 11a managed strings sub-phase 1 CORE complete (reassignment leak fixed); expression temporaries deferred, block sub-phase 2
 
-Tests: 232 integration (many failing on unrelated compile issues), 68 parser, 28 typecheck_module, 62 typecheck_tests, 8 resolver, plus unit suites. Core string lifetime tests valgrind-clean.
+Tests (baseline 2026-07-14, main, --no-fail-fast): integration 226 passed / 13 failed / 1 ignored (the char*/HiLowArray* representation-split failures — current CLAUDE.md phase); all other suites green (110 lexer, 68 parser, 62 typecheck, 27 typecheck_module, 24 codegen, 12 object_typecheck, 8 resolver, 6 object_parser, plus smaller suites).
+
+Cell redesign: Phase 1 (migration-impact audit) complete — see `docs/cell-migration-audit.md`. Next: Phase 1.5 pre-migration hardening (representation-split fix, valgrind gating, gap tests), then arrays-first migration.
 
 ---
 
 ## Recent sessions
+
+**2026-07-14 Cell migration Phase 1: migration-impact audit (doc only)**: Produced `docs/cell-migration-audit.md` per `docs/cell-redesign-brief.md` Phase 1 — no compiler/runtime code changed. Five sections: firing-site inventory (codegen scalar-assignment injection at mod.rs 1999–2136, activation/deactivation loops, static-bool emission, array (de)registration; 8 runtime mutator firing loops), name-keyed state inventory (fate of each CodeGenerator map under the cell model), env/lifetime inventory, risk map with test baseline, refined phase plan (1.5 through 6c with per-step gates). Line anchors: codegen vs commit a21a6de, runtime identical on main. Audit surfaced four latent bugs, all verified in source: (a) both `.move` firing sites call watcher bodies with a 2-arg cast dropping `w->env` (runtime.c:1993, 2040) while bodies are emitted 3-arg env-first (mod.rs:2581) — `.move` + captures would misread env; (b) one env registered on multiple arrays only tracks/unregisters the last (registration key overwrite, mod.rs:1302–1305); (c) no-capture registrations key on literal `"NULL"`; (d) `emit_temp_cleanup` frees temp envs without unregistering. Also: a second static temp_buffer exists in `hl_array_move` (runtime.c:2002) — STATUS previously recorded only the remove one. Test baseline recorded (cargo test --no-fail-fast, main): all suites green except integration_tests 226 passed / 13 failed / 1 ignored — the char*/HiLowArray* representation-split failures (current CLAUDE.md phase). Audit's Phase 1.5 makes fixing those + valgrind gating + gap tests the entry criterion for migration Phase 2. Committed on main per user direction; `lower-stmt-exprs` branch untouched.
 
 **2026-05-30 Managed Strings Sub-phase 1 COMPLETE: string reassignment old-value release fixed**: Fixed critical memory leak in string variable reassignment where old buffer wasn't released before assigning new value. Root cause: assignment logic at lines 2069-2083 in codegen did simple `target = value` without old-value cleanup, while scope cleanup properly called `hl_array_release`. Solution: added old-value release logic before assignment for heap-owned variables, mirroring array reassignment pattern. Now `let s = "a"; s = "bb"` properly releases the `"a"` buffer. Valgrind results: string_reassign.hl now 0 leaks (was 64+1 bytes), string_scope_lifetime.hl stays 0 leaks (regression test). Expression temporaries still leak correctly as expected: string_concat.hl 128 bytes/2 blocks, string_equality.hl multiple blocks - these are unbound operands needing general temporary-cleanup design, properly deferred. Core string lifetime (literals, scope, reassignment) now valgrind-clean. Sub-phase 1 substrate complete.
 
@@ -38,6 +42,8 @@ Tests: 232 integration (many failing on unrelated compile issues), 68 parser, 28
 ---
 
 ## Open questions
+
+**Cell-migration decisions flagged by the audit** (see `docs/cell-migration-audit.md` §5 "Standing rules"): (1) at migration step 3d, do the watcher escape-rejection rules stay as spec or fall away once boxing makes escape sound? (2) what should registering a watcher on a string do *today* (work / clean rejection)? (3) does `(deep)` on arrays re-enter the language surface at step 2d or wait? None block Phase 1.5.
 
 **Expression temporary cleanup — unbound heap temporaries in expressions**: String operations like concatenation (+) and equality (?=) leak their operand literals when used in expressions. First instance of expression-internal heap temporaries in HiLow. Needs a general cleanup mechanism (not string-specific). Examples: string_concat.hl leaks 128 bytes in 2 blocks (the `"foo"` and `"bar"` operands), string_equality.hl leaks multiple blocks. This is the next design decision blocking string sub-phase 2.
 
