@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 1.5a — fix char*/HiLowArray* representation-split test failures (see docs/cell-migration-audit.md phase plan)**
+**Current phase: 1.5b — add valgrind/ASan gating to the lifetime/no-leak tests (see docs/cell-migration-audit.md phase plan)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

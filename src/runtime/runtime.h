@@ -49,7 +49,7 @@ void hl_unknown_retain(HiLowUnknown* unknown);
 void hl_unknown_release(HiLowUnknown* unknown);
 
 // Unknown property access
-const char* hl_unknown_get_reason(HiLowUnknown* unknown);
+HiLowArray* hl_unknown_get_reason(HiLowUnknown* unknown);
 const char** hl_unknown_get_options(HiLowUnknown* unknown);
 int hl_unknown_get_options_count(HiLowUnknown* unknown);
 
@@ -147,6 +147,7 @@ typedef struct HiLowFunction {
     int refcount;          // Reference count (Phase 8b)
     void* fn_ptr;          // pointer to the C function
     void* env;             // captured environment; NULL for non-closures
+    void (*env_dtor)(void*); // releases heap fields inside env before free; NULL if none
 } HiLowFunction;
 
 // Watcher value support (Phase 10-δ-α)
@@ -242,6 +243,7 @@ HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key);
 // Function value operations (Phase 7c-β)
 HiLowFunction* hl_function_new(void* fn_ptr);
 HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env);
+HiLowFunction* hl_function_new_with_env_dtor(void* fn_ptr, void* env, void (*env_dtor)(void*));
 
 // Watcher value operations (Phase 10-δ-α)
 HiLowWatcher* hl_watcher_new(void);
@@ -443,6 +445,8 @@ extern int hl_stealth_depth;
 // String operations (Managed Strings Sub-phase 1)
 bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs);
 bool hl_string_ne(HiLowArray* lhs, HiLowArray* rhs);
+bool hl_string_eq_cstr(const HiLowArray* s, const char* lit);
+HiLowArray* hl_string_from_cstr(const char* s);
 HiLowArray* hl_string_concat(HiLowArray* lhs, HiLowArray* rhs);
 void hl_array_append_bytes(HiLowArray* dst, const uint8_t* src, size_t n);
 void print_string(HiLowArray* str);

@@ -115,6 +115,10 @@ pub struct CodeGenerator {
     hoisted_variables: HashMap<String, (String, String)>,
     /// Current environment variable name (if any)
     current_env_var: Option<String>,
+    /// Env vars whose struct owns retained heap fields, mapped to the
+    /// generated destructor function that releases them (env dies with the
+    /// function value via hl_function_free)
+    env_dtors: HashMap<String, String>,
     /// Method receiver type when generating method bodies
     method_receiver_type: Option<Type>,
     /// Whether we're currently inside a string switch (no break statements allowed)
@@ -194,6 +198,7 @@ impl CodeGenerator {
             method_receiver_type: None,
             in_string_switch: false,
             current_iter_value_name: None,
+            env_dtors: HashMap::new(),
             heap_owners: HashMap::new(),
             temp_owners: HashMap::new(),
             temp_counter: 0,
@@ -927,6 +932,13 @@ impl CodeGenerator {
         // Phase 11a expression-temporary cleanup: Buffer the statement body, then emit declarations first
         let saved_output = std::mem::take(&mut self.output);
 
+        // Re-entrancy: nested generate_statement calls (function-expression bodies,
+        // match block arms, switch case bodies) must not flush the enclosing
+        // statement's pending decls or release its temps. Save/restore both,
+        // mirroring the transferred_vars/heap_owners take-restore precedent.
+        let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
+        let saved_temp_owners = std::mem::take(&mut self.temp_owners);
+
         match statement {
             Statement::Let(let_decl) => {
                 self.generate_let_statement(let_decl, type_checker)?;
@@ -1025,6 +1037,10 @@ impl CodeGenerator {
 
         // Emit cleanup for all temps used in this statement
         self.emit_temp_cleanup();
+
+        // Restore the enclosing statement's pending decls and temps
+        self.pending_statement_decls = saved_pending_decls;
+        self.temp_owners = saved_temp_owners;
 
         Ok(())
     }
@@ -1176,6 +1192,25 @@ impl CodeGenerator {
                         }
                         _ => {
                             // Non-heap return types don't need tracking
+                        }
+                    }
+                }
+                Expression::Match(_) => {
+                    // Match-as-expression: the taken arm's value is generated in
+                    // Owned context, so the binding owns any heap result
+                    let result_type = self.infer_expression_type_for_codegen(initializer);
+                    match result_type {
+                        Type::String => {
+                            self.track_heap_owner(name, HeapType::Array); // String is HiLowArray<u8>
+                        }
+                        Type::DynamicArray(_) => {
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
+                        Type::Object(_) => {
+                            self.track_heap_owner(name, HeapType::Object);
+                        }
+                        _ => {
+                            // Non-heap result types don't need tracking
                         }
                     }
                 }
@@ -1517,6 +1552,11 @@ impl CodeGenerator {
             }
             self.output.push_str(";\n");
 
+            // Release this statement's expression temporaries before the leak
+            // check — the statement-level cleanup would land after `return`
+            // (dead code). return_value already holds the result.
+            self.emit_temp_cleanup();
+
             // Phase 9b fix: Emit cleanup for all scopes before returning
             for scope in (1..=self.scope_depth).rev() {
                 self.emit_early_return_cleanup(scope);
@@ -1587,6 +1627,11 @@ impl CodeGenerator {
                     self.output.push_str(")");
                 }
                 self.output.push_str(";\n");
+
+                // Release this statement's expression temporaries before
+                // `return` — the statement-level cleanup would land after it
+                // (dead code). __ret_N already holds the result.
+                self.emit_temp_cleanup();
 
                 for scope in (1..=self.scope_depth).rev() {
                     self.emit_early_return_cleanup(scope);
@@ -1674,8 +1719,11 @@ impl CodeGenerator {
                 // Generate the iteration loop
                 self.output.push_str("    for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {\n");
 
-                // Get key and type for current iteration
-                self.output.push_str(&format!("      const char* {} = hl_object_property_key_at(__iter_obj, __iter_i);\n", for_in_stmt.key_name));
+                // Get key and type for current iteration. The key is a managed
+                // string wrapping the object's internal char* key, released at
+                // the bottom of each iteration.
+                let key_c_name = self.mangle_variable_name(&for_in_stmt.key_name);
+                self.output.push_str(&format!("      HiLowArray* {} = hl_string_from_cstr(hl_object_property_key_at(__iter_obj, __iter_i));\n", key_c_name));
                 self.output.push_str("      int __v_type = hl_object_property_type_at(__iter_obj, __iter_i);\n");
 
                 // Store the value variable name and type for runtime dispatch in the loop body
@@ -1686,10 +1734,15 @@ impl CodeGenerator {
                 self.variable_types.insert(for_in_stmt.key_name.clone(), Type::String);
                 self.variable_types.insert(for_in_stmt.value_name.clone(), Type::ObjectIterValue);
 
+                // Track the key so a return inside the body releases it
+                self.track_heap_owner(&for_in_stmt.key_name, HeapType::Array);
+
                 // Generate loop body
                 self.generate_block(&for_in_stmt.body, type_checker)?;
 
-                // Restore previous state
+                // Restore previous state; release the key at iteration end
+                self.heap_owners.remove(&for_in_stmt.key_name);
+                self.output.push_str(&format!("      hl_array_release({});\n", key_c_name));
                 self.current_iter_value_name = old_iter_value_name;
                 self.variable_types.remove(&for_in_stmt.key_name);
                 self.variable_types.remove(&for_in_stmt.value_name);
@@ -1791,7 +1844,7 @@ impl CodeGenerator {
                 self.var_counter += 1;
 
                 self.output.push_str("  {\n");
-                self.output.push_str(&format!("    const char* {} = ", temp_var));
+                self.output.push_str(&format!("    HiLowArray* {} = ", temp_var));
                 self.generate_expression(&switch_stmt.value, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(";\n");
 
@@ -1808,7 +1861,7 @@ impl CodeGenerator {
                         self.output.push_str("    ");
                     }
 
-                    self.output.push_str("if (strcmp(");
+                    self.output.push_str("if (hl_string_eq_cstr(");
                     self.output.push_str(&temp_var);
                     self.output.push_str(", ");
 
@@ -1821,7 +1874,7 @@ impl CodeGenerator {
                         _ => unreachable!("Type checker should prevent non-matching patterns"),
                     }
 
-                    self.output.push_str(") == 0) {\n");
+                    self.output.push_str(")) {\n");
 
                     // Generate case body
                     for statement in &case.body {
@@ -2434,7 +2487,7 @@ impl CodeGenerator {
                 self.generate_function_expression(func_expr, type_checker)?;
             }
             Expression::Match(match_expr) => {
-                self.generate_match_expression(match_expr, type_checker)?;
+                self.generate_match_expression(match_expr, type_checker, context)?;
             }
             Expression::WeakRef(expr, _) => {
                 // For Phase 8c, weak references generate the same code as the underlying expression
@@ -3820,9 +3873,13 @@ impl CodeGenerator {
                 self.output.push_str("      case TYPE_BOOL:\n");
                 self.output.push_str(&format!("        print_bool(hl_object_property_value_bool_at(__iter_obj, __iter_i));\n"));
                 self.output.push_str("        break;\n");
-                self.output.push_str("      case TYPE_STR:\n");
-                self.output.push_str(&format!("        print_str(hl_object_property_value_str_at(__iter_obj, __iter_i));\n"));
+                self.output.push_str("      case TYPE_STR: {\n");
+                // Accessor retains on return; release after printing
+                self.output.push_str("        HiLowArray* __pv = hl_object_property_value_str_at(__iter_obj, __iter_i);\n");
+                self.output.push_str("        print_string(__pv);\n");
+                self.output.push_str("        hl_array_release(__pv);\n");
                 self.output.push_str("        break;\n");
+                self.output.push_str("      }\n");
                 self.output.push_str("      default:\n");
                 self.output.push_str("        printf(\"<unknown value>\\n\");\n");
                 self.output.push_str("        break;\n");
@@ -3896,8 +3953,10 @@ impl CodeGenerator {
                 self.output.push_str("      }\n");
 
                 self.output.push_str("      case TYPE_STR: {\n");
-                self.output.push_str("        const char* __str_val = hl_object_property_value_str_at(__iter_obj, __iter_i);\n");
-                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__str_val, strlen(__str_val));\n");
+                // Accessor retains on return; release after appending
+                self.output.push_str("        HiLowArray* __str_val = hl_object_property_value_str_at(__iter_obj, __iter_i);\n");
+                self.output.push_str("        hl_array_append_bytes(__fstring_arr, (const uint8_t*)__str_val->data, __str_val->length);\n");
+                self.output.push_str("        hl_array_release(__str_val);\n");
                 self.output.push_str("        break;\n");
                 self.output.push_str("      }\n");
 
@@ -4403,6 +4462,16 @@ impl CodeGenerator {
                             "reason" => Type::String,
                             "options" => Type::DynamicArray(Box::new(Type::String)),
                             _ => Type::Nothing, // Unknown properties return nothing
+                        }
+                    }
+                    Type::Optional(_) => {
+                        // .reason/.options on a narrowed optional access the
+                        // contained unknown (mirrors treat_as_unknown in
+                        // generate_member_access)
+                        match member_access.member.as_str() {
+                            "reason" => Type::String,
+                            "options" => Type::DynamicArray(Box::new(Type::String)),
+                            _ => Type::Unknown,
                         }
                     }
                     Type::DynamicArray(_) => {
@@ -4936,9 +5005,9 @@ impl CodeGenerator {
                             }
                             Type::UnknownType => {
                                 // Unknown: emit "unknown: " + reason
-                                self.output.push_str("{ hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"unknown: \", 9); const char* __reason = hl_unknown_get_reason(");
+                                self.output.push_str("{ hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"unknown: \", 9); HiLowArray* __reason = hl_unknown_get_reason(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__reason, strlen(__reason)); } ");
+                                self.output.push_str("); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__reason->data, __reason->length); hl_array_release(__reason); } ");
                             }
                             Type::Time => {
                                 // Time: format using hl_time_format helper
@@ -4962,9 +5031,9 @@ impl CodeGenerator {
                                 // Optional: runtime dispatch between unknown and inner type
                                 self.output.push_str("{ if (hl_is_unknown(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str(")) { hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"unknown: \", 9); const char* __reason = hl_unknown_get_reason(hl_optional_unwrap_unknown(");
+                                self.output.push_str(")) { hl_array_append_bytes(__fstring_arr, (const uint8_t*)\"unknown: \", 9); HiLowArray* __reason = hl_unknown_get_reason(hl_optional_unwrap_unknown(");
                                 self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                                self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__reason, strlen(__reason)); } else { ");
+                                self.output.push_str(")); hl_array_append_bytes(__fstring_arr, (const uint8_t*)__reason->data, __reason->length); hl_array_release(__reason); } else { ");
 
                                 match inner_type.as_ref() {
                                     Type::I8 | Type::I16 | Type::I32 | Type::Isize => {
@@ -5454,6 +5523,10 @@ impl CodeGenerator {
         if treat_as_unknown {
             match member_access.member.as_str() {
                 "reason" => {
+                    // hl_unknown_get_reason returns a fresh managed string the
+                    // caller owns. Build the call, then hoist it as a tracked
+                    // temp in Temporary context (mirrors hl_object_get_str).
+                    let saved_output = std::mem::take(&mut self.output);
                     self.output.push_str("hl_unknown_get_reason(");
                     // If this is a narrowed optional, unwrap the unknown first
                     if matches!(object_type, Type::Optional(_)) {
@@ -5464,6 +5537,17 @@ impl CodeGenerator {
                         self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                     }
                     self.output.push_str(")");
+                    let call_expr = std::mem::take(&mut self.output);
+                    self.output = saved_output;
+
+                    if context == ExprContext::Temporary {
+                        let temp_name = self.next_temp_name();
+                        self.temp_owners.insert(temp_name.clone(), (HeapType::Array, self.scope_depth));
+                        self.pending_statement_decls.push(format!("HiLowArray* {} = {};", temp_name, call_expr));
+                        self.output.push_str(&temp_name);
+                    } else {
+                        self.output.push_str(&call_expr);
+                    }
                     return Ok(());
                 }
                 "options" => {
@@ -5687,7 +5771,13 @@ impl CodeGenerator {
         if has_captures {
             // Use hl_function_new_with_env when there are captures
             if let Some(env_var) = &self.current_env_var {
-                self.output.push_str(&format!("hl_function_new_with_env((void*){}, {})", func_name, env_var));
+                if let Some(dtor_name) = self.env_dtors.get(env_var) {
+                    // Env owns retained heap fields — attach the destructor so
+                    // hl_function_free releases them before freeing the env
+                    self.output.push_str(&format!("hl_function_new_with_env_dtor((void*){}, {}, {})", func_name, env_var, dtor_name));
+                } else {
+                    self.output.push_str(&format!("hl_function_new_with_env((void*){}, {})", func_name, env_var));
+                }
             } else {
                 // Fallback to regular function (shouldn't happen if captures exist)
                 self.output.push_str(&format!("hl_function_new((void*){})", func_name));
@@ -5927,12 +6017,32 @@ impl CodeGenerator {
                                      env_struct_name, env_var, env_struct_name));
         self.output.push_str("  hl_alloc_count++;\n");
 
-        // Copy captured parameters to environment (Fix for Bug 1)
-        for (var_name, _var_type) in &captured_locals {
+        // Copy captured parameters to environment (Fix for Bug 1).
+        // String params are retained: the caller releases its argument at
+        // statement end, so the env must own its own reference. The matching
+        // release lives in a generated env destructor run by hl_function_free.
+        let mut retained_string_fields: Vec<String> = Vec::new();
+        for (var_name, var_type) in &captured_locals {
             // Check if this captured variable is a function parameter
             if params.iter().any(|p| p.name == *var_name) {
                 self.output.push_str(&format!("  {}->{} = {};\n", env_var, var_name, var_name));
+                if matches!(var_type, Type::String) {
+                    self.output.push_str(&format!("  hl_array_retain({}->{});\n", env_var, var_name));
+                    retained_string_fields.push(var_name.clone());
+                }
             }
+        }
+
+        // Emit a destructor releasing exactly the retained fields
+        if !retained_string_fields.is_empty() {
+            let dtor_name = format!("{}_dtor", env_struct_name);
+            self.environment_structs.push_str(&format!("void {}(void* raw) {{\n", dtor_name));
+            self.environment_structs.push_str(&format!("    {}* e = ({}*)raw;\n", env_struct_name, env_struct_name));
+            for field in &retained_string_fields {
+                self.environment_structs.push_str(&format!("    hl_array_release(e->{});\n", field));
+            }
+            self.environment_structs.push_str("}\n\n");
+            self.env_dtors.insert(env_var.clone(), dtor_name);
         }
 
         // Track hoisted variables and current environment
@@ -6108,7 +6218,7 @@ impl CodeGenerator {
         }
     }
 
-    fn generate_match_expression(&mut self, match_expr: &MatchExpr, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+    fn generate_match_expression(&mut self, match_expr: &MatchExpr, type_checker: &TypeChecker, context: ExprContext) -> Result<(), CodegenError> {
         // Generate C code for match expression
         // Strategy: use if-else chain with a temporary variable for the matched value
 
@@ -6166,8 +6276,11 @@ impl CodeGenerator {
             match &arm.body {
                 MatchBody::Expression(expr) => {
                     if need_result {
+                        // The arm value IS the match result — generate it in the
+                        // incoming context. Owned (let/return): ownership passes
+                        // to the binding; Temporary: statement-end temp cleanup.
                         self.output.push_str("        __match_result = ");
-                        self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
+                        self.generate_expression(expr, type_checker, context.clone())?;
                         self.output.push_str(";\n");
                     } else {
                         self.output.push_str("        ");
@@ -6216,7 +6329,7 @@ impl CodeGenerator {
                 self.output.push_str(&format!("__match_val == {}", f));
             }
             Literal::String(s) => {
-                self.output.push_str(&format!("strcmp(__match_val, \"{}\") == 0", Self::escape_c_string(s)));
+                self.output.push_str(&format!("hl_string_eq_cstr(__match_val, \"{}\")", Self::escape_c_string(s)));
             }
             Literal::Bool(b) => {
                 let value = if *b { "1" } else { "0" };

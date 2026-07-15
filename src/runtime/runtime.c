@@ -121,8 +121,10 @@ void hl_unknown_release(HiLowUnknown* unknown) {
     }
 }
 
-const char* hl_unknown_get_reason(HiLowUnknown* unknown) {
-    return unknown ? unknown->reason : "";
+HiLowArray* hl_unknown_get_reason(HiLowUnknown* unknown) {
+    // Returns a fresh managed string (refcount 1) — caller owns the reference.
+    // Internal storage stays char* (see hl_unknown_new_internal callers).
+    return hl_string_from_cstr(unknown ? unknown->reason : "");
 }
 
 const char** hl_unknown_get_options(HiLowUnknown* unknown) {
@@ -738,6 +740,7 @@ HiLowFunction* hl_function_new(void* fn_ptr) {
     f->refcount = 1;           // Initialize refcount to 1 (Phase 8b)
     f->fn_ptr = fn_ptr;
     f->env = NULL;
+    f->env_dtor = NULL;
     return f;
 }
 
@@ -747,6 +750,13 @@ HiLowFunction* hl_function_new_with_env(void* fn_ptr, void* env) {
     f->refcount = 1;           // Initialize refcount to 1 (Phase 8b)
     f->fn_ptr = fn_ptr;
     f->env = env;
+    f->env_dtor = NULL;
+    return f;
+}
+
+HiLowFunction* hl_function_new_with_env_dtor(void* fn_ptr, void* env, void (*env_dtor)(void*)) {
+    HiLowFunction* f = hl_function_new_with_env(fn_ptr, env);
+    f->env_dtor = env_dtor;
     return f;
 }
 
@@ -965,6 +975,9 @@ void hl_function_free(HiLowFunction* fn) {
         // For Phase 8a, we assume env is owned by the function if non-NULL
         // Function values that own their env should have that env freed
         if (fn->env) {
+            if (fn->env_dtor) {
+                fn->env_dtor(fn->env);  // release heap fields the env owns
+            }
             free(fn->env);
             hl_free_count++;
         }
@@ -2109,6 +2122,26 @@ bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs) {
 
 bool hl_string_ne(HiLowArray* lhs, HiLowArray* rhs) {
     return !hl_string_eq(lhs, rhs);
+}
+
+bool hl_string_eq_cstr(const HiLowArray* s, const char* lit) {
+    // Compare a managed string against a C string literal without allocating
+    size_t lit_len = strlen(lit);
+    if (s->length != lit_len) {
+        return false;
+    }
+    return memcmp(s->data, lit, lit_len) == 0;
+}
+
+HiLowArray* hl_string_from_cstr(const char* s) {
+    // Build a managed string (refcount 1) from a C string
+    size_t len = strlen(s);
+    HiLowArray* result = hl_array_new(sizeof(uint8_t), len, NULL, NULL);
+    for (size_t i = 0; i < len; i++) {
+        uint8_t byte = (uint8_t)s[i];
+        hl_array_push(result, &byte);
+    }
+    return result;
 }
 
 HiLowArray* hl_string_concat(HiLowArray* lhs, HiLowArray* rhs) {
