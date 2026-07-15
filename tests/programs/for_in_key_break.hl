@@ -1,0 +1,10 @@
+// Pin: break out of an object for-in must release the current iteration's
+// key (a managed string normally released at the bottom of each iteration).
+high program(): i32 {
+  let person = { name: "Alice", age: 30 }
+  for (let (k, v) in person) {
+    print(k)
+    break
+  }
+  return 0
+}

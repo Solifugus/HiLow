@@ -1,0 +1,10 @@
+// Pin: continue in an object for-in must release the current iteration's
+// key before jumping to the next iteration.
+high program(): i32 {
+  let person = { name: "Alice", age: 30 }
+  for (let (k, v) in person) {
+    continue
+  }
+  print("done")
+  return 0
+}

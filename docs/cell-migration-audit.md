@@ -331,7 +331,7 @@ Behaviors the migration touches that no current test pins:
 
 Items 1, 4, 5, 6, 7, 9, 10 can and should be written now (they pass or
 demonstrably pin current behavior). Items 2, 3 document known-broken behavior
-— per the adjudicated latent-bug policy (§5 item 4) they are written in 1.5c
+— per the adjudicated latent-bug policy (§5 item 4) they are written in 1.5d
 as expected-fail/`#[ignore]`d pins and flip live in Phase 2. Item 8 is
 adjudicated (§5 item 2): compile-time diagnostic until 1.5a completes.
 
@@ -350,9 +350,16 @@ point of deleting-with-confidence.
 - **1.5a** Finish the char*/HiLowArray* representation-split fix (current
   CLAUDE.md phase) → 13 failing integration tests green. *Gate: full suite
   green.*
-- **1.5b** Add valgrind (or ASan) gating to the lifetime/no-leak tests
-  (§4.4 item 10). *Gate: gated tests clean on current code.*
-- **1.5c** Add gap tests §4.4 items 1, 4, 5, 6, 7, 9 (all pin current
+- **1.5b** Add valgrind gating (landed broader than planned: a gate over
+  every program in tests/programs/, not just the lifetime tests — see
+  tests/valgrind_gate.rs), plus control-transfer temp cleanup fixes the gate
+  work surfaced. *Gate: full suite green including the valgrind gate.*
+- **1.5c** Object ownership discipline (adjudicated 2026-07-15, §5 item 5):
+  fix the object double-release class in the current retain/release
+  machinery; remove all 17 entries from `KNOWN_MEMORY_BUGS` in
+  tests/valgrind_gate.rs as they come clean. *Gate: full suite + gate green
+  with an empty KNOWN_MEMORY_BUGS list.*
+- **1.5d** Add gap tests §4.4 items 1, 4, 5, 6, 7, 9 (all pin current
   behavior). Item 1 (re-entrant mutation) may *expose* the temp_buffer bug —
   if it fails, mark `#[ignore]` with a STATUS entry naming Phase 2c as the
   fix, per CLAUDE.md's ignore policy. *Gate: suite green (ignores documented).*
@@ -475,7 +482,18 @@ named and are not to be re-litigated.
    gated on nested-container tests written as part of 2d.
 4. **Latent-bug policy (§3.4 a–d): NOT fixed in the current machinery.** Each
    of the four verified latent bugs gets an expected-fail/`#[ignore]`d test
-   named for the bug during Phase 1.5 gap-test work (1.5c), flipping to a
+   named for the bug during Phase 1.5 gap-test work (1.5d), flipping to a
    real assertion when Phase 2 replaces the path the bug lives in. (This
    refines §4.4's placement of items 2–3 at "the head of Phase 2": the tests
-   are written in 1.5c as documented-ignore pins, and go live in Phase 2.)
+   are written in 1.5d as documented-ignore pins, and go live in Phase 2.)
+5. **Object double-release (adjudicated 2026-07-15): fix NOW, in the current
+   machinery — new Phase 1.5c "object ownership discipline".** The 1.5b
+   valgrind gate surfaced a pre-existing use-after-free class: an object
+   referenced from two places (proto link, array element, weak target) is
+   released down both paths — invisible to the alloc/free counter because the
+   second release reads freed memory and usually skips the second free. 17
+   programs exhibit it (see `KNOWN_MEMORY_BUGS` in tests/valgrind_gate.rs).
+   Unlike the §3.4 env-keying latent bugs — whose machinery the migration
+   deletes — retain/release call-site discipline transfers directly to the
+   cell model, so fixing it now is not wasted work. The gate expects these
+   programs to fail until 1.5c removes them from the list.

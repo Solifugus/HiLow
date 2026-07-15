@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 1.5b — add valgrind/ASan gating to the lifetime/no-leak tests (see docs/cell-migration-audit.md phase plan)**
+**Current phase: 1.5c — object ownership discipline: fix the object double-release class and empty KNOWN_MEMORY_BUGS in tests/valgrind_gate.rs (see docs/cell-migration-audit.md phase plan)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
@@ -54,6 +54,8 @@ cargo test --no-fail-fast 2>&1 | grep -E "(test result|could not compile|error\[
 ```
 
 Expected output: every "test result" line shows "ok" with "0 failed". No "could not compile" lines. No "error[E" lines.
+
+The suite includes the **valgrind gate** (`tests/valgrind_gate.rs`, added in Phase 1.5b): it compiles every entry program under `tests/programs/` and runs it under valgrind, failing on any error or definite/indirect leak. It requires valgrind to be installed and fails loudly if it is not — there is no silent skip. The gate carries two honesty-checked lists: `REJECTION_FIXTURES` (programs that must fail compilation; the gate fails if one compiles) and `KNOWN_MEMORY_BUGS` (programs with a documented, adjudicated memory bug; the gate fails if one comes back clean, forcing the entry's removal when the bug is fixed). Adding to either list requires a citation in the entry's comment and a matching STATUS.md record.
 
 If the output shows any test failure, compilation error, or anything other than "ok ... 0 failed":
 

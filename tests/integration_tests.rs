@@ -4682,3 +4682,140 @@ fn test_string_scope_lifetime() {
 
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 1.5b: control-transfer temp cleanup pins.
+// Each program exercises a leak the emitted alloc/free check converts to
+// exit 1 + "MEMORY LEAK" on stderr, so the exit-0/empty-stderr assertions
+// pin the fix.
+
+#[test]
+fn test_return_in_match_arm_temps_integration() {
+    let executable = compile_program("tests/programs/return_in_match_arm_temps.hl")
+        .expect("Failed to compile return_in_match_arm_temps.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/return_in_match_arm_temps.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run return_in_match_arm_temps");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no leak)");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_return_in_switch_case_temps_integration() {
+    let executable = compile_program("tests/programs/return_in_switch_case_temps.hl")
+        .expect("Failed to compile return_in_switch_case_temps.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/return_in_switch_case_temps.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run return_in_switch_case_temps");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no leak)");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_for_in_key_break_integration() {
+    let executable = compile_program("tests/programs/for_in_key_break.hl")
+        .expect("Failed to compile for_in_key_break.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/for_in_key_break.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_key_break");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no leak)");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_for_in_key_continue_integration() {
+    let executable = compile_program("tests/programs/for_in_key_continue.hl")
+        .expect("Failed to compile for_in_key_continue.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/for_in_key_continue.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run for_in_key_continue");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0 (no leak)");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// Phase 1.5b: format-specifier fixtures promoted to integration tests.
+// These pin the spec'd radix/pad/precision format specifiers
+// (hilow-design.md string formatting: {n:x}, {n:b}, {n:08d}, {x:.2f}),
+// previously unreferenced fixtures broken by the f-string colon being
+// parsed as type ascription.
+
+#[test]
+fn test_format_binary_integration() {
+    let executable = compile_program("tests/programs/format_binary.hl")
+        .expect("Failed to compile format_binary.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/format_binary.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run format_binary");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_format_hex_integration() {
+    let executable = compile_program("tests/programs/format_hex.hl")
+        .expect("Failed to compile format_hex.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/format_hex.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run format_hex");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_format_comprehensive_integration() {
+    let executable = compile_program("tests/programs/format_comprehensive.hl")
+        .expect("Failed to compile format_comprehensive.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/format_comprehensive.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run format_comprehensive");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}

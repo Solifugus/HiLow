@@ -1,0 +1,16 @@
+// Pin: a return from inside a switch case must release the enclosing switch
+// statement's expression temporaries (the concat result feeding the subject).
+high program(): i32 {
+  function g(s: string): i32 {
+    switch (s + "!") {
+      case "go!":
+        return 1
+      default:
+        return 0
+    }
+    return 0
+  }
+  print(g("go"))
+  print(g("stop"))
+  return 0
+}

@@ -49,6 +49,19 @@ pub enum HeapType {
     Tuple(Vec<Type>), // Tuple with heap-allocated elements
 }
 
+/// Loop context for control-transfer cleanup (Phase 1.5b).
+/// Pushed while generating a loop body so break/continue can release
+/// resources they would otherwise jump past.
+#[derive(Debug, Clone)]
+struct LoopFrame {
+    /// Extra release statements the loop bottom would normally run
+    /// (e.g. the object for-in key release), re-emitted before break/continue
+    extra_cleanups: Vec<String>,
+    /// Length of enclosing_temp_frames at loop-body entry: frames above this
+    /// belong to statements inside the loop and must release on break/continue
+    temp_frame_base: usize,
+}
+
 /// Expression context for temporary tracking (Phase 11a expression-temporary cleanup)
 #[derive(Debug, Clone, PartialEq)]
 enum ExprContext {
@@ -123,6 +136,16 @@ pub struct CodeGenerator {
     method_receiver_type: Option<Type>,
     /// Whether we're currently inside a string switch (no break statements allowed)
     in_string_switch: bool,
+    /// Whether we're currently inside an integer/bool switch case body:
+    /// break there targets the C switch, not an enclosing loop (Phase 1.5b)
+    in_c_switch: bool,
+    /// Temp-owner frames of enclosing statements (Phase 1.5b): generate_statement
+    /// pushes the outer statement's temp_owners here instead of a local, so
+    /// return/break/continue can release temps whose statement-end cleanup
+    /// they jump past
+    enclosing_temp_frames: Vec<HashMap<String, (HeapType, usize)>>,
+    /// Stack of enclosing loops for break/continue cleanup (Phase 1.5b)
+    loop_frames: Vec<LoopFrame>,
     /// Current iteration value variable name for for-in loops
     current_iter_value_name: Option<String>,
     /// Phase 8a: Ownership tracking for heap allocations
@@ -198,6 +221,9 @@ impl CodeGenerator {
             method_receiver_type: None,
             in_string_switch: false,
             current_iter_value_name: None,
+            in_c_switch: false,
+            enclosing_temp_frames: Vec::new(),
+            loop_frames: Vec::new(),
             env_dtors: HashMap::new(),
             heap_owners: HashMap::new(),
             temp_owners: HashMap::new(),
@@ -654,6 +680,18 @@ impl CodeGenerator {
         // Same family as the transferred_vars fix above.
         let saved_heap_owners = std::mem::take(&mut self.heap_owners);
 
+        // Phase 1.5b: control-transfer context is per-C-function — a return/
+        // break inside this body must not see the enclosing function's
+        // statement temps or loops
+        let saved_temp_frames = std::mem::take(&mut self.enclosing_temp_frames);
+        let saved_loop_frames = std::mem::take(&mut self.loop_frames);
+        let saved_temp_owners = std::mem::take(&mut self.temp_owners);
+        let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
+        let saved_in_c_switch = self.in_c_switch;
+        let saved_in_string_switch = self.in_string_switch;
+        self.in_c_switch = false;
+        self.in_string_switch = false;
+
         // Watcher subscribers: use surgical masking to prevent cross-scope leaks while allowing
         // in-function watchers to fire. Collect names declared locally in this function (params + locals),
         // then save and remove only those shadowed names from inherited subscriber maps.
@@ -691,6 +729,12 @@ impl CodeGenerator {
         self.transferred_vars = saved_transferred;
         // Restore caller's heap-ownership state
         self.heap_owners = saved_heap_owners;
+        self.enclosing_temp_frames = saved_temp_frames;
+        self.loop_frames = saved_loop_frames;
+        self.temp_owners = saved_temp_owners;
+        self.pending_statement_decls = saved_pending_decls;
+        self.in_c_switch = saved_in_c_switch;
+        self.in_string_switch = saved_in_string_switch;
         // Restore caller's watcher-subscriber state: put back shadowed entries and remove
         // any local entries to prevent outward leakage
         for name in &local_names {
@@ -934,10 +978,11 @@ impl CodeGenerator {
 
         // Re-entrancy: nested generate_statement calls (function-expression bodies,
         // match block arms, switch case bodies) must not flush the enclosing
-        // statement's pending decls or release its temps. Save/restore both,
-        // mirroring the transferred_vars/heap_owners take-restore precedent.
+        // statement's pending decls or release its temps. The outer temps go
+        // onto enclosing_temp_frames (not a local) so return/break/continue
+        // can release them when jumping past the outer statement's cleanup.
         let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
-        let saved_temp_owners = std::mem::take(&mut self.temp_owners);
+        self.enclosing_temp_frames.push(std::mem::take(&mut self.temp_owners));
 
         match statement {
             Statement::Let(let_decl) => {
@@ -995,15 +1040,51 @@ impl CodeGenerator {
                 self.generate_switch_statement(switch_stmt, type_checker)?;
             }
             Statement::Break(_) => {
-                // Phase 8a: Emit cleanup before break
-                self.emit_early_return_cleanup(self.scope_depth);
+                if self.in_string_switch {
+                    // String switches lower to an if/else chain: HiLow's
+                    // case-break is a no-op there. Emitting scope cleanup here
+                    // released enclosing-scope owners mid-flow and scope exit
+                    // released them again (double release — caught by the
+                    // valgrind gate on switch_string).
+                } else if self.in_c_switch {
+                    // C-switch break exits only the switch; execution
+                    // continues after it, so no scope cleanup
+                    self.output.push_str("  break;\n");
+                } else {
+                    // Phase 1.5b: a loop-break jumps past the cleanups of the
+                    // statements it exits (enclosing temps since loop entry)
+                    // and past the loop-bottom extra cleanups (e.g. the
+                    // for-in key).
+                    if let Some(frame) = self.loop_frames.last().cloned() {
+                        // +1 skips the frame holding the loop statement's own
+                        // temps — break lands after the loop, where the loop
+                        // statement's end-of-statement cleanup still runs
+                        self.emit_enclosing_temp_releases(frame.temp_frame_base + 1);
+                        for cleanup in &frame.extra_cleanups {
+                            self.output.push_str(&format!("  {}\n", cleanup));
+                        }
+                    }
 
-                // Don't generate break statements inside string switches
-                if !self.in_string_switch {
+                    // Phase 8a: release loop-body-scoped heap owners the
+                    // break jumps past
+                    self.emit_early_return_cleanup(self.scope_depth);
+
                     self.output.push_str("  break;\n");
                 }
             }
             Statement::Continue(_) => {
+                // Phase 1.5b: continue always targets the innermost loop —
+                // release enclosing temps since loop entry and re-emit the
+                // loop-bottom cleanups it skips (recreated next iteration)
+                if let Some(frame) = self.loop_frames.last().cloned() {
+                    // +1 skips the loop statement's own temps frame — the loop
+                    // is still running and releases them at its statement end
+                    self.emit_enclosing_temp_releases(frame.temp_frame_base + 1);
+                    for cleanup in &frame.extra_cleanups {
+                        self.output.push_str(&format!("  {}\n", cleanup));
+                    }
+                }
+
                 // Phase 8a: Emit cleanup before continue
                 self.emit_early_return_cleanup(self.scope_depth);
 
@@ -1040,7 +1121,8 @@ impl CodeGenerator {
 
         // Restore the enclosing statement's pending decls and temps
         self.pending_statement_decls = saved_pending_decls;
-        self.temp_owners = saved_temp_owners;
+        self.temp_owners = self.enclosing_temp_frames.pop()
+            .expect("enclosing_temp_frames underflow: unbalanced generate_statement");
 
         Ok(())
     }
@@ -1554,8 +1636,12 @@ impl CodeGenerator {
 
             // Release this statement's expression temporaries before the leak
             // check — the statement-level cleanup would land after `return`
-            // (dead code). return_value already holds the result.
+            // (dead code). return_value already holds the result. Enclosing
+            // statements' temps (e.g. a surrounding match/switch subject or
+            // arm literals) release too: return skips their statement-end
+            // cleanup permanently.
             self.emit_temp_cleanup();
+            self.emit_enclosing_temp_releases(0);
 
             // Phase 9b fix: Emit cleanup for all scopes before returning
             for scope in (1..=self.scope_depth).rev() {
@@ -1630,8 +1716,11 @@ impl CodeGenerator {
 
                 // Release this statement's expression temporaries before
                 // `return` — the statement-level cleanup would land after it
-                // (dead code). __ret_N already holds the result.
+                // (dead code). __ret_N already holds the result. Enclosing
+                // statements' temps release too: return skips their
+                // statement-end cleanup permanently.
                 self.emit_temp_cleanup();
+                self.emit_enclosing_temp_releases(0);
 
                 for scope in (1..=self.scope_depth).rev() {
                     self.emit_early_return_cleanup(scope);
@@ -1639,6 +1728,9 @@ impl CodeGenerator {
 
                 self.output.push_str(&format!("  return {};\n", ret_temp));
             } else {
+                // Bare return still skips enclosing statements' temp cleanup
+                self.emit_temp_cleanup();
+                self.emit_enclosing_temp_releases(0);
                 for scope in (1..=self.scope_depth).rev() {
                     self.emit_early_return_cleanup(scope);
                 }
@@ -1667,12 +1759,36 @@ impl CodeGenerator {
         Ok(())
     }
 
+    /// Set up loop context for break/continue cleanup while generating a loop
+    /// body (Phase 1.5b): push a LoopFrame and clear the switch flags — a
+    /// break inside a loop inside a switch case targets the loop, matching
+    /// the C semantics of the emitted code.
+    fn enter_loop_body(&mut self, extra_cleanups: Vec<String>) -> (bool, bool) {
+        self.loop_frames.push(LoopFrame {
+            extra_cleanups,
+            temp_frame_base: self.enclosing_temp_frames.len(),
+        });
+        let saved = (self.in_string_switch, self.in_c_switch);
+        self.in_string_switch = false;
+        self.in_c_switch = false;
+        saved
+    }
+
+    fn exit_loop_body(&mut self, saved_switch_flags: (bool, bool)) {
+        self.in_string_switch = saved_switch_flags.0;
+        self.in_c_switch = saved_switch_flags.1;
+        self.loop_frames.pop();
+    }
+
     fn generate_while_statement(&mut self, while_stmt: &WhileStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         self.output.push_str("  while (");
         self.generate_condition(&while_stmt.condition, type_checker)?;
         self.output.push_str(") {\n");
 
-        self.generate_block(&while_stmt.body, type_checker)?;
+        let saved_flags = self.enter_loop_body(Vec::new());
+        let result = self.generate_block(&while_stmt.body, type_checker);
+        self.exit_loop_body(saved_flags);
+        result?;
 
         self.output.push_str("  }\n");
         Ok(())
@@ -1681,7 +1797,10 @@ impl CodeGenerator {
     fn generate_loop_statement(&mut self, loop_stmt: &LoopStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         self.output.push_str("  while (1) {\n");
 
-        self.generate_block(&loop_stmt.body, type_checker)?;
+        let saved_flags = self.enter_loop_body(Vec::new());
+        let result = self.generate_block(&loop_stmt.body, type_checker);
+        self.exit_loop_body(saved_flags);
+        result?;
 
         self.output.push_str("  }\n");
         Ok(())
@@ -1737,8 +1856,12 @@ impl CodeGenerator {
                 // Track the key so a return inside the body releases it
                 self.track_heap_owner(&for_in_stmt.key_name, HeapType::Array);
 
-                // Generate loop body
-                self.generate_block(&for_in_stmt.body, type_checker)?;
+                // Generate loop body; break/continue must release the key they
+                // jump past (the loop-bottom release below)
+                let saved_flags = self.enter_loop_body(vec![format!("hl_array_release({});", key_c_name)]);
+                let body_result = self.generate_block(&for_in_stmt.body, type_checker);
+                self.exit_loop_body(saved_flags);
+                body_result?;
 
                 // Restore previous state; release the key at iteration end
                 self.heap_owners.remove(&for_in_stmt.key_name);
@@ -1779,7 +1902,10 @@ impl CodeGenerator {
                 self.variable_types.insert(for_in_stmt.value_name.clone(), *elem_type);
 
                 // Generate loop body
-                self.generate_block(&for_in_stmt.body, type_checker)?;
+                let saved_flags = self.enter_loop_body(Vec::new());
+                let body_result = self.generate_block(&for_in_stmt.body, type_checker);
+                self.exit_loop_body(saved_flags);
+                body_result?;
 
                 // Restore variable types
                 self.variable_types.remove(&for_in_stmt.key_name);
@@ -1812,6 +1938,11 @@ impl CodeGenerator {
                 self.generate_expression(&switch_stmt.value, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(") {\n");
 
+                // Break inside these case bodies targets the C switch, not an
+                // enclosing loop — suppress loop-frame cleanup (Phase 1.5b)
+                let old_in_c_switch = self.in_c_switch;
+                self.in_c_switch = true;
+
                 // Generate cases
                 for case in &switch_stmt.cases {
                     self.output.push_str("    case ");
@@ -1835,6 +1966,8 @@ impl CodeGenerator {
                         self.generate_statement(statement, type_checker)?;
                     }
                 }
+
+                self.in_c_switch = old_in_c_switch;
 
                 self.output.push_str("  }\n");
             }
@@ -4895,32 +5028,30 @@ impl CodeGenerator {
                     let expr_type = self.infer_expression_type_for_codegen(expr);
 
                     if let Some(format_spec) = format_spec {
-                        // Handle special binary format case
+                        // Handle special binary format case.
+                        // hl_format_binary/hl_format_center return owned
+                        // managed strings (HiLowArray*) — release after use.
                         if format_spec.type_code == Some('b') {
-                            self.output.push_str("{ char* __tmp_buf = hl_format_binary((unsigned long long)");
+                            self.output.push_str("{ HiLowArray* __bin = hl_format_binary((unsigned long long)");
                             self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
                             self.output.push_str("); ");
 
                             // Handle alignment for binary format
                             if format_spec.align == Some(Align::Center) && format_spec.width.is_some() {
-                                self.output.push_str(&format!("char* __centered_buf = hl_format_center(__tmp_buf, {}); ", format_spec.width.unwrap()));
-                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__centered_buf, strlen(__centered_buf)); free(__tmp_buf); free(__centered_buf); } ");
+                                self.output.push_str(&format!("HiLowArray* __centered = hl_format_center(__bin, {}); ", format_spec.width.unwrap()));
+                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__centered->data, __centered->length); hl_array_release(__centered); ");
+                            } else if let Some(width) = format_spec.width {
+                                let pad_flag = if format_spec.align == Some(Align::Left) { "-" } else { "" };
+                                self.output.push_str("{ char __padded_buf[128]; ");
+                                self.output.push_str(&format!(
+                                    "snprintf(__padded_buf, sizeof(__padded_buf), \"%{}*.*s\", {}, (int)__bin->length, (const char*)__bin->data); ",
+                                    pad_flag, width
+                                ));
+                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__padded_buf, strlen(__padded_buf)); } ");
                             } else {
-                                // For binary format, we'll implement basic left/right alignment here
-                                if let Some(width) = format_spec.width {
-                                    if format_spec.align == Some(Align::Left) {
-                                        self.output.push_str(&format!("sprintf(__tmp_buf + strlen(__tmp_buf), \"%*s\", {}, \"\"); ", width.saturating_sub(1)));
-                                    } else if format_spec.align == Some(Align::Right) || format_spec.align.is_none() {
-                                        // Right align or default - pad on left
-                                        self.output.push_str("{ char __padded_buf[128]; ");
-                                        self.output.push_str(&format!("sprintf(__padded_buf, \"%*s\", {}, __tmp_buf); ", width));
-                                        self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__padded_buf, strlen(__padded_buf)); } ");
-                                    }
-                                } else {
-                                    self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__tmp_buf, strlen(__tmp_buf)); ");
-                                }
-                                self.output.push_str("free(__tmp_buf); } ");
+                                self.output.push_str("hl_array_append_bytes(__fstring_arr, (const uint8_t*)__bin->data, __bin->length); ");
                             }
+                            self.output.push_str("hl_array_release(__bin); } ");
                         } else {
                             // Generate format string based on format spec
                             let c_format = self.generate_c_format_string(&expr_type, format_spec)?;
@@ -5715,6 +5846,17 @@ impl CodeGenerator {
         let old_hoisted_variables = self.hoisted_variables.clone();
         let old_current_env_var = self.current_env_var.clone();
 
+        // Phase 1.5b: control-transfer context is per-C-function — the anon
+        // body must not see the enclosing function's statement temps or loops
+        let saved_temp_frames = std::mem::take(&mut self.enclosing_temp_frames);
+        let saved_loop_frames = std::mem::take(&mut self.loop_frames);
+        let saved_temp_owners = std::mem::take(&mut self.temp_owners);
+        let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
+        let saved_in_c_switch = self.in_c_switch;
+        let saved_in_string_switch = self.in_string_switch;
+        self.in_c_switch = false;
+        self.in_string_switch = false;
+
         // Set up environment for captured variables within the closure
         if has_captures {
             if let Some(env_struct_name) = &env_struct_name {
@@ -5761,6 +5903,12 @@ impl CodeGenerator {
         self.variable_types = old_variable_types;
         self.hoisted_variables = old_hoisted_variables;
         self.current_env_var = old_current_env_var;
+        self.enclosing_temp_frames = saved_temp_frames;
+        self.loop_frames = saved_loop_frames;
+        self.temp_owners = saved_temp_owners;
+        self.pending_statement_decls = saved_pending_decls;
+        self.in_c_switch = saved_in_c_switch;
+        self.in_string_switch = saved_in_string_switch;
 
         // Move function body to generated_functions and restore main output
         self.generated_functions.push_str(&self.output);
@@ -6500,53 +6648,76 @@ impl CodeGenerator {
         }
     }
 
+    /// Emit the release call for one tracked temporary (Phase 1.5b extraction:
+    /// shared by statement-end cleanup and control-transfer frame walks)
+    fn emit_temp_release(&mut self, temp_name: &str, heap_type: &HeapType) {
+        match heap_type {
+            HeapType::Object => {
+                self.output.push_str(&format!("  hl_object_release({});\n", temp_name));
+            }
+            HeapType::Function => {
+                self.output.push_str(&format!("  hl_function_release({});\n", temp_name));
+            }
+            HeapType::Environment => {
+                self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
+            }
+            HeapType::FStringBuffer => {
+                self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
+            }
+            HeapType::Unknown => {
+                self.output.push_str(&format!("  hl_unknown_release({});\n", temp_name));
+            }
+            HeapType::Optional => {
+                self.output.push_str(&format!("  hl_optional_release({});\n", temp_name));
+            }
+            HeapType::Watcher => {
+                self.output.push_str(&format!("  hl_watcher_release({});\n", temp_name));
+            }
+            HeapType::Array => {
+                self.output.push_str(&format!("  hl_array_release({});\n", temp_name));
+            }
+            HeapType::Tuple(_) => {
+                // Tuples are stack-allocated and shouldn't appear in temp_owners
+                // This case should not occur, but added for exhaustive matching
+            }
+        }
+    }
+
     /// Emit release calls for statement-end temporary cleanup (Phase 11a expression-temporary)
     fn emit_temp_cleanup(&mut self) {
         // Collect all temporary variables for release
-        let mut temps_to_release: Vec<String> = Vec::new();
+        let mut temps_to_release: Vec<(String, HeapType)> = Vec::new();
 
-        for (temp_name, (_heap_type, _scope_depth)) in &self.temp_owners {
-            temps_to_release.push(temp_name.clone());
+        for (temp_name, (heap_type, _scope_depth)) in &self.temp_owners {
+            temps_to_release.push((temp_name.clone(), heap_type.clone()));
         }
 
         // Emit release calls in reverse order (LIFO cleanup)
-        for temp_name in temps_to_release.iter().rev() {
-            if let Some((heap_type, _)) = self.temp_owners.get(temp_name) {
-                match heap_type {
-                    HeapType::Object => {
-                        self.output.push_str(&format!("  hl_object_release({});\n", temp_name));
-                    }
-                    HeapType::Function => {
-                        self.output.push_str(&format!("  hl_function_release({});\n", temp_name));
-                    }
-                    HeapType::Environment => {
-                        self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
-                    }
-                    HeapType::FStringBuffer => {
-                        self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
-                    }
-                    HeapType::Unknown => {
-                        self.output.push_str(&format!("  hl_unknown_release({});\n", temp_name));
-                    }
-                    HeapType::Optional => {
-                        self.output.push_str(&format!("  hl_optional_release({});\n", temp_name));
-                    }
-                    HeapType::Watcher => {
-                        self.output.push_str(&format!("  hl_watcher_release({});\n", temp_name));
-                    }
-                    HeapType::Array => {
-                        self.output.push_str(&format!("  hl_array_release({});\n", temp_name));
-                    }
-                    HeapType::Tuple(_) => {
-                        // Tuples are stack-allocated and shouldn't appear in temp_owners
-                        // This case should not occur, but added for exhaustive matching
-                    }
-                }
-            }
+        for (temp_name, heap_type) in temps_to_release.iter().rev() {
+            self.emit_temp_release(temp_name, heap_type);
         }
 
         // Clear the temporary tracking after cleanup
         self.temp_owners.clear();
+    }
+
+    /// Emit release calls for enclosing statements' temps whose statement-end
+    /// cleanup a control transfer jumps past (Phase 1.5b). Frames are read,
+    /// not cleared: the not-taken path still reaches the normal cleanup.
+    /// `from_frame` selects how far out to unwind: 0 for return (all frames),
+    /// a LoopFrame's temp_frame_base for break/continue.
+    fn emit_enclosing_temp_releases(&mut self, from_frame: usize) {
+        let from_frame = from_frame.min(self.enclosing_temp_frames.len());
+        let releases: Vec<(String, HeapType)> = self.enclosing_temp_frames[from_frame..]
+            .iter()
+            .rev()
+            .flat_map(|frame| {
+                frame.iter().map(|(name, (heap_type, _))| (name.clone(), heap_type.clone()))
+            })
+            .collect();
+        for (temp_name, heap_type) in &releases {
+            self.emit_temp_release(temp_name, heap_type);
+        }
     }
 
     /// Emit release calls for early returns without modifying heap_owners

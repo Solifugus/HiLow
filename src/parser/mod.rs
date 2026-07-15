@@ -48,12 +48,16 @@ impl std::error::Error for ParseError {}
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    /// True while parsing the expression of an f-string interpolation:
+    /// there `:` introduces a format spec ({n:x}, {n:08d}), not a type
+    /// ascription. Cleared inside parentheses, so {(x: i32)} still ascribes.
+    in_fstring_expr: bool,
 }
 
 impl Parser {
     pub fn new(input: &str) -> Result<Self, ParseError> {
         let tokens = Lexer::new(input).tokens().map_err(ParseError::LexError)?;
-        Ok(Parser { tokens, current: 0 })
+        Ok(Parser { tokens, current: 0, in_fstring_expr: false })
     }
 
     pub fn parse(mut self) -> Result<TopLevel, ParseError> {
@@ -1542,6 +1546,12 @@ impl Parser {
                     });
                 }
                 TokenKind::Colon => {
+                    // Inside an f-string interpolation the colon starts a
+                    // format spec ({n:x}, {n:08d} — hilow-design.md string
+                    // formatting), never a type ascription
+                    if self.in_fstring_expr {
+                        break;
+                    }
                     // Check if the token after the colon could start a type
                     // If not, this colon isn't for type ascription (e.g., f-string format spec)
                     if let Ok(next_token) = self.peek_ahead(1) {
@@ -1632,6 +1642,16 @@ impl Parser {
     }
 
     fn parse_tuple_or_parenthesized_expression(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
+        // Parentheses re-enable type ascription inside f-string
+        // interpolations: {(x: i32)} ascribes, {x:d} formats
+        let old_in_fstring_expr = self.in_fstring_expr;
+        self.in_fstring_expr = false;
+        let result = self.parse_tuple_or_parenthesized_inner(start_pos);
+        self.in_fstring_expr = old_in_fstring_expr;
+        result
+    }
+
+    fn parse_tuple_or_parenthesized_inner(&mut self, start_pos: Position) -> Result<Expression, ParseError> {
         // Parse the first expression
         let first_expr = self.parse_expression()?;
 
@@ -2005,7 +2025,11 @@ impl Parser {
     }
 
     fn parse_f_string_expression(&mut self) -> Result<(Expression, Option<FormatSpec>), ParseError> {
-        let expr = self.parse_expression()?;
+        let old_in_fstring_expr = self.in_fstring_expr;
+        self.in_fstring_expr = true;
+        let expr_result = self.parse_expression();
+        self.in_fstring_expr = old_in_fstring_expr;
+        let expr = expr_result?;
 
         // Check for format specifiers (colon after expression)
         let format_spec = if self.check(&TokenKind::Colon) {
