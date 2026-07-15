@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: Fix char*/HiLowArray* representation split test failures**
+**Current phase: 1.5a — fix char*/HiLowArray* representation-split test failures (see docs/cell-migration-audit.md phase plan)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
@@ -17,6 +17,13 @@ These two documents are authoritative. When in doubt, consult them in this order
 1. **`docs/hilow-design.md`** — the language specification. Defines syntax, semantics, type system, operators, modes, and standard library. If this document and the implementation disagree, the document wins (or the document needs updating, which is a deliberate decision, not a silent change).
 
 2. **`docs/development-plan.md`** — the phase-by-phase implementation plan. Defines what each phase implements, what it explicitly does *not* implement, and how to verify completion. The current phase governs what work is in scope.
+
+3. **`docs/cell-redesign-brief.md`** and **`docs/cell-migration-audit.md`** — the
+   watcher/concurrency redesign. The brief records adjudicated architectural
+   decisions; do not re-litigate them. The audit's refined phase plan governs
+   migration sequencing. Where the brief requires a spec change (e.g., escape
+   rejection removed in Phase 3), the spec edit happens deliberately in the
+   phase that lands it — per the rule in item 1, never silently.
 
 If these two documents disagree with each other, stop and ask — do not pick one silently.
 
@@ -43,7 +50,7 @@ Every session that modifies code must end by running the verification ritual and
 The verification ritual is this command:
 
 ```
-cargo test 2>&1 | grep -E "(test result|could not compile|error\[E)" | head -30
+cargo test --no-fail-fast 2>&1 | grep -E "(test result|could not compile|error\[E)" | head -30
 ```
 
 Expected output: every "test result" line shows "ok" with "0 failed". No "could not compile" lines. No "error[E" lines.
@@ -244,6 +251,10 @@ Producing the right *kind* of output is not enough. The expected output is speci
 When the spec and your training data disagree, the spec wins.
 
 **Ask before changing the spec or plan.** If you discover something that genuinely needs to change in `hilow-design.md` or `development-plan.md`, raise it — don't edit it unilaterally. The user wants to make those decisions.
+
+**One phase per session.** Each migration phase (1.5a, 1.5b, 2a, …) is its own
+session with a fresh context, ending in its own commit. Do not mix baseline
+repair with new tests or new features in one working tree.
 
 ## Working pattern for a session
 

@@ -289,7 +289,7 @@ equivalent answer in refcounting.
 | Factory pattern (escaping watchers) | `test_watcher_factory_*` (2811–2831) |
 | Shadowing correctness | `test_three_level_shadow_probe` (2851), `test_same_name_caller_callee_integration` (4368) — these pin the behavior the shadow-masking machinery exists for; they must pass **unchanged** when that machinery is deleted |
 | Captures by-reference | `test_scalar_watcher_capture_*`, `test_by_reference_sees_current`, `test_multiple_captures`, `test_nested_watchers` (4292–4406) |
-| Compile-time rejections | `test_watcher_expression_return_rejected` (2738), `test_watcher_escape_function_local_rejected` (2871) — **assert error-message text verbatim**; boxing makes escape legal-by-construction, so these tests encode a language decision: does the reachability restriction stay as spec, or fall away? Flag for the user at Phase 3 start, do not silently decide |
+| Compile-time rejections | `test_watcher_expression_return_rejected` (2738), `test_watcher_escape_function_local_rejected` (2871) — **assert error-message text verbatim**; boxing makes escape legal-by-construction, so these tests encode a language decision: does the reachability restriction stay as spec, or fall away? Adjudicated 2026-07-14 (see §5 "Open questions — adjudicated" item 1): the restriction drops in Phase 3, in the same commit as the boxing pass |
 | Stealth on scalars | `test_stealth_basic_scalar` (4159), `test_stealth_dynamic` (4216) |
 
 Specific Phase 3 risks: the boxing pass changes variable access shape
@@ -331,8 +331,9 @@ Behaviors the migration touches that no current test pins:
 
 Items 1, 4, 5, 6, 7, 9, 10 can and should be written now (they pass or
 demonstrably pin current behavior). Items 2, 3 document known-broken behavior
-and belong at the head of Phase 2. Item 8 needs a user decision on intended
-current behavior.
+— per the adjudicated latent-bug policy (§5 item 4) they are written in 1.5c
+as expected-fail/`#[ignore]`d pins and flip live in Phase 2. Item 8 is
+adjudicated (§5 item 2): compile-time diagnostic until 1.5a completes.
 
 ---
 
@@ -447,7 +448,34 @@ point of deleting-with-confidence.
 - Every step lands as one commit with the ritual output in the message.
 - A step that deletes codegen machinery must show the *pinning* tests green
   before and after — never weaken a test to make a deletion pass.
-- Open user decisions carried into the plan: escape-rejection semantics (3d),
-  string-watcher behavior today (§4.4 item 8), and whether `(deep)` on arrays
-  re-enters the language surface at 2d or waits (it was removed from the
-  surface previously; the brief reintroduces it).
+- The user decisions formerly carried as open here were adjudicated 2026-07-14
+  — see "Open questions — adjudicated" below.
+
+### Open questions — adjudicated (2026-07-14)
+
+Adjudicated by the project owner; no longer open. These govern the phases
+named and are not to be re-litigated.
+
+1. **Escape rejection (3d / §4.3 last row): dropped from the spec in Phase 3.**
+   The enforcement check and the spec text are removed in the same commit that
+   lands the boxing pass, together with a test demonstrating a sound escape
+   (a watcher escaping its defining scope, working correctly). Until that
+   commit, the rule stays enforced and its rejection tests stay green as
+   written.
+2. **String watching (§4.4 item 8): compile-time diagnostic until 1.5a
+   completes.** Registering a watcher on a string produces a clean
+   compile-time diagnostic ("string watchers land with the unified
+   representation") until Phase 1.5a completes. After unification, strings
+   inherit cell semantics with zero string-specific watcher machinery — no
+   string-specific diagnostic, registration path, or firing code.
+3. **Parent list / deep-watched bit vs `(deep)` surface syntax: header fields
+   land in Phase 2 from the start; syntax re-enters at 2d only.** The parent
+   list and deep-watched bit go into the cell header in Phase 2a as designed.
+   `(deep)` array syntax is re-admitted to the language surface at 2d only,
+   gated on nested-container tests written as part of 2d.
+4. **Latent-bug policy (§3.4 a–d): NOT fixed in the current machinery.** Each
+   of the four verified latent bugs gets an expected-fail/`#[ignore]`d test
+   named for the bug during Phase 1.5 gap-test work (1.5c), flipping to a
+   real assertion when Phase 2 replaces the path the bug lives in. (This
+   refines §4.4's placement of items 2–3 at "the head of Phase 2": the tests
+   are written in 1.5c as documented-ignore pins, and go live in Phase 2.)
