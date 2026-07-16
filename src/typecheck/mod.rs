@@ -1145,8 +1145,13 @@ impl TypeChecker {
         let target_type = self.check_expression(&assign_stmt.target);
         let value_type = self.check_expression(&assign_stmt.value);
 
-        // For assignment, types must match exactly (no coercion)
-        if target_type != value_type {
+        // For assignment, types must match exactly (no coercion).
+        // Phase 1.5e exception: storing `weak x` into a weak slot — the slot
+        // reads back as T? but the store takes the referent itself.
+        let weak_store_ok = matches!(assign_stmt.value, Expression::WeakRef(_, _))
+            && matches!(value_type, Type::Object(_))
+            && target_type == Type::Optional(Box::new(value_type.clone()));
+        if target_type != value_type && !weak_store_ok {
             self.add_error(
                 format!("Cannot assign {} to {}", value_type, target_type),
                 assign_stmt.position.clone()
@@ -2065,6 +2070,16 @@ impl TypeChecker {
             Type::Nothing | Type::UnknownType | Type::Tuple(_) => {
                 // These types are printable
             }
+            // Phase 1.5e: T? prints via runtime dispatch (print_optional_*):
+            // the value when known, the unknown otherwise. Mirrors the inner
+            // types codegen's print dispatch supports.
+            Type::Optional(ref inner) if matches!(inner.as_ref(),
+                Type::I8 | Type::I16 | Type::I32 | Type::Isize |
+                Type::U8 | Type::U16 | Type::U32 | Type::Usize |
+                Type::I64 | Type::U64 | Type::F32 | Type::F64 |
+                Type::Bool | Type::String) => {
+                // Printable via print_optional_*
+            }
             _ => {
                 self.add_error(
                     format!("Cannot print value of type {}", arg_type),
@@ -2767,6 +2782,13 @@ impl TypeChecker {
                 }
                 _ => {
                     let prop_type = self.check_expression(prop_expr);
+                    // Phase 1.5e: a weak slot reads back as referent-or-unknown
+                    let prop_type = if matches!(prop_expr, Expression::WeakRef(_, _))
+                        && matches!(prop_type, Type::Object(_)) {
+                        Type::Optional(Box::new(prop_type))
+                    } else {
+                        prop_type
+                    };
                     properties.push((prop_name.clone(), prop_type));
                 }
             }
@@ -2863,6 +2885,27 @@ impl TypeChecker {
                     "reason" => Type::String,
                     "options" => Type::DynamicArray(Box::new(Type::String)),
                     _ => Type::Nothing, // Unknown properties return nothing (Phase 9a behavior)
+                }
+            },
+            // Phase 1.5e: a weak property read is object-or-unknown. Member
+            // access on it propagates the possibly-unknown state: a property
+            // of type T reads as T?. A property that is itself a weak slot
+            // (already T?) stays T? — unknown propagates as the same unknown,
+            // it does not nest. If the referent's chain has no such property,
+            // .reason/.options address the unknown state itself.
+            Type::Optional(ref inner) if matches!(inner.as_ref(), Type::Object(_)) => {
+                if let Some(prop_type) = self.find_property_in_chain(inner, &member_access.member, 0) {
+                    if matches!(prop_type, Type::Optional(_)) {
+                        prop_type
+                    } else {
+                        Type::Optional(Box::new(prop_type))
+                    }
+                } else {
+                    match member_access.member.as_str() {
+                        "reason" => Type::String,
+                        "options" => Type::DynamicArray(Box::new(Type::String)),
+                        _ => Type::Nothing,
+                    }
                 }
             },
             Type::DynamicArray(elem_type) => {

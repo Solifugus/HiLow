@@ -561,7 +561,7 @@ struct AlignedBuffer {
 
 ### Flexible Objects (High mode only)
 
-In High mode, prototype-based flexible objects work like JavaScript — properties can be added or removed dynamically, and prototypes provide delegation.
+In High mode, prototype-based flexible objects work like JavaScript — properties can be added dynamically, and prototypes provide delegation. Property removal is not yet implemented; property indices are append-only. When removal is later added, it will tombstone the slot — indices are never compacted or reused. (Weak-reference bookkeeping keys on `(holder, property index)` and any future slot-stability guarantees depend on this.)
 
 ```hilow
 // Object literals
@@ -1197,6 +1197,50 @@ high program(): i32 {
 ```
 
 The developer doesn't see the refcounting. There's no GC pause, no runtime tracing — just a small inc/dec on the refcount when the value is shared. Cycle detection is opt-in via `weak` references when needed.
+
+#### Weak References
+
+A `weak` store breaks a reference cycle: the property holds the object
+without owning it. Weak stores appear in object literals and in property
+assignments:
+
+```hilow
+let target = { name: "T" }
+let holder = { ref: weak target }   // literal form
+holder.ref = weak target            // assignment form
+```
+
+Semantics:
+
+- **No retain on store.** A weak property does not contribute to the
+  referent's reference count. Overwriting or dropping the property releases
+  nothing.
+- **Slot nulled on referent death.** When the referent's last strong
+  reference is released, every weak property pointing at it is cleared.
+- **Reading a weak property yields `T?`** — the referent while it is alive,
+  or `unknown` with reason `"weak referent released"` after its death.
+  Binding the live referent (`let r = holder.ref`) holds a strong reference
+  for the binding's lifetime.
+- **Member access propagates.** Accessing a property through a weak read
+  follows the standard unknown-propagation rule: on a live referent, a
+  property of type `T` reads as `T?`; on a dead one, the access returns the
+  same unknown.
+
+```hilow
+print(holder.ref.name)              // "T" while target is alive
+
+target = { name: "T2" }             // old target's last strong ref released
+
+let r = holder.ref
+if (r is unknown) {
+  print(r.reason)                   // "weak referent released"
+}
+
+let n = holder.ref.name             // string? — propagated unknown
+if (n is unknown) {
+  print("no referent")
+}
+```
 
 ### Low Mode: Explicit Memory Modes
 

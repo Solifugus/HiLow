@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 1.5e — weak-after-death semantics: dead-weak read yields `unknown` with reason "weak referent released", member access propagates per unknown rules; implementation + hilow-design.md spec edit in the same commit; un-ignore test_weak_after_death_unknown_integration and remove weak_after_death_unknown.hl from REJECTION_FIXTURES (audit §5 item 6)**
+**Current phase: 2a — cell header: introduce `HiLowCell` header fields (watcher list, parent list, version, deep-watched flag) onto `HiLowArray` — mechanical layout change, firing behavior identical (audit §5 refined phase plan, Phase 2 arrays-first)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -107,8 +107,12 @@ typedef enum {
     HL_OPT_TIME,
     HL_OPT_DURATION,
     HL_OPT_MONEY,
+    HL_OPT_OBJECT,   // Phase 1.5e: weak property reads yield object-or-unknown
     // Add others as needed by tests
 } HiLowOptionalKind;
+
+// Forward declaration: HiLowOptional can carry an object payload (Phase 1.5e)
+struct HiLowObject;
 
 typedef struct HiLowOptional {
     int refcount;
@@ -120,6 +124,7 @@ typedef struct HiLowOptional {
         HiLowTime time_val;
         HiLowDuration duration_val;
         HiLowMoney money_val;
+        struct HiLowObject* obj_val;  // owned (+1) when kind == HL_OPT_OBJECT
     } payload;
 } HiLowOptional;
 
@@ -364,6 +369,19 @@ void hl_function_release(HiLowFunction* fn);
 void hl_object_weak_register(HiLowObject* target, HiLowObject* holder, size_t prop_index);
 void hl_object_weak_unregister(HiLowObject* target, HiLowObject* holder, size_t prop_index);
 void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* target);
+
+// Weak property reads (Phase 1.5e, audit §5 item 6): reading a weak property
+// yields an optional — the referent (retained) while it is alive, or unknown
+// with reason "weak referent released" after its death. Member access through
+// that optional propagates the same unknown; on a live referent it wraps the
+// property value in a fresh optional. All of these return a fresh +1 optional
+// the caller owns.
+HiLowOptional* hl_object_get_weak(HiLowObject* obj, const char* key);
+HiLowOptional* hl_optional_new_object(HiLowObject* o);   // takes ownership of o (+1)
+HiLowObject* hl_optional_unwrap_object(HiLowOptional* opt);  // retain-on-return
+HiLowOptional* hl_optional_member_i32(HiLowOptional* opt, const char* key);
+HiLowOptional* hl_optional_member_str(HiLowOptional* opt, const char* key);
+HiLowOptional* hl_optional_member_object(HiLowOptional* opt, const char* key);
 
 // Retain-and-return helpers (Phase 1.5c): borrowed reference -> owned +1 inline
 HiLowObject* hl_object_ref(HiLowObject* obj);

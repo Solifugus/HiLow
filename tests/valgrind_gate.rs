@@ -32,7 +32,6 @@ const REJECTION_FIXTURES: &[&str] = &[
     "wrong_context.hl",                              // rejection fixture; test commented out
     "stealth_return_rejected.hl",                    // is_err test test_stealth_return_rejected (wired in 1.5d, audit §4.4 item 9)
     "string_watcher_rejected.hl",                    // is_err test test_string_watcher_rejected — adjudicated audit §5 item 2: compile-time diagnostic until strings inherit cell semantics (Phase 2)
-    "weak_after_death_unknown.hl",                   // EXPECTED-BEHAVIOR pin for Phase 1.5e (dead-weak read → unknown "weak referent released"); does not compile today (.reason on object-typed value). When 1.5e lands, this compiles — remove the entry and un-ignore its test
     "phase3/types2.hl",                              // verify_phase3.rs test_types2_fails_type_check
     "phase3/types3.hl",                              // verify_phase3.rs test_types3_fails_type_check
     "unknown_with_options.hl",                       // Phase 9b deferral: unknown constructor with options is UnsupportedFeature in codegen (generate_unknown_constructor)

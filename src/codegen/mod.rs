@@ -1164,6 +1164,13 @@ impl CodeGenerator {
                     let mut properties = Vec::new();
                     for (prop_name, prop_expr) in &obj_lit.properties {
                         let prop_type = self.infer_expression_type_for_codegen(prop_expr);
+                        // Phase 1.5e: a weak slot reads back as referent-or-unknown
+                        let prop_type = if matches!(prop_expr, Expression::WeakRef(_, _))
+                            && matches!(prop_type, Type::Object(_)) {
+                            Type::Optional(Box::new(prop_type))
+                        } else {
+                            prop_type
+                        };
                         properties.push((prop_name.clone(), prop_type));
                     }
                     Type::Object(properties)
@@ -1540,6 +1547,8 @@ impl CodeGenerator {
                     // reference, so it must own one. Object/function member
                     // reads are borrows (retain them); string member reads
                     // arrive +1 from hl_object_get_str (track only).
+                    // Phase 1.5e: weak reads / weak member propagation arrive
+                    // +1 as HiLowOptional* (track only).
                     let result_type = self.infer_expression_type_for_codegen(initializer);
                     let c_var_name = self.mangle_variable_name(name);
                     match result_type {
@@ -1553,6 +1562,12 @@ impl CodeGenerator {
                         }
                         Type::String => {
                             self.track_heap_owner(name, HeapType::Array);
+                        }
+                        Type::Optional(_) => {
+                            self.track_heap_owner(name, HeapType::Optional);
+                            if self.in_main_program {
+                                self.main_program_optionals.push(name.to_string());
+                            }
                         }
                         _ => {}
                     }
@@ -4792,6 +4807,13 @@ impl CodeGenerator {
                 let mut properties = Vec::new();
                 for (prop_name, prop_expr) in &obj_lit.properties {
                     let prop_type = self.infer_expression_type_for_codegen(prop_expr);
+                    // Phase 1.5e: a weak slot reads back as referent-or-unknown
+                    let prop_type = if matches!(prop_expr, Expression::WeakRef(_, _))
+                        && matches!(prop_type, Type::Object(_)) {
+                        Type::Optional(Box::new(prop_type))
+                    } else {
+                        prop_type
+                    };
                     properties.push((prop_name.clone(), prop_type));
                 }
                 Type::Object(properties)
@@ -4812,10 +4834,23 @@ impl CodeGenerator {
                             _ => Type::Nothing, // Unknown properties return nothing
                         }
                     }
-                    Type::Optional(_) => {
-                        // .reason/.options on a narrowed optional access the
-                        // contained unknown (mirrors treat_as_unknown in
-                        // generate_member_access)
+                    Type::Optional(ref inner) => {
+                        // Phase 1.5e: member access through a weak read
+                        // (object-or-unknown) propagates — property T reads
+                        // as T?; an already-optional (nested weak) property
+                        // stays as-is. Chain lookup wins over the
+                        // .reason/.options fallback, which addresses the
+                        // unknown state itself (mirrors treat_as_unknown in
+                        // generate_member_access).
+                        if let Type::Object(_) = inner.as_ref() {
+                            if let Some(prop_type) = self.find_property_type_in_chain(inner, &member_access.member, 0) {
+                                return if matches!(prop_type, Type::Optional(_)) {
+                                    prop_type
+                                } else {
+                                    Type::Optional(Box::new(prop_type))
+                                };
+                            }
+                        }
                         match member_access.member.as_str() {
                             "reason" => Type::String,
                             "options" => Type::DynamicArray(Box::new(Type::String)),
@@ -5852,9 +5887,23 @@ impl CodeGenerator {
                     _ => Type::Nothing,
                 }
             }
-            Type::Optional(_) => {
-                // Check if this might be a narrowed unknown value accessing unknown properties
-                if matches!(member_access.member.as_str(), "reason" | "options") {
+            Type::Optional(ref inner) => {
+                // Phase 1.5e: member access through a weak read propagates
+                // (property T reads as T?, nested weak stays T?). Chain
+                // lookup wins over the .reason/.options narrowed-unknown
+                // fallback.
+                let chain_hit = if let Type::Object(_) = inner.as_ref() {
+                    self.find_property_type_in_chain(inner, &member_access.member, 0)
+                } else {
+                    None
+                };
+                if let Some(prop_type) = chain_hit {
+                    if matches!(prop_type, Type::Optional(_)) {
+                        prop_type
+                    } else {
+                        Type::Optional(Box::new(prop_type))
+                    }
+                } else if matches!(member_access.member.as_str(), "reason" | "options") {
                     // This is likely a narrowed optional accessing unknown properties
                     match member_access.member.as_str() {
                         "reason" => Type::String,
@@ -5913,6 +5962,64 @@ impl CodeGenerator {
                         phase: "Managed Strings Sub-phase 1".to_string(),
                     });
                 }
+            }
+        }
+
+        // Phase 1.5e: reading a weak slot — the property's shape type is T?
+        // on a plain object. hl_object_get_weak returns a fresh +1 optional:
+        // the referent (retained) while alive, unknown "weak referent
+        // released" after its death.
+        if matches!(object_type, Type::Object(_)) && matches!(member_type, Type::Optional(_)) {
+            return self.emit_optional_member_call(
+                "hl_object_get_weak",
+                &member_access.object,
+                &member_access.member,
+                type_checker,
+                context,
+            );
+        }
+
+        // Phase 1.5e: member access through a weak read (object-or-unknown
+        // optional) — unknown propagates, a live referent's property is
+        // wrapped in a fresh optional. The helper is picked by the property's
+        // static type; the chain-hit requirement keeps .reason/.options on
+        // narrowed unknowns on their existing path below.
+        if let Type::Optional(ref inner) = object_type {
+            if matches!(inner.as_ref(), Type::Object(_))
+                && self.find_property_type_in_chain(inner, &member_access.member, 0).is_some()
+            {
+                let helper = match &member_type {
+                    Type::Optional(prop) => match prop.as_ref() {
+                        Type::I32 => "hl_optional_member_i32",
+                        Type::String => "hl_optional_member_str",
+                        Type::Object(_) => "hl_optional_member_object",
+                        other => {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!(
+                                    "member access through a weak reference for property type {}",
+                                    other
+                                ),
+                                phase: "future phases".to_string(),
+                            });
+                        }
+                    },
+                    other => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!(
+                                "member access through a weak reference for property type {}",
+                                other
+                            ),
+                            phase: "future phases".to_string(),
+                        });
+                    }
+                };
+                return self.emit_optional_member_call(
+                    helper,
+                    &member_access.object,
+                    &member_access.member,
+                    type_checker,
+                    context,
+                );
             }
         }
 
@@ -6046,6 +6153,41 @@ impl CodeGenerator {
             self.output.push_str("\")");
         }
 
+        Ok(())
+    }
+
+    /// Phase 1.5e: emit `<helper>(<object expr>, "<member>")` for the
+    /// optional-returning weak-read helpers (hl_object_get_weak,
+    /// hl_optional_member_*). They all return a fresh +1 HiLowOptional the
+    /// caller owns: in Temporary context the call is hoisted as a tracked
+    /// temp released at statement end (mirroring the .reason path); in Owned
+    /// context the binding site takes ownership.
+    fn emit_optional_member_call(
+        &mut self,
+        helper: &str,
+        object_expr: &Expression,
+        member: &str,
+        type_checker: &TypeChecker,
+        context: ExprContext,
+    ) -> Result<(), CodegenError> {
+        let saved_output = std::mem::take(&mut self.output);
+        self.output.push_str(helper);
+        self.output.push_str("(");
+        self.generate_expression(object_expr, type_checker, ExprContext::Temporary)?;
+        self.output.push_str(", \"");
+        self.output.push_str(member);
+        self.output.push_str("\")");
+        let call_expr = std::mem::take(&mut self.output);
+        self.output = saved_output;
+
+        if context == ExprContext::Temporary {
+            let temp_name = self.next_temp_name();
+            self.temp_owners.insert(temp_name.clone(), (HeapType::Optional, self.scope_depth));
+            self.pending_statement_decls.push(format!("HiLowOptional* {} = {};", temp_name, call_expr));
+            self.output.push_str(&temp_name);
+        } else {
+            self.output.push_str(&call_expr);
+        }
         Ok(())
     }
 

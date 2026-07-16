@@ -5197,15 +5197,12 @@ fn test_watcher_temp_env_statement_integration() {
     let _ = fs::remove_file(&executable);
 }
 
-// Weak-after-death, adjudicated 2026-07-15 (audit §5 item 6): reading a weak
-// property whose referent has died yields unknown with reason
-// "weak referent released"; member access on it propagates per the spec's
-// unknown rules (hilow-design.md "unknown propagates through property
-// access"). Implementation is Phase 1.5e (spec edit in the same commit).
-// Today the program does not even compile (.reason on an object-typed value)
-// — it is carried on the gate's REJECTION_FIXTURES until 1.5e.
+// Weak-after-death, adjudicated 2026-07-15 (audit §5 item 6), implemented in
+// Phase 1.5e: reading a weak property whose referent has died yields unknown
+// with reason "weak referent released"; member access on it propagates per
+// the spec's unknown rules (hilow-design.md "unknown propagates through
+// property access").
 #[test]
-#[ignore = "adjudicated weak-after-death semantics (dead-weak read → unknown \"weak referent released\", member access propagates); lands in Phase 1.5e with the spec edit — un-ignore then and remove the program from REJECTION_FIXTURES"]
 fn test_weak_after_death_unknown_integration() {
     let executable = compile_program("tests/programs/weak_after_death_unknown.hl")
         .expect("Failed to compile weak_after_death_unknown.hl");

@@ -392,8 +392,23 @@ point of deleting-with-confidence.
   propagates per the spec's unknown rules. Implementation and the
   hilow-design.md spec edit land in the same commit; un-ignore
   test_weak_after_death_unknown_integration and remove
-  weak_after_death_unknown.hl from REJECTION_FIXTURES. *Gate: full suite +
-  gate green, that test live.*
+  weak_after_death_unknown.hl from REJECTION_FIXTURES. (Landed 2026-07-15.
+  Design: a weak property's shape type is `T?` — reading it emits
+  `hl_object_get_weak`, returning a fresh optional wrapping the retained
+  referent while alive or unknown "weak referent released" after death;
+  HiLowOptional gained an object payload kind. Member access through the
+  optional emits `hl_optional_member_{i32,str,object}`: unknown propagates as
+  the same instance, a live referent's property wraps as `T?`. This rides the
+  existing Phase 9 unknown ecosystem (hl_is_unknown, refinement to
+  UnknownType for .reason, print_optional_*) rather than adding a parallel
+  one. Surface changes beyond the ruling, all forced by it: `print(T?)` now
+  typechecks for primitive/string inners (codegen already dispatched it —
+  reachable before only under refinement), and the assignment-form weak store
+  `holder.ref = weak target` accepts `T?`-slot vs `T`-value. Weak member
+  propagation is implemented for property types i32/string/object; other
+  property types through a weak read raise a compile-time diagnostic —
+  extension deferred until the optional runtime grows those payload kinds.)
+  *Gate: full suite + gate green, that test live.*
 
 ### Phase 2 — arrays first
 

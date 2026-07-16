@@ -219,6 +219,8 @@ void hl_optional_release(HiLowOptional* opt) {
                 hl_unknown_release(opt->payload.unk_val);
             } else if (opt->kind == HL_OPT_STRING && opt->payload.str_val) {
                 hl_array_release(opt->payload.str_val);
+            } else if (opt->kind == HL_OPT_OBJECT && opt->payload.obj_val) {
+                hl_object_release(opt->payload.obj_val);
             }
             free(opt);
             hl_free_count++;
@@ -1118,6 +1120,141 @@ void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* t
     if (target) {
         hl_object_weak_register(target, obj, prop_index);
     }
+}
+
+// Weak property reads (Phase 1.5e, audit §5 item 6).
+
+HiLowOptional* hl_optional_new_object(HiLowObject* o) {
+    HiLowOptional* opt = malloc(sizeof(HiLowOptional));
+    hl_alloc_count++;
+    opt->refcount = 1;
+    opt->kind = HL_OPT_OBJECT;
+    opt->payload.obj_val = o;  // Take ownership of the object (+1)
+    return opt;
+}
+
+HiLowObject* hl_optional_unwrap_object(HiLowOptional* opt) {
+    // Retain-on-return, mirroring hl_optional_unwrap_string
+    if (opt && opt->kind == HL_OPT_OBJECT && opt->payload.obj_val) {
+        hl_object_retain(opt->payload.obj_val);
+        return opt->payload.obj_val;
+    }
+    return NULL;
+}
+
+// Reading a weak property: the referent while alive, unknown after its death.
+// Referent death nulls the slot (hl_object_release step 3), so a NULL
+// obj_val on a found property IS the dead-weak state.
+HiLowOptional* hl_object_get_weak(HiLowObject* obj, const char* key) {
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_OBJECT) {
+                HiLowObject* target = prop->value.value.obj_val;
+                if (!target) {
+                    return hl_optional_new_unknown(hl_unknown_new_internal("weak referent released"));
+                }
+                hl_object_retain(target);
+                return hl_optional_new_object(target);
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
+    }
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
+}
+
+// Member access through an object-or-unknown optional. An unknown propagates
+// (the SAME unknown instance, per the spec's unknown-propagation rule); a
+// live object wraps the named property in a fresh optional. Fatal on a
+// missing property or property type mismatch, matching the plain getters.
+static Property* optional_member_prop(HiLowOptional* opt, const char* key, HiLowUnknown** propagated) {
+    *propagated = NULL;
+    if (!opt) {
+        fprintf(stderr, "member access on empty optional\n");
+        exit(1);
+    }
+    if (opt->kind == HL_OPT_UNKNOWN) {
+        hl_unknown_retain(opt->payload.unk_val);
+        *propagated = opt->payload.unk_val;
+        return NULL;
+    }
+    if (opt->kind != HL_OPT_OBJECT || !opt->payload.obj_val) {
+        fprintf(stderr, "member access on non-object optional for property '%s'\n", key);
+        exit(1);
+    }
+
+    HiLowObject* current = opt->payload.obj_val;
+    int depth = 0;
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            return prop;
+        }
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
+}
+
+HiLowOptional* hl_optional_member_i32(HiLowOptional* opt, const char* key) {
+    HiLowUnknown* propagated;
+    Property* prop = optional_member_prop(opt, key, &propagated);
+    if (propagated) return hl_optional_new_unknown(propagated);
+    if (prop->value.type != HL_VALUE_I32) {
+        fprintf(stderr, "type mismatch on property '%s'\n", key);
+        exit(1);
+    }
+    return hl_optional_new_i32(prop->value.value.i32_val);
+}
+
+HiLowOptional* hl_optional_member_str(HiLowOptional* opt, const char* key) {
+    HiLowUnknown* propagated;
+    Property* prop = optional_member_prop(opt, key, &propagated);
+    if (propagated) return hl_optional_new_unknown(propagated);
+    if (prop->value.type != HL_VALUE_STR) {
+        fprintf(stderr, "type mismatch on property '%s'\n", key);
+        exit(1);
+    }
+    hl_array_retain(prop->value.value.str_val);
+    return hl_optional_new_string(prop->value.value.str_val);
+}
+
+HiLowOptional* hl_optional_member_object(HiLowOptional* opt, const char* key) {
+    HiLowUnknown* propagated;
+    Property* prop = optional_member_prop(opt, key, &propagated);
+    if (propagated) return hl_optional_new_unknown(propagated);
+    if (prop->value.type != HL_VALUE_OBJECT) {
+        fprintf(stderr, "type mismatch on property '%s'\n", key);
+        exit(1);
+    }
+    HiLowObject* target = prop->value.value.obj_val;
+    if (!target) {
+        // A nested weak slot whose referent died: same dead-weak semantics
+        return hl_optional_new_unknown(hl_unknown_new_internal("weak referent released"));
+    }
+    hl_object_retain(target);
+    return hl_optional_new_object(target);
 }
 
 // Retain-and-return helpers for expression positions (Phase 1.5c): turn a
