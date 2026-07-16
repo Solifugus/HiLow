@@ -210,9 +210,12 @@ typedef struct HiLowObject {
     struct WeakRef* weak_refs; // NEW: linked list of weak references to this object
 } HiLowObject;
 
-// Weak reference tracking (Phase 8c)
+// Weak reference tracking (Phase 8c; reworked in Phase 1.5c). Keyed on
+// (holder, property index) — stable across property-array reallocs, unlike a
+// raw slot address.
 typedef struct WeakRef {
-    HiLowObject** location;  // address of the pointer to invalidate
+    HiLowObject* holder;     // object holding the weak property
+    size_t prop_index;       // index of the weak property in holder->properties
     struct WeakRef* next;
 } WeakRef;
 
@@ -358,9 +361,14 @@ void hl_function_retain(HiLowFunction* fn);
 void hl_function_release(HiLowFunction* fn);
 
 // Weak reference operations (Phase 8c)
-void hl_object_weak_register(HiLowObject* target, HiLowObject** location);
-void hl_object_weak_unregister(HiLowObject* target, HiLowObject** location);
-HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key);
+void hl_object_weak_register(HiLowObject* target, HiLowObject* holder, size_t prop_index);
+void hl_object_weak_unregister(HiLowObject* target, HiLowObject* holder, size_t prop_index);
+void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* target);
+
+// Retain-and-return helpers (Phase 1.5c): borrowed reference -> owned +1 inline
+HiLowObject* hl_object_ref(HiLowObject* obj);
+HiLowFunction* hl_function_ref(HiLowFunction* fn);
+HiLowArray* hl_array_ref(HiLowArray* arr);
 
 // Optional unwrap helpers for narrowed types (Phase 9b)
 // These extract the underlying T value from a T? that is known to hold T (not unknown)

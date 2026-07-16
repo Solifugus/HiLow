@@ -1,0 +1,11 @@
+high program(): i32 {
+  let parent1 = { tag: 1 }
+  let parent2 = { tag: 2 }
+  let child = { proto: parent1 }
+  print(child.tag)
+  child.proto = parent2
+  print(child.tag)
+  print(parent1.tag)
+  print(parent2.tag)
+  return 0
+}

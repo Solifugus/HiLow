@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 1.5c — object ownership discipline: fix the object double-release class and empty KNOWN_MEMORY_BUGS in tests/valgrind_gate.rs (see docs/cell-migration-audit.md phase plan)**
+**Current phase: 1.5d — gap tests: audit §4.4 items 1, 4, 5, 6, 7, 9 pinning current behavior, plus expected-fail/`#[ignore]`d tests for the §3.4 latent bugs per the §5 item 4 adjudication (see docs/cell-migration-audit.md phase plan)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

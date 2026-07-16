@@ -1,0 +1,9 @@
+high program(): i32 {
+  let thing = { n: 5 }
+  let h1 = { item: thing }
+  let h2 = { item: thing }
+  print(h1.item.n)
+  print(h2.item.n)
+  print(thing.n)
+  return 0
+}

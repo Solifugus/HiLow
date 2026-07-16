@@ -357,8 +357,13 @@ point of deleting-with-confidence.
 - **1.5c** Object ownership discipline (adjudicated 2026-07-15, §5 item 5):
   fix the object double-release class in the current retain/release
   machinery; remove all 17 entries from `KNOWN_MEMORY_BUGS` in
-  tests/valgrind_gate.rs as they come clean. *Gate: full suite + gate green
-  with an empty KNOWN_MEMORY_BUGS list.*
+  tests/valgrind_gate.rs as they come clean. (Landed 2026-07-15, slightly
+  broader than planned: the fix also required actually implementing weak
+  properties — `is_weak` was never set anywhere — and re-keying WeakRef from
+  a raw slot address to (holder, prop_index) to survive property-array
+  reallocs. Weak-after-death access semantics remain unadjudicated; see
+  STATUS.md Open questions.) *Gate: full suite + gate green with an empty
+  KNOWN_MEMORY_BUGS list.*
 - **1.5d** Add gap tests §4.4 items 1, 4, 5, 6, 7, 9 (all pin current
   behavior). Item 1 (re-entrant mutation) may *expose* the temp_buffer bug —
   if it fails, mark `#[ignore]` with a STATUS entry naming Phase 2c as the

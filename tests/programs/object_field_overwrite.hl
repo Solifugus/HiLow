@@ -1,0 +1,7 @@
+high program(): i32 {
+  let holder = { item: { id: 1 } }
+  print(holder.item.id)
+  holder.item = { id: 2 }
+  print(holder.item.id)
+  return 0
+}

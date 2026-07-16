@@ -4819,3 +4819,117 @@ fn test_format_comprehensive_integration() {
 
     let _ = fs::remove_file(&executable);
 }
+
+// Phase 1.5c: object ownership discipline — pinning tests for
+// double-release-prone patterns. Every store of a heap reference retains;
+// every overwrite, removal, and owner death releases exactly once (weak
+// references neither retain nor release). These programs are additionally
+// covered by the valgrind gate, which requires them to be memory-clean.
+
+#[test]
+fn test_object_two_arrays_integration() {
+    let executable = compile_program("tests/programs/object_two_arrays.hl")
+        .expect("Failed to compile object_two_arrays.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/object_two_arrays.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_two_arrays");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_proto_reassign_integration() {
+    let executable = compile_program("tests/programs/proto_reassign.hl")
+        .expect("Failed to compile proto_reassign.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/proto_reassign.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run proto_reassign");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_array_element_overwrite_integration() {
+    let executable = compile_program("tests/programs/array_element_overwrite.hl")
+        .expect("Failed to compile array_element_overwrite.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/array_element_overwrite.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_element_overwrite");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_object_shared_two_fields_integration() {
+    let executable = compile_program("tests/programs/object_shared_two_fields.hl")
+        .expect("Failed to compile object_shared_two_fields.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/object_shared_two_fields.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_shared_two_fields");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_object_field_overwrite_integration() {
+    let executable = compile_program("tests/programs/object_field_overwrite.hl")
+        .expect("Failed to compile object_field_overwrite.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/object_field_overwrite.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_field_overwrite");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+#[test]
+fn test_object_string_prop_overwrite_integration() {
+    let executable = compile_program("tests/programs/object_string_prop_overwrite.hl")
+        .expect("Failed to compile object_string_prop_overwrite.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/object_string_prop_overwrite.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run object_string_prop_overwrite");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}

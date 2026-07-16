@@ -992,31 +992,39 @@ impl CodeGenerator {
                 self.generate_return_statement(return_stmt, type_checker)?;
             }
             Statement::ExprStatement(expr) => {
-                // Check if this is an object-returning array method call that needs cleanup
-                let needs_release = match expr {
+                // pop/remove move the element's reference out of the array;
+                // a discarded result must be released here (Phase 1.5c: every
+                // removal releases exactly once)
+                let discard_release: Option<(&str, &str)> = match expr {
                     Expression::Call(call) => {
                         if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
                             let object_type = self.infer_expression_type_for_codegen(&member_access.object);
                             if let Type::DynamicArray(elem_type) = object_type {
-                                matches!(member_access.member.as_str(), "pop" | "remove") &&
-                                matches!(*elem_type, Type::Object(_))
+                                if matches!(member_access.member.as_str(), "pop" | "remove") {
+                                    match *elem_type {
+                                        Type::Object(_) => Some(("HiLowObject*", "hl_object_release")),
+                                        Type::DynamicArray(_) => Some(("HiLowArray*", "hl_array_release")),
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
                             } else {
-                                false
+                                None
                             }
                         } else {
-                            false
+                            None
                         }
                     }
-                    _ => false
+                    _ => None,
                 };
 
-                if needs_release {
-                    // Generate: { HiLowObject* temp = expr; hl_object_release(temp); }
+                if let Some((c_type, release_fn)) = discard_release {
                     let temp_var = format!("temp_{}", self.var_counter);
                     self.var_counter += 1;
-                    self.output.push_str(&format!("  {{ HiLowObject* {} = ", temp_var));
+                    self.output.push_str(&format!("  {{ {} {} = ", c_type, temp_var));
                     self.generate_expression(expr, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str(&format!("; hl_object_release({}); }}\n", temp_var));
+                    self.output.push_str(&format!("; {}({}); }}\n", release_fn, temp_var));
                 } else {
                     // Normal expression statement
                     self.output.push_str("  ");
@@ -1291,6 +1299,9 @@ impl CodeGenerator {
                         Type::Object(_) => {
                             self.track_heap_owner(name, HeapType::Object);
                         }
+                        Type::Function(_, _) => {
+                            self.track_heap_owner(name, HeapType::Function);
+                        }
                         _ => {
                             // Non-heap result types don't need tracking
                         }
@@ -1524,6 +1535,46 @@ impl CodeGenerator {
                         self.track_heap_owner(name, heap_type);
                     }
                 }
+                Expression::MemberAccess(_) | Expression::This(_) => {
+                    // Phase 1.5c ownership axiom: a let-binding stores a heap
+                    // reference, so it must own one. Object/function member
+                    // reads are borrows (retain them); string member reads
+                    // arrive +1 from hl_object_get_str (track only).
+                    let result_type = self.infer_expression_type_for_codegen(initializer);
+                    let c_var_name = self.mangle_variable_name(name);
+                    match result_type {
+                        Type::Object(_) => {
+                            self.output.push_str(&format!("  hl_object_retain({});\n", c_var_name));
+                            self.track_heap_owner(name, HeapType::Object);
+                        }
+                        Type::Function(_, _) => {
+                            self.output.push_str(&format!("  hl_function_retain({});\n", c_var_name));
+                            self.track_heap_owner(name, HeapType::Function);
+                        }
+                        Type::String => {
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
+                        _ => {}
+                    }
+                }
+                Expression::IndexAccess(_) => {
+                    // Phase 1.5c: binding an array element (hl_array_get
+                    // returns a borrow) — retain so the binding owns its
+                    // reference even if the array is mutated or dies first
+                    let result_type = self.infer_expression_type_for_codegen(initializer);
+                    let c_var_name = self.mangle_variable_name(name);
+                    match result_type {
+                        Type::Object(_) => {
+                            self.output.push_str(&format!("  hl_object_retain({});\n", c_var_name));
+                            self.track_heap_owner(name, HeapType::Object);
+                        }
+                        Type::DynamicArray(_) => {
+                            self.output.push_str(&format!("  hl_array_retain({});\n", c_var_name));
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
+                        _ => {}
+                    }
+                }
                 Expression::TypeAscription(_, ascribed_type, _) => {
                     // Track heap ownership based on the ascribed type
                     match ascribed_type {
@@ -1695,6 +1746,28 @@ impl CodeGenerator {
                     false
                 };
 
+                // Phase 1.5c ownership axiom: a function's return value is
+                // always +1 to the caller. Owner idents were transferred
+                // above; a BORROWED object/function value (non-owner ident,
+                // member read, element read) is retained here — the scope
+                // cleanup below may release its owner before `return`.
+                let ref_wrap = match &value_type_for_temp {
+                    Type::Object(_) | Type::Function(_, _) => {
+                        let transferred_ident = matches!(value,
+                            Expression::Ident { name, .. } if self.heap_owners.contains_key(name));
+                        if !transferred_ident && Self::expr_is_borrowed_ref(value) {
+                            Some(if matches!(value_type_for_temp, Type::Object(_)) {
+                                "hl_object_ref"
+                            } else {
+                                "hl_function_ref"
+                            })
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+
                 self.output.push_str(&format!("  {} {} = ", ret_c_type, ret_temp));
                 if need_optional_wrap {
                     let value_type = self.infer_expression_type_for_codegen(value);
@@ -1705,10 +1778,16 @@ impl CodeGenerator {
                         _ => self.output.push_str("hl_optional_new_i32("),
                     }
                 }
+                if let Some(ref_fn) = ref_wrap {
+                    self.output.push_str(&format!("{}(", ref_fn));
+                }
                 let old_context = self.function_expr_context.clone();
                 self.function_expr_context = FunctionExprContext::ReturnValue;
                 self.generate_expression(value, type_checker, ExprContext::Owned)?;
                 self.function_expr_context = old_context;
+                if ref_wrap.is_some() {
+                    self.output.push_str(")");
+                }
                 if need_optional_wrap {
                     self.output.push_str(")");
                 }
@@ -1897,15 +1976,40 @@ impl CodeGenerator {
                 self.output.push_str(&format!("      {} {} = *({}*)hl_array_get(__iter_arr, {});\n",
                     elem_c_type, for_in_stmt.value_name, elem_c_type, for_in_stmt.key_name));
 
+                // Phase 1.5c ownership axiom: the element binding owns a
+                // reference for the iteration — retain at bind, release at
+                // iteration end; break/continue release via the loop frame,
+                // return via heap_owners.
+                let value_c_name = self.mangle_variable_name(&for_in_stmt.value_name);
+                let elem_cleanup = match elem_type.as_ref() {
+                    Type::Object(_) => {
+                        self.output.push_str(&format!("      hl_object_retain({});\n", value_c_name));
+                        self.track_heap_owner(&for_in_stmt.value_name, HeapType::Object);
+                        Some(format!("hl_object_release({});", value_c_name))
+                    }
+                    Type::DynamicArray(_) => {
+                        self.output.push_str(&format!("      hl_array_retain({});\n", value_c_name));
+                        self.track_heap_owner(&for_in_stmt.value_name, HeapType::Array);
+                        Some(format!("hl_array_release({});", value_c_name))
+                    }
+                    _ => None,
+                };
+
                 // Update variable types to include the for-in variables
                 self.variable_types.insert(for_in_stmt.key_name.clone(), Type::Usize);
                 self.variable_types.insert(for_in_stmt.value_name.clone(), *elem_type);
 
                 // Generate loop body
-                let saved_flags = self.enter_loop_body(Vec::new());
+                let saved_flags = self.enter_loop_body(elem_cleanup.clone().into_iter().collect());
                 let body_result = self.generate_block(&for_in_stmt.body, type_checker);
                 self.exit_loop_body(saved_flags);
                 body_result?;
+
+                // Release the element binding at iteration end
+                if let Some(cleanup) = &elem_cleanup {
+                    self.heap_owners.remove(&for_in_stmt.value_name);
+                    self.output.push_str(&format!("      {}\n", cleanup));
+                }
 
                 // Restore variable types
                 self.variable_types.remove(&for_in_stmt.key_name);
@@ -2071,51 +2175,73 @@ impl CodeGenerator {
             // Phase 8b: Object property assignment with heap values now supported via refcounting
             // Phase 8c: Weak reference assignments handled specially
 
-            match value_type {
-                Type::I32 => self.output.push_str("hl_object_set_i32("),
-                Type::I64 => self.output.push_str("hl_object_set_i64("),
-                Type::U32 => self.output.push_str("hl_object_set_u32("),
-                Type::U64 => self.output.push_str("hl_object_set_u64("),
-                Type::F32 => self.output.push_str("hl_object_set_f32("),
-                Type::F64 => self.output.push_str("hl_object_set_f64("),
-                Type::Bool => self.output.push_str("hl_object_set_bool("),
-                Type::String => self.output.push_str("hl_object_set_str("),
-                Type::Object(_) => self.output.push_str("hl_object_set_object("),
-                Type::Function(_, _) => self.output.push_str("hl_object_set_function("),
-                _ => {
-                    return Err(CodegenError::UnsupportedFeature {
-                        feature: format!("assignment of type {} to object property", value_type),
-                        phase: "future phases".to_string(),
-                    });
-                }
-            }
-
-            // Generate: object, property name, value
-            self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
-            self.output.push_str(", \"");
-            self.output.push_str(&member_access.member);
-            self.output.push_str("\", ");
-            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
-            self.output.push_str(");\n");
-
-            // Phase 8c: For weak object assignments, register the weak reference
+            // Phase 1.5c ownership axiom: property stores retain in the
+            // runtime (set_property); weak stores route to
+            // hl_object_set_object_weak (no retain, slot nulled on target
+            // death). The site disposes of untracked fresh +1 values; borrows
+            // and tracked temps are released by their own owners.
             if is_weak_assignment && matches!(value_type, Type::Object(_)) {
-                // Get the address of the property slot and register weak reference
-                self.output.push_str("{\n");
-                self.output.push_str("    HiLowObject** prop_addr = hl_object_property_addr(");
+                let inner_expr = match &assign_stmt.value {
+                    Expression::WeakRef(inner, _) => inner.as_ref(),
+                    _ => unreachable!("is_weak_assignment checked above"),
+                };
+                if Self::needs_site_release_after_store(inner_expr, &value_type) {
+                    self.output.push_str("{ HiLowObject* __pv = ");
+                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str("; hl_object_set_object_weak(");
+                    self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(&format!(", \"{}\", __pv); hl_object_release(__pv); }}\n", member_access.member));
+                } else {
+                    self.output.push_str("hl_object_set_object_weak(");
+                    self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(&format!(", \"{}\", ", member_access.member));
+                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(");\n");
+                }
+            } else if matches!(value_type, Type::Object(_) | Type::Function(_, _) | Type::String)
+                && Self::needs_site_release_after_store(&assign_stmt.value, &value_type)
+            {
+                let (c_type, setter, release) = match &value_type {
+                    Type::Object(_) => ("HiLowObject*", "hl_object_set_object", "hl_object_release"),
+                    Type::Function(_, _) => ("HiLowFunction*", "hl_object_set_function", "hl_function_release"),
+                    Type::String => ("HiLowArray*", "hl_object_set_str", "hl_array_release"),
+                    _ => unreachable!("matched above"),
+                };
+                self.output.push_str(&format!("{{ {} __pv = ", c_type));
+                self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Temporary)?;
+                self.output.push_str(&format!("; {}(", setter));
+                self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
+                self.output.push_str(&format!(", \"{}\", __pv); {}(__pv); }}\n", member_access.member, release));
+            } else {
+                match value_type {
+                    Type::I32 => self.output.push_str("hl_object_set_i32("),
+                    Type::I64 => self.output.push_str("hl_object_set_i64("),
+                    Type::U32 => self.output.push_str("hl_object_set_u32("),
+                    Type::U64 => self.output.push_str("hl_object_set_u64("),
+                    Type::F32 => self.output.push_str("hl_object_set_f32("),
+                    Type::F64 => self.output.push_str("hl_object_set_f64("),
+                    Type::Bool => self.output.push_str("hl_object_set_bool("),
+                    Type::String => self.output.push_str("hl_object_set_str("),
+                    Type::Object(_) => self.output.push_str("hl_object_set_object("),
+                    Type::Function(_, _) => self.output.push_str("hl_object_set_function("),
+                    _ => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("assignment of type {} to object property", value_type),
+                            phase: "future phases".to_string(),
+                        });
+                    }
+                }
+
+                // Generate: object, property name, value. The value is
+                // generated in Temporary context so fresh heap productions
+                // are statement-tracked temps (released at statement end,
+                // balancing the store's retain); borrowed locals emit bare.
                 self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(", \"");
                 self.output.push_str(&member_access.member);
-                self.output.push_str("\");\n");
-                self.output.push_str("    if (prop_addr) {\n");
-                self.output.push_str("        hl_object_weak_register(");
-                // Generate the actual object being assigned (unwrapped from weak)
-                if let Expression::WeakRef(inner_expr, _) = &assign_stmt.value {
-                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
-                }
-                self.output.push_str(", prop_addr);\n");
-                self.output.push_str("    }\n");
-                self.output.push_str("}\n");
+                self.output.push_str("\", ");
+                self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Temporary)?;
+                self.output.push_str(");\n");
             }
         } else if let Expression::IndexAccess(index_access) = &assign_stmt.target {
             // Array Phase B: Index assignment (arr[i] = x) - route through hl_array_set
@@ -2142,8 +2268,15 @@ impl CodeGenerator {
             // Determine element type for temp declaration
             if let Type::DynamicArray(elem_type) = &array_type {
                 let elem_c_type = self.hilow_type_to_c(elem_type);
+                // Phase 1.5c: refcount-managed elements (objects, nested
+                // arrays) are generated in Temporary context — hl_array_set
+                // retains on store, so borrowed locals need no site release
+                // and tracked temps are released at statement end. Only
+                // untracked fresh productions are disposed of here.
+                let managed = matches!(**elem_type, Type::Object(_) | Type::DynamicArray(_));
+                let value_ctx = if managed { ExprContext::Temporary } else { ExprContext::Owned };
                 self.output.push_str(&format!("  {} {} = ", elem_c_type, temp_var));
-                self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
+                self.generate_expression(&assign_stmt.value, type_checker, value_ctx)?;
                 self.output.push_str(";\n");
                 self.output.push_str("  hl_array_set(");
                 self.generate_expression(&index_access.object, type_checker, ExprContext::Temporary)?;
@@ -2151,9 +2284,16 @@ impl CodeGenerator {
                 self.generate_expression(&index_access.index, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(&format!(", &{});\n", temp_var));
 
-                // Release temporary object reference after set (Phase C)
-                if matches!(**elem_type, Type::Object(_)) {
-                    self.output.push_str(&format!("  hl_object_release({});\n", temp_var));
+                if managed && Self::needs_site_release_after_store(&assign_stmt.value, elem_type) {
+                    match **elem_type {
+                        Type::Object(_) => {
+                            self.output.push_str(&format!("  hl_object_release({});\n", temp_var));
+                        }
+                        Type::DynamicArray(_) => {
+                            self.output.push_str(&format!("  hl_array_release({});\n", temp_var));
+                        }
+                        _ => unreachable!("managed checked above"),
+                    }
                 }
             }
         } else {
@@ -2314,10 +2454,44 @@ impl CodeGenerator {
             // Phase 11a: Release old value for heap-owned variables on reassignment
             if assign_stmt.op == AssignOpKind::Assign {
                 if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
-                    if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
-                        // Release old value before assignment, mirroring array reassignment pattern
+                    if let Some((heap_type, _)) = self.heap_owners.get(var_name).cloned() {
                         let c_var_name = self.mangle_variable_name(var_name);
-                        match heap_type {
+
+                        // Phase 1.5c ownership axiom: assigning a BORROWED
+                        // reference must retain it — and the retain happens
+                        // BEFORE the old value's release so `x = x` survives.
+                        // (String member reads are +1 from hl_object_get_str,
+                        // not borrows, so Array only treats idents/element
+                        // reads as borrowed.)
+                        let rhs_borrowed = match &heap_type {
+                            HeapType::Object | HeapType::Function => {
+                                Self::expr_is_borrowed_ref(&assign_stmt.value)
+                            }
+                            HeapType::Array => {
+                                matches!(&assign_stmt.value, Expression::Ident { .. })
+                                    || matches!(&assign_stmt.value, Expression::IndexAccess(_))
+                            }
+                            _ => false,
+                        };
+                        if rhs_borrowed {
+                            let (c_type, retain_fn, release_fn) = match &heap_type {
+                                HeapType::Object => ("HiLowObject*", "hl_object_retain", "hl_object_release"),
+                                HeapType::Function => ("HiLowFunction*", "hl_function_retain", "hl_function_release"),
+                                HeapType::Array => ("HiLowArray*", "hl_array_retain", "hl_array_release"),
+                                _ => unreachable!("rhs_borrowed only true for the types above"),
+                            };
+                            let temp_var = format!("temp_{}", self.var_counter);
+                            self.var_counter += 1;
+                            self.output.push_str(&format!("  {{ {} {} = ", c_type, temp_var));
+                            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Temporary)?;
+                            self.output.push_str(&format!(";\n    {}({});\n", retain_fn, temp_var));
+                            self.output.push_str(&format!("    {}({});\n", release_fn, c_var_name));
+                            self.output.push_str(&format!("    {} = {}; }}\n", c_var_name, temp_var));
+                            return Ok(());
+                        }
+
+                        // Release old value before assignment, mirroring array reassignment pattern
+                        match &heap_type {
                             HeapType::Array => {
                                 self.output.push_str(&format!("  hl_array_release({});\n", c_var_name));
                             },
@@ -2659,7 +2833,29 @@ impl CodeGenerator {
                         Type::Optional(_) | Type::UnknownType => ExprContext::Owned,
                         _ => ExprContext::Temporary,
                     };
+                    // Phase 1.5c: the tuple owns each heap element, so a
+                    // BORROWED element must be retained (string member reads
+                    // are already +1 from hl_object_get_str, so String only
+                    // treats idents as borrowed)
+                    let ref_wrap = match &element_type {
+                        Type::Object(_) if Self::expr_is_borrowed_ref(element) => Some("hl_object_ref"),
+                        Type::Function(_, _) if Self::expr_is_borrowed_ref(element) => Some("hl_function_ref"),
+                        Type::String if matches!(element, Expression::Ident { .. }) => Some("hl_array_ref"),
+                        Type::DynamicArray(_)
+                            if matches!(element, Expression::Ident { .. })
+                                || matches!(element, Expression::IndexAccess(_)) =>
+                        {
+                            Some("hl_array_ref")
+                        }
+                        _ => None,
+                    };
+                    if let Some(ref_fn) = ref_wrap {
+                        self.output.push_str(&format!("{}(", ref_fn));
+                    }
                     self.generate_expression(element, type_checker, element_context)?;
+                    if ref_wrap.is_some() {
+                        self.output.push_str(")");
+                    }
                 }
                 self.output.push_str(" })");
             }
@@ -2966,16 +3162,23 @@ impl CodeGenerator {
                     self.output.push_str(&format!("; hl_array_push(__arr, &__e{});\n", i));
                 }
 
-                // Release temporary references before returning the array (Phase C + C-2)
+                // Phase 1.5c: hl_array_push retained each element for the
+                // array. Dispose only of untracked fresh +1 productions here —
+                // a borrowed local's reference belongs to its scope cleanup,
+                // and tracked temps are released at statement end.
                 match &elem_type {
                     Type::Object(_) => {
-                        for i in 0..elements.len() {
-                            self.output.push_str(&format!("     hl_object_release(__e{});\n", i));
+                        for (i, element) in elements.iter().enumerate() {
+                            if Self::needs_site_release_after_store(element, &elem_type) {
+                                self.output.push_str(&format!("     hl_object_release(__e{});\n", i));
+                            }
                         }
                     },
                     Type::DynamicArray(_) => {
-                        for i in 0..elements.len() {
-                            self.output.push_str(&format!("     hl_array_release(__e{});\n", i));
+                        for (i, element) in elements.iter().enumerate() {
+                            if Self::needs_site_release_after_store(element, &elem_type) {
+                                self.output.push_str(&format!("     hl_array_release(__e{});\n", i));
+                            }
                         }
                     },
                     _ => {
@@ -3599,16 +3802,19 @@ impl CodeGenerator {
                         self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
 
-                        // Release temporary reference after push (Phase C + C-2)
-                        match elem_type.as_ref() {
-                            Type::Object(_) => {
-                                self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
-                            },
-                            Type::DynamicArray(_) => {
-                                self.output.push_str(&format!("    hl_array_release({});\n", temp_var));
-                            },
-                            _ => {
-                                // Primitive types don't need release
+                        // Phase 1.5c: hl_array_push retained for the array;
+                        // dispose only of an untracked fresh +1 argument here
+                        if Self::needs_site_release_after_store(&call.args[0], &elem_type) {
+                            match elem_type.as_ref() {
+                                Type::Object(_) => {
+                                    self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                                },
+                                Type::DynamicArray(_) => {
+                                    self.output.push_str(&format!("    hl_array_release({});\n", temp_var));
+                                },
+                                _ => {
+                                    // Primitive types don't need release
+                                }
                             }
                         }
 
@@ -3671,9 +3877,18 @@ impl CodeGenerator {
                         self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
 
-                        // Release temporary object reference after insert (Phase C)
-                        if matches!(elem_type.as_ref(), Type::Object(_)) {
-                            self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                        // Phase 1.5c: hl_array_insert retained for the array;
+                        // dispose only of an untracked fresh +1 element here
+                        if Self::needs_site_release_after_store(&call.args[1], &elem_type) {
+                            match elem_type.as_ref() {
+                                Type::Object(_) => {
+                                    self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
+                                },
+                                Type::DynamicArray(_) => {
+                                    self.output.push_str(&format!("    hl_array_release({});\n", temp_var));
+                                },
+                                _ => {}
+                            }
                         }
 
                         self.output.push_str("}");
@@ -5461,10 +5676,79 @@ impl CodeGenerator {
                 None
             };
 
-            self.output.push_str(&format!("    hl_object_set_"));
-
             // Determine the type of the property to call the right setter
             let expr_type = self.infer_expression_type_for_codegen(prop_expr);
+
+            // Phase 1.5c: weak and object/function properties have their own
+            // ownership shapes; primitives and strings share the plain-setter
+            // emission below.
+            if let Expression::WeakRef(inner_expr, _) = prop_expr {
+                if matches!(expr_type, Type::Object(_)) {
+                    // Weak property store: no retain, no release; the slot is
+                    // nulled when the target dies.
+                    if Self::needs_site_release_after_store(inner_expr, &expr_type) {
+                        self.output.push_str("    { HiLowObject* __pv = ");
+                        self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(&format!(
+                            "; hl_object_set_object_weak(obj, \"{}\", __pv); hl_object_release(__pv); }}\n",
+                            prop_name
+                        ));
+                    } else {
+                        self.output.push_str(&format!("    hl_object_set_object_weak(obj, \"{}\", ", prop_name));
+                        self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(");\n");
+                    }
+                    if matches!(prop_expr, Expression::FunctionExpr(_)) {
+                        self.method_receiver_type = old_receiver_type.clone();
+                    }
+                    continue;
+                }
+            }
+            match &expr_type {
+                Type::Object(_) => {
+                    // The store retains (Phase 1.5c axiom); dispose of an
+                    // untracked fresh +1 here. Borrowed locals and tracked
+                    // temps are released by their own owners.
+                    if Self::needs_site_release_after_store(prop_expr, &expr_type) {
+                        self.output.push_str("    { HiLowObject* __pv = ");
+                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(&format!(
+                            "; hl_object_set_object(obj, \"{}\", __pv); hl_object_release(__pv); }}\n",
+                            prop_name
+                        ));
+                    } else {
+                        self.output.push_str(&format!("    hl_object_set_object(obj, \"{}\", ", prop_name));
+                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(");\n");
+                    }
+                    if matches!(prop_expr, Expression::FunctionExpr(_)) {
+                        self.method_receiver_type = old_receiver_type.clone();
+                    }
+                    continue;
+                }
+                Type::Function(_, _) => {
+                    if Self::needs_site_release_after_store(prop_expr, &expr_type) {
+                        self.output.push_str("    { HiLowFunction* __pv = ");
+                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(&format!(
+                            "; hl_object_set_function(obj, \"{}\", __pv); hl_function_release(__pv); }}\n",
+                            prop_name
+                        ));
+                    } else {
+                        self.output.push_str(&format!("    hl_object_set_function(obj, \"{}\", ", prop_name));
+                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(");\n");
+                    }
+                    if matches!(prop_expr, Expression::FunctionExpr(_)) {
+                        self.method_receiver_type = old_receiver_type.clone();
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+
+            self.output.push_str(&format!("    hl_object_set_"));
+
             match expr_type {
                 Type::I32 => {
                     self.output.push_str("i32(obj, \"");
@@ -5517,20 +5801,6 @@ impl CodeGenerator {
                 }
                 Type::String => {
                     self.output.push_str("str(obj, \"");
-                    self.output.push_str(prop_name);
-                    self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str(");\n");
-                }
-                Type::Object(_) => {
-                    self.output.push_str("object(obj, \"");
-                    self.output.push_str(prop_name);
-                    self.output.push_str("\", ");
-                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str(");\n");
-                }
-                Type::Function(_, _) => {
-                    self.output.push_str("function(obj, \"");
                     self.output.push_str(prop_name);
                     self.output.push_str("\", ");
                     self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
@@ -5702,37 +5972,24 @@ impl CodeGenerator {
             }
         }
 
-        // Check if this property access returns a heap value and needs temp tracking
+        // Phase 1.5c: only STRING member reads need temp tracking —
+        // hl_object_get_str retains-on-return, so the +1 must be released at
+        // statement end. Object/function member reads are pure BORROWS
+        // (hl_object_get_object / hl_object_get_function do not retain);
+        // tracking them released references the property still owns.
         let needs_temp_tracking = context == ExprContext::Temporary &&
-            matches!(member_type, Type::String | Type::Object(_) | Type::Function(_, _));
+            matches!(member_type, Type::String);
 
         if needs_temp_tracking {
             // Create temp variable for heap-returning property access
             let temp_name = self.next_temp_name();
-            let heap_type = match &member_type {
-                Type::String => HeapType::Array,
-                Type::Object(_) => HeapType::Object,
-                Type::Function(_, _) => HeapType::Function,
-                _ => unreachable!("checked above"),
-            };
+            let heap_type = HeapType::Array;
 
             // Register temp for cleanup
             self.temp_owners.insert(temp_name.clone(), (heap_type, self.scope_depth));
 
-            // Build the declaration with the appropriate getter call
-            let getter_func = match member_type {
-                Type::String => "hl_object_get_str",
-                Type::Object(_) => "hl_object_get_object",
-                Type::Function(_, _) => "hl_object_get_function",
-                _ => unreachable!("checked above"),
-            };
-
-            let temp_type = match &member_type {
-                Type::String => "HiLowArray*",
-                Type::Object(_) => "HiLowObject*",
-                Type::Function(_, _) => "HiLowFunction*",
-                _ => unreachable!("checked above"),
-            };
+            let getter_func = "hl_object_get_str";
+            let temp_type = "HiLowArray*";
 
             // Create declaration
             let mut decl = format!("{} {} = {}(", temp_type, temp_name, getter_func);
@@ -6427,8 +6684,41 @@ impl CodeGenerator {
                         // The arm value IS the match result — generate it in the
                         // incoming context. Owned (let/return): ownership passes
                         // to the binding; Temporary: statement-end temp cleanup.
+                        //
+                        // Phase 1.5c: an object/function-typed match expression
+                        // must always yield a +1 reference the consumer
+                        // disposes of. Wrap arm values that don't already
+                        // produce an untracked fresh +1: in Owned context,
+                        // borrows; in Temporary context, everything except
+                        // fresh literals (tracked temps are released at
+                        // statement end, so the wrap keeps the result alive).
+                        let ref_wrap = match &result_type {
+                            Type::Object(_) | Type::Function(_, _) => {
+                                let needs_wrap = if context == ExprContext::Owned {
+                                    Self::expr_is_borrowed_ref(expr)
+                                } else {
+                                    !matches!(expr, Expression::ObjectLiteral(_) | Expression::FunctionExpr(_))
+                                };
+                                if needs_wrap {
+                                    Some(if matches!(result_type, Type::Object(_)) {
+                                        "hl_object_ref"
+                                    } else {
+                                        "hl_function_ref"
+                                    })
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
                         self.output.push_str("        __match_result = ");
+                        if let Some(ref_fn) = ref_wrap {
+                            self.output.push_str(&format!("{}(", ref_fn));
+                        }
                         self.generate_expression(expr, type_checker, context.clone())?;
+                        if ref_wrap.is_some() {
+                            self.output.push_str(")");
+                        }
                         self.output.push_str(";\n");
                     } else {
                         self.output.push_str("        ");
@@ -6529,6 +6819,46 @@ impl CodeGenerator {
     }
 
     // Phase 8a: Ownership tracking methods
+
+    /// Phase 1.5c ownership axiom: does this expression evaluate to a BORROWED
+    /// heap reference (owned by a named local, a container, or the receiver),
+    /// as opposed to producing a reference of its own? Borrowed values are
+    /// never released by store sites and need a retain when bound or returned.
+    fn expr_is_borrowed_ref(expr: &Expression) -> bool {
+        match expr {
+            Expression::Ident { .. } | Expression::This(_) => true,
+            // hl_object_get_object / hl_object_get_function return borrows.
+            // (String member access is NOT borrowed: hl_object_get_str
+            // retains-on-return.)
+            Expression::MemberAccess(_) => true,
+            // hl_array_get returns a pointer into the array — a borrow
+            Expression::IndexAccess(_) => true,
+            Expression::TypeAscription(inner, _, _) => Self::expr_is_borrowed_ref(inner),
+            Expression::WeakRef(inner, _) => Self::expr_is_borrowed_ref(inner),
+            _ => false,
+        }
+    }
+
+    /// Phase 1.5c: for a heap-typed value expression generated in
+    /// ExprContext::Temporary and passed to a retaining store (property set,
+    /// array push/insert/set), does the STORE SITE have to release the fresh
+    /// +1 the expression produced? Tracked temps (string literals, concats,
+    /// calls, string member reads) are released by statement-end cleanup;
+    /// borrows are owned elsewhere. Only untracked fresh productions remain:
+    /// object literals, function expressions, f-strings, array literals, and
+    /// object/function-typed match expressions (whose arms are normalized to
+    /// produce +1).
+    fn needs_site_release_after_store(expr: &Expression, ty: &Type) -> bool {
+        match expr {
+            Expression::TypeAscription(inner, _, _) => Self::needs_site_release_after_store(inner, ty),
+            Expression::ObjectLiteral(_) => true,
+            Expression::FunctionExpr(_) => true,
+            Expression::FString(_) => true,
+            Expression::ArrayLit(_, _) => true,
+            Expression::Match(_) => matches!(ty, Type::Object(_) | Type::Function(_, _)),
+            _ => false,
+        }
+    }
 
     /// Record that a variable owns a heap allocation
     fn track_heap_owner(&mut self, var_name: &str, heap_type: HeapType) {

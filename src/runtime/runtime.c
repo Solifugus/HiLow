@@ -348,24 +348,22 @@ static void ensure_capacity(HiLowObject* obj) {
 static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
     Property* existing = find_property(obj, key);
     if (existing) {
-        // Release the old value if it's a heap type (Phase 8b)
+        // Drop the old reference: a weak old value is unregistered (never
+        // released); a strong heap value is released exactly once (Phase 1.5c)
         if (existing->value.type == HL_VALUE_OBJECT && existing->value.value.obj_val) {
-            hl_object_release(existing->value.value.obj_val);
+            if (existing->is_weak) {
+                hl_object_weak_unregister(existing->value.value.obj_val, obj,
+                                          (size_t)(existing - obj->properties));
+            } else {
+                hl_object_release(existing->value.value.obj_val);
+            }
         } else if (existing->value.type == HL_VALUE_FUNCTION && existing->value.value.fn_val) {
             hl_function_release(existing->value.value.fn_val);
         } else if (existing->value.type == HL_VALUE_STR && existing->value.value.str_val) {
             hl_array_release(existing->value.value.str_val);
         }
         existing->value = value;
-
-        // Retain the new value if it's a heap type (Phase 8b) - only for replacements
-        if (value.type == HL_VALUE_OBJECT && value.value.obj_val) {
-            hl_object_retain(value.value.obj_val);
-        } else if (value.type == HL_VALUE_FUNCTION && value.value.fn_val) {
-            hl_function_retain(value.value.fn_val);
-        } else if (value.type == HL_VALUE_STR && value.value.str_val) {
-            hl_array_retain(value.value.str_val);
-        }
+        existing->is_weak = false;  // this store is strong
     } else {
         ensure_capacity(obj);
         obj->properties[obj->property_count].key = strdup(key);  // Duplicate the key string
@@ -373,9 +371,17 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
         obj->properties[obj->property_count].value = value;
         obj->properties[obj->property_count].is_weak = false;  // Not weak by default (Phase 8c)
         obj->property_count++;
+    }
 
-        // For new properties, don't retain - the object becomes the initial owner
-        // The value should come with refcount=1 from its creation
+    // Every store retains (Phase 1.5c ownership axiom): the property is a new
+    // strong reference regardless of whether the key existed. The caller keeps
+    // ownership of its own reference and disposes of it independently.
+    if (value.type == HL_VALUE_OBJECT && value.value.obj_val) {
+        hl_object_retain(value.value.obj_val);
+    } else if (value.type == HL_VALUE_FUNCTION && value.value.fn_val) {
+        hl_function_retain(value.value.fn_val);
+    } else if (value.type == HL_VALUE_STR && value.value.str_val) {
+        hl_array_retain(value.value.str_val);
     }
 }
 
@@ -415,7 +421,7 @@ void hl_object_set_bool(HiLowObject* obj, const char* key, bool value) {
 }
 
 void hl_object_set_str(HiLowObject* obj, const char* key, HiLowArray* value) {
-    hl_array_retain(value);  // Retain the incoming array - object takes ownership
+    // set_property retains on store (Phase 1.5c); no pre-retain here.
     HiLowValue val = { .type = HL_VALUE_STR, .value.str_val = value };
     set_property(obj, key, val);
 }
@@ -1000,8 +1006,7 @@ void hl_object_release(HiLowObject* obj) {
             // Step 1: Handle weak properties first - unregister from targets, no release
             for (size_t i = 0; i < obj->property_count; i++) {
                 if (obj->properties[i].is_weak && obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
-                    HiLowObject** prop_addr = &obj->properties[i].value.value.obj_val;
-                    hl_object_weak_unregister(obj->properties[i].value.value.obj_val, prop_addr);
+                    hl_object_weak_unregister(obj->properties[i].value.value.obj_val, obj, i);
                 }
             }
 
@@ -1016,10 +1021,12 @@ void hl_object_release(HiLowObject* obj) {
                 }
             }
 
-            // Step 3: Walk weak_refs list and invalidate all pointers
+            // Step 3: Null out every weak property that points at this object.
+            // WeakRef records (holder, property index) — stable across the
+            // holder's property-array reallocs, unlike a raw slot address.
             WeakRef* current = obj->weak_refs;
             while (current) {
-                *current->location = NULL;  // Invalidate the weak reference
+                current->holder->properties[current->prop_index].value.value.obj_val = NULL;
                 WeakRef* next = current->next;
                 free(current);
                 hl_free_count++;
@@ -1047,24 +1054,26 @@ void hl_function_release(HiLowFunction* fn) {
     }
 }
 
-// Weak reference management functions (Phase 8c)
+// Weak reference management functions (Phase 8c; reworked in Phase 1.5c to
+// key on (holder, property index) — stable across property-array reallocs)
 
-void hl_object_weak_register(HiLowObject* target, HiLowObject** location) {
-    if (!target || !location) return;
+void hl_object_weak_register(HiLowObject* target, HiLowObject* holder, size_t prop_index) {
+    if (!target || !holder) return;
 
     WeakRef* weak_ref = malloc(sizeof(WeakRef));
     hl_alloc_count++;
-    weak_ref->location = location;
+    weak_ref->holder = holder;
+    weak_ref->prop_index = prop_index;
     weak_ref->next = target->weak_refs;
     target->weak_refs = weak_ref;
 }
 
-void hl_object_weak_unregister(HiLowObject* target, HiLowObject** location) {
-    if (!target || !location) return;
+void hl_object_weak_unregister(HiLowObject* target, HiLowObject* holder, size_t prop_index) {
+    if (!target || !holder) return;
 
     WeakRef** current = &target->weak_refs;
     while (*current) {
-        if ((*current)->location == location) {
+        if ((*current)->holder == holder && (*current)->prop_index == prop_index) {
             WeakRef* to_remove = *current;
             *current = (*current)->next;
             free(to_remove);
@@ -1075,17 +1084,57 @@ void hl_object_weak_unregister(HiLowObject* target, HiLowObject** location) {
     }
 }
 
-HiLowObject** hl_object_property_addr(HiLowObject* obj, const char* key) {
-    if (!obj || !key) return NULL;
-
-    for (size_t i = 0; i < obj->property_count; i++) {
-        if (strcmp(obj->properties[i].key, key) == 0) {
-            if (obj->properties[i].value.type == HL_VALUE_OBJECT) {
-                return &obj->properties[i].value.value.obj_val;
+// Weak property store (Phase 1.5c ownership axiom): stores the target WITHOUT
+// retaining it, marks the property weak, and registers the (holder, index)
+// pair so target death nulls the slot. Overwrites drop the old reference
+// correctly (unregister if weak, release if strong).
+void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* target) {
+    Property* existing = find_property(obj, key);
+    size_t prop_index;
+    if (existing) {
+        prop_index = (size_t)(existing - obj->properties);
+        if (existing->value.type == HL_VALUE_OBJECT && existing->value.value.obj_val) {
+            if (existing->is_weak) {
+                hl_object_weak_unregister(existing->value.value.obj_val, obj, prop_index);
+            } else {
+                hl_object_release(existing->value.value.obj_val);
             }
+        } else if (existing->value.type == HL_VALUE_FUNCTION && existing->value.value.fn_val) {
+            hl_function_release(existing->value.value.fn_val);
+        } else if (existing->value.type == HL_VALUE_STR && existing->value.value.str_val) {
+            hl_array_release(existing->value.value.str_val);
         }
+        existing->value = (HiLowValue){ .type = HL_VALUE_OBJECT, .value.obj_val = target };
+        existing->is_weak = true;
+    } else {
+        ensure_capacity(obj);
+        prop_index = obj->property_count;
+        obj->properties[prop_index].key = strdup(key);
+        hl_alloc_count++;
+        obj->properties[prop_index].value = (HiLowValue){ .type = HL_VALUE_OBJECT, .value.obj_val = target };
+        obj->properties[prop_index].is_weak = true;
+        obj->property_count++;
     }
-    return NULL;
+    if (target) {
+        hl_object_weak_register(target, obj, prop_index);
+    }
+}
+
+// Retain-and-return helpers for expression positions (Phase 1.5c): turn a
+// borrowed reference into an owned +1 inline.
+HiLowObject* hl_object_ref(HiLowObject* obj) {
+    if (obj) obj->refcount++;
+    return obj;
+}
+
+HiLowFunction* hl_function_ref(HiLowFunction* fn) {
+    if (fn) fn->refcount++;
+    return fn;
+}
+
+HiLowArray* hl_array_ref(HiLowArray* arr) {
+    if (arr) arr->refcount++;
+    return arr;
 }
 
 // Optional unwrap helpers for narrowed types (Phase 9b)

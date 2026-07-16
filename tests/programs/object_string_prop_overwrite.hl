@@ -1,0 +1,9 @@
+high program(): i32 {
+  let o = { name: "first" }
+  print(o.name)
+  o.name = "second"
+  print(o.name)
+  o.name = "third"
+  print(o.name)
+  return 0
+}

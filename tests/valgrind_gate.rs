@@ -41,29 +41,11 @@ const REJECTION_FIXTURES: &[&str] = &[
 /// one comes back clean — the fix must remove the entry (keeps this list
 /// honest, mirroring REJECTION_FIXTURES).
 ///
-/// Every entry below: Known Bug: object double-release via unretained second
-/// reference (proto link / array element / weak target released down two
-/// paths), fix in Phase 1.5c "object ownership discipline" — adjudicated
-/// 2026-07-15, see docs/cell-migration-audit.md §5.
-const KNOWN_MEMORY_BUGS: &[&str] = &[
-    "array_objects_basic.hl",
-    "array_objects_forin.hl",
-    "array_objects_pop.hl",
-    "array_objects_pop_use.hl",
-    "array_objects_remove.hl",
-    "array_objects_scope_cleanup.hl",
-    "for_in_proto_excluded.hl",
-    "is_object_basic.hl",
-    "is_object_chain.hl",
-    "method_this_proto.hl",
-    "proto_assign_local.hl",
-    "proto_basic.hl",
-    "proto_chain.hl",
-    "proto_method.hl",
-    "proto_override.hl",
-    "weak_basic.hl",
-    "weak_breaks_cycle.hl",
-];
+/// Adding an entry requires a citation in its comment and a matching
+/// STATUS.md record. Currently empty: the object double-release class that
+/// populated this list (17 programs) was fixed in Phase 1.5c "object
+/// ownership discipline".
+const KNOWN_MEMORY_BUGS: &[&str] = &[];
 
 fn collect_entries(dir: &Path, entries: &mut Vec<PathBuf>) {
     let mut files: Vec<PathBuf> = Vec::new();

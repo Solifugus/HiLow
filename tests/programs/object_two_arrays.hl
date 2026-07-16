@@ -1,0 +1,9 @@
+high program(): i32 {
+    let thing = { id: 7 }
+    let a = [thing]
+    let b = [thing]
+    print(a[0].id)
+    print(b[0].id)
+    print(thing.id)
+    return 0
+}
