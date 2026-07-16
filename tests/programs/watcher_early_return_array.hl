@@ -1,0 +1,16 @@
+high program(): i32 {
+    function attach(arr: [i32], flag: i32): i32 {
+        let z = 42
+        let w = watcher((added)arr) { print(z) }
+        if (flag ?= 1) {
+            return 1
+        }
+        arr.push(7)
+        return 0
+    }
+    let xs = []: [i32]
+    attach(xs, 1)
+    xs.push(5)
+    print("after")
+    return 0
+}

@@ -1,0 +1,14 @@
+high program(): i32 {
+    function attach(xs: [i32], ys: [i32]): i32 {
+        let w1 = watcher((added)xs) { print("xs watcher") }
+        let w2 = watcher((added)ys) { print("ys watcher") }
+        return 0
+    }
+    let xs = []: [i32]
+    let ys = []: [i32]
+    attach(xs, ys)
+    xs.push(1)
+    ys.push(1)
+    print("after")
+    return 0
+}

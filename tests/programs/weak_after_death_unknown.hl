@@ -1,0 +1,16 @@
+high program(): i32 {
+    let target = { name: "T" }
+    let holder = { ref: weak target }
+    print(holder.ref.name)
+    target = { name: "T2" }
+    let r = holder.ref
+    if (r is unknown) {
+        print("unknown after death")
+        print(r.reason)
+    }
+    let n = holder.ref.name
+    if (n is unknown) {
+        print("member access propagates")
+    }
+    return 0
+}

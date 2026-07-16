@@ -1,0 +1,4 @@
+T
+unknown after death
+weak referent released
+member access propagates

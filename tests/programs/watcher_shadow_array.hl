@@ -1,0 +1,13 @@
+high program(): i32 {
+    let xs = [1]
+    let w = watcher((added)xs) { print("outer fired") }
+    function inner(): i32 {
+        let xs = [10]
+        xs.push(20)
+        return 0
+    }
+    inner()
+    xs.push(2)
+    print("done")
+    return 0
+}

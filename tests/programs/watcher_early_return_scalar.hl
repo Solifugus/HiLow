@@ -1,0 +1,15 @@
+high program(): i32 {
+    function f(flag: i32): i32 {
+        let x = 0
+        let w = watcher((changed)x) { print("scalar watcher fired") }
+        if (flag ?= 1) {
+            return 1
+        }
+        x = 5
+        return 0
+    }
+    f(1)
+    f(0)
+    print("done")
+    return 0
+}

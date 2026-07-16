@@ -1,0 +1,17 @@
+high program(): i32 {
+    let xs = [10, 20, 30]
+    let ys = [1, 2]
+    let wy = watcher((r=removed)ys) {
+        print("ys removed:")
+        print(r)
+    }
+    let wx = watcher((d=removed)xs) {
+        print("xs removed:")
+        print(d)
+        ys.remove(0)
+        print(d)
+    }
+    xs.remove(1)
+    print("after")
+    return 0
+}

@@ -1,0 +1,11 @@
+high program(): i32 {
+    function attach(arr: [i32]): watcher {
+        let w = watcher((added)arr) { print("factory watcher fired") }
+        return w
+    }
+    let xs = []: [i32]
+    let w = attach(xs)
+    xs.push(1)
+    print("done")
+    return 0
+}

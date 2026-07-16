@@ -361,13 +361,39 @@ point of deleting-with-confidence.
   broader than planned: the fix also required actually implementing weak
   properties — `is_weak` was never set anywhere — and re-keying WeakRef from
   a raw slot address to (holder, prop_index) to survive property-array
-  reallocs. Weak-after-death access semantics remain unadjudicated; see
-  STATUS.md Open questions.) *Gate: full suite + gate green with an empty
-  KNOWN_MEMORY_BUGS list.*
+  reallocs. Weak-after-death access semantics were adjudicated 2026-07-15 —
+  see item 6 under "Open questions — adjudicated". Note recorded next to the
+  re-keying decision: **object property removal does not exist** — no removal
+  syntax in the parser and no `hl_object_remove_*` in the runtime (the spec's
+  "properties can be added or removed dynamically" at hilow-design.md:564 is
+  aspirational) — so the (holder, prop_index) keying's append-only-indices
+  assumption holds by construction; any future property-removal feature must
+  revisit WeakRef keying in the same change.) *Gate: full suite + gate green
+  with an empty KNOWN_MEMORY_BUGS list.*
 - **1.5d** Add gap tests §4.4 items 1, 4, 5, 6, 7, 9 (all pin current
   behavior). Item 1 (re-entrant mutation) may *expose* the temp_buffer bug —
   if it fails, mark `#[ignore]` with a STATUS entry naming Phase 2c as the
-  fix, per CLAUDE.md's ignore policy. *Gate: suite green (ignores documented).*
+  fix, per CLAUDE.md's ignore policy. (Landed 2026-07-15, tests only — no
+  compiler/runtime changes. Live pins: early-return lifetime scalar+array,
+  shadowing+array identity, insert firing order (CHANGED then ADDED),
+  array-watcher factory, stealth-return rejection wired, string-watcher
+  compile diagnostic pinned per §5 item 2. Item 1 written as adjudicated:
+  asserts deferred declaring-thread-queue semantics per the brief, `#[ignore]`
+  citing Phase 5 — current synchronous firing legitimately differs. The four
+  §3.4 latent bugs each got an `#[ignore]`d expected-behavior test per §5
+  item 4, their programs carried on the gate's KNOWN_MEMORY_BUGS; §3.4(d)'s
+  current failure mode turned out to be upstream of the audit's description —
+  a statement-temporary watcher expression never registers its subscriptions
+  at all and leaks. Weak-after-death expected-behavior test written
+  `#[ignore]`d citing 1.5e, its program on REJECTION_FIXTURES since it cannot
+  compile before 1.5e.) *Gate: suite green (ignores documented).*
+- **1.5e** Weak-after-death semantics (adjudicated item 6): dead-weak read
+  yields `unknown` with reason "weak referent released"; member access on it
+  propagates per the spec's unknown rules. Implementation and the
+  hilow-design.md spec edit land in the same commit; un-ignore
+  test_weak_after_death_unknown_integration and remove
+  weak_after_death_unknown.hl from REJECTION_FIXTURES. *Gate: full suite +
+  gate green, that test live.*
 
 ### Phase 2 — arrays first
 
@@ -502,3 +528,12 @@ named and are not to be re-litigated.
    deletes — retain/release call-site discipline transfers directly to the
    cell model, so fixing it now is not wasted work. The gate expects these
    programs to fail until 1.5c removes them from the list.
+6. **Weak-after-death access (adjudicated 2026-07-15): dead-weak read yields
+   `unknown` with reason "weak referent released".** Member access on the
+   result propagates per the spec's existing unknown rules ("unknown
+   propagates through property access"). Implementation is Phase 1.5e, with
+   the hilow-design.md spec edit in the same commit (per the CLAUDE.md rule
+   that spec changes are deliberate, never silent). The expected-behavior
+   test was written in 1.5d as `#[ignore]`d
+   (test_weak_after_death_unknown_integration), its program carried on the
+   gate's REJECTION_FIXTURES until 1.5e makes it compile.

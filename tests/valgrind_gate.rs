@@ -30,7 +30,9 @@ const REJECTION_FIXTURES: &[&str] = &[
     "array/type_mismatch.hl",                        // is_err test
     "array_moved_alias_rejected_on_changed.hl",      // is_err test
     "wrong_context.hl",                              // rejection fixture; test commented out
-    "stealth_return_rejected.hl",                    // rejection fixture; no test wired (audit §4.4 item 9)
+    "stealth_return_rejected.hl",                    // is_err test test_stealth_return_rejected (wired in 1.5d, audit §4.4 item 9)
+    "string_watcher_rejected.hl",                    // is_err test test_string_watcher_rejected — adjudicated audit §5 item 2: compile-time diagnostic until strings inherit cell semantics (Phase 2)
+    "weak_after_death_unknown.hl",                   // EXPECTED-BEHAVIOR pin for Phase 1.5e (dead-weak read → unknown "weak referent released"); does not compile today (.reason on object-typed value). When 1.5e lands, this compiles — remove the entry and un-ignore its test
     "phase3/types2.hl",                              // verify_phase3.rs test_types2_fails_type_check
     "phase3/types3.hl",                              // verify_phase3.rs test_types3_fails_type_check
     "unknown_with_options.hl",                       // Phase 9b deferral: unknown constructor with options is UnsupportedFeature in codegen (generate_unknown_constructor)
@@ -42,10 +44,20 @@ const REJECTION_FIXTURES: &[&str] = &[
 /// honest, mirroring REJECTION_FIXTURES).
 ///
 /// Adding an entry requires a citation in its comment and a matching
-/// STATUS.md record. Currently empty: the object double-release class that
-/// populated this list (17 programs) was fixed in Phase 1.5c "object
-/// ownership discipline".
-const KNOWN_MEMORY_BUGS: &[&str] = &[];
+/// STATUS.md record. (The object double-release class that originally
+/// populated this list — 17 programs — was fixed in Phase 1.5c "object
+/// ownership discipline".)
+///
+/// Current entries are the four §3.4 env-keying latent bugs, adjudicated
+/// (audit §5 item 4, 2026-07-14) to stay broken until Phase 2 replaces the
+/// env machinery — each has a matching #[ignore]d expected-behavior test in
+/// integration_tests.rs (Phase 1.5d) and a STATUS.md Known issues record.
+const KNOWN_MEMORY_BUGS: &[&str] = &[
+    "watcher_move_capture_env.hl",               // audit §3.4(a): .move fires bodies with a 2-arg cast dropping the env → segfault with captures; fixed in Phase 2c (one firing ABI)
+    "watcher_multi_array_capture_unregister.hl", // audit §3.4(b): one env on two arrays unregisters from only the last → UAF when the other fires after scope death; fixed in Phase 2b (watcher-owned envs)
+    "watcher_null_key_scope_death.hl",           // audit §3.4(c): no-capture registrations keyed "NULL", never unregistered → invalid reads + firing after scope death; fixed in Phase 2b
+    "watcher_temp_env_statement.hl",             // audit §3.4(d) territory: statement-temporary watcher expr (call argument) never registers its subscriptions and leaks its allocation; fixed in Phase 2b
+];
 
 fn collect_entries(dir: &Path, entries: &mut Vec<PathBuf>) {
     let mut files: Vec<PathBuf> = Vec::new();
@@ -221,8 +233,8 @@ fn valgrind_gate() {
                         *checked_count.lock().unwrap() += 1;
                     }
                     Ok(_) if is_known_bug => {
-                        // Documented Known Bug (object double-release, fix in
-                        // Phase 1.5c) — counted, not failed
+                        // Documented Known Bug (see KNOWN_MEMORY_BUGS entry
+                        // comments) — counted, not failed
                         *checked_count.lock().unwrap() += 1;
                     }
                     Ok(n) => {

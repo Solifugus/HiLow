@@ -1,0 +1,13 @@
+high program(): i32 {
+    let xs = [1, 3]
+    let wa = watcher((a=added)xs) {
+        print("added:")
+        print(a)
+    }
+    let wc = watcher((changed)xs) { print("changed") }
+    xs.insert(1, 2)
+    print(xs[0])
+    print(xs[1])
+    print(xs[2])
+    return 0
+}

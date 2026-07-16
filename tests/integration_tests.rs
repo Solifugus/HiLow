@@ -4933,3 +4933,292 @@ fn test_object_string_prop_overwrite_integration() {
 
     let _ = fs::remove_file(&executable);
 }
+
+// ============================================================
+// Phase 1.5d: gap tests (audit §4.4 items 1, 4, 5, 6, 7, 9 + §3.4 latent-bug
+// pins per the §5 item 4 adjudication + weak-after-death 1.5e pin).
+// Live tests pin current correct behavior. #[ignore]d tests assert
+// adjudicated EXPECTED behavior that current machinery does not deliver;
+// each names the bug/phase that flips it live. Their programs are carried
+// on the valgrind gate's honesty lists (KNOWN_MEMORY_BUGS /
+// REJECTION_FIXTURES in tests/valgrind_gate.rs).
+// ============================================================
+
+// §4.4 item 4 (scalar variant): a function that declares a watcher and can
+// return early. Early return must not cause spurious fires or crashes on
+// later calls; the post-declaration mutation on the non-early path fires once.
+#[test]
+fn test_watcher_early_return_scalar_integration() {
+    let executable = compile_program("tests/programs/watcher_early_return_scalar.hl")
+        .expect("Failed to compile watcher_early_return_scalar.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_early_return_scalar.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_early_return_scalar");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// §4.4 item 4 (array variant): watcher registered on a caller-owned array
+// inside a function that returns early. The watcher dies with the function
+// scope (1.5b early-return cleanup unregisters + frees the env), so the
+// caller's later push must NOT fire it.
+#[test]
+fn test_watcher_early_return_array_integration() {
+    let executable = compile_program("tests/programs/watcher_early_return_array.hl")
+        .expect("Failed to compile watcher_early_return_array.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_early_return_array.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_early_return_array");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// §4.4 item 5: shadowing + array watchers. Array subscription is by array
+// IDENTITY, so a shadowing `xs` in a nested function must not fire the outer
+// watcher; the outer array's own push must.
+#[test]
+fn test_watcher_shadow_array_integration() {
+    let executable = compile_program("tests/programs/watcher_shadow_array.hl")
+        .expect("Failed to compile watcher_shadow_array.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_shadow_array.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_shadow_array");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// §4.4 item 6: .insert(i, v) fires CHANGED then ADDED (with the added alias
+// carrying the inserted value) — pins the runtime firing order and delta.
+#[test]
+fn test_array_insert_watcher_fires_integration() {
+    let executable = compile_program("tests/programs/array_insert_watcher_fires.hl")
+        .expect("Failed to compile array_insert_watcher_fires.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/array_insert_watcher_fires.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_insert_watcher_fires");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// §4.4 item 7: array-watcher factory — a watcher on a caller-owned array,
+// returned from the declaring function (no captures), keeps firing after the
+// function exits. Mirrors the scalar factory pin (factory_returns_and_fires).
+#[test]
+fn test_array_watcher_factory_integration() {
+    let executable = compile_program("tests/programs/array_watcher_factory.hl")
+        .expect("Failed to compile array_watcher_factory.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/array_watcher_factory.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run array_watcher_factory");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// §4.4 item 9: wire the existing stealth_return_rejected.hl fixture — return
+// inside a stealth block is a compile-time rejection.
+#[test]
+fn test_stealth_return_rejected() {
+    let result = compile_program("tests/programs/stealth_return_rejected.hl");
+
+    assert!(result.is_err(), "Expected compilation to fail for return inside stealth block");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("return inside stealth block"),
+            "Error should mention return inside stealth block, got: {}", error_message);
+}
+
+// §4.4 item 8 / audit §5 item 2 adjudication: registering a watcher on a
+// string is a clean compile-time diagnostic until strings inherit cell
+// semantics (Phase 2). Pins the current diagnostic text.
+#[test]
+fn test_string_watcher_rejected() {
+    let result = compile_program("tests/programs/string_watcher_rejected.hl");
+
+    assert!(result.is_err(), "Expected compilation to fail for watcher on a string");
+
+    let error_message = result.unwrap_err();
+    assert!(error_message.contains("watching value of type Primitive(String)")
+            && error_message.contains("string and composite watching"),
+            "Error should be the string-watching diagnostic, got: {}", error_message);
+}
+
+// §4.4 item 1, adjudicated: asserts DEFERRED (declaring-thread queue) firing
+// per docs/cell-redesign-brief.md — a mutation made inside a watcher body is
+// queued, so the second watcher fires AFTER the first body completes, and the
+// first body's delta alias survives the nested mutation. Current machinery
+// fires synchronously (nested) — legitimately different until Phase 5 lands
+// the notification queues.
+#[test]
+#[ignore = "asserts deferred (declaring-thread queue) firing per the redesign brief; current firing is synchronous — flips live in Phase 5 (queues)"]
+fn test_watcher_reentrant_deferred_integration() {
+    let executable = compile_program("tests/programs/watcher_reentrant_deferred.hl")
+        .expect("Failed to compile watcher_reentrant_deferred.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_reentrant_deferred.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_reentrant_deferred");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// audit §3.4(a): .move firing drops the env (2-arg cast) — a (moved) watcher
+// with captures reads the array pointer as its env. Expected behavior: the
+// captured variable prints correctly when move fires. Currently segfaults.
+#[test]
+#[ignore = "audit §3.4(a): .move fires bodies with a 2-arg cast dropping the env — segfaults with captures; adjudicated (§5 item 4) to stay broken until Phase 2c unifies the firing ABI. Program is on KNOWN_MEMORY_BUGS"]
+fn test_watcher_move_capture_env_integration() {
+    let executable = compile_program("tests/programs/watcher_move_capture_env.hl")
+        .expect("Failed to compile watcher_move_capture_env.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_move_capture_env.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_move_capture_env");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// audit §3.4(b): one captured env registered on two arrays unregisters from
+// only the last at scope death. Expected behavior: the watcher dies with its
+// scope — mutating either array afterwards fires nothing. Currently the
+// non-last array keeps a dangling node → segfault on push.
+#[test]
+#[ignore = "audit §3.4(b): multi-array watcher env unregisters from only the last array — UAF when the other fires after scope death; adjudicated (§5 item 4) to stay broken until Phase 2b (watcher-owned envs). Program is on KNOWN_MEMORY_BUGS"]
+fn test_watcher_multi_array_capture_unregister_integration() {
+    let executable = compile_program("tests/programs/watcher_multi_array_capture_unregister.hl")
+        .expect("Failed to compile watcher_multi_array_capture_unregister.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_multi_array_capture_unregister.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_multi_array_capture_unregister");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// audit §3.4(c): no-capture watcher registrations are keyed on the literal
+// string "NULL" and never unregistered. Expected behavior: watchers die with
+// their declaring scope — mutations afterwards fire nothing. Currently both
+// watchers keep firing after scope death (with invalid reads of the freed
+// watcher values).
+#[test]
+#[ignore = "audit §3.4(c): no-capture registrations keyed \"NULL\" are never unregistered — watchers fire after scope death; adjudicated (§5 item 4) to stay broken until Phase 2b. Program is on KNOWN_MEMORY_BUGS"]
+fn test_watcher_null_key_scope_death_integration() {
+    let executable = compile_program("tests/programs/watcher_null_key_scope_death.hl")
+        .expect("Failed to compile watcher_null_key_scope_death.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_null_key_scope_death.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_null_key_scope_death");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// audit §3.4(d) territory: a statement-temporary watcher expression (passed
+// as a call argument, never bound). Expected behavior: the temporary watcher
+// dies at statement end — later mutation fires nothing, no leak, exit 0.
+// Currently the temp path is broken upstream of the audit's description: the
+// subscriptions are never registered (the temp_watcher_expr_* side-channel is
+// consumed only by the let-binding path) and the watcher allocation leaks
+// (exit 1, MEMORY LEAK).
+#[test]
+#[ignore = "audit §3.4(d): statement-temporary watcher expr never registers and leaks; adjudicated (§5 item 4) to stay broken until Phase 2b (watcher-owned envs / watcher values). Program is on KNOWN_MEMORY_BUGS"]
+fn test_watcher_temp_env_statement_integration() {
+    let executable = compile_program("tests/programs/watcher_temp_env_statement.hl")
+        .expect("Failed to compile watcher_temp_env_statement.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_temp_env_statement.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_temp_env_statement");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}
+
+// Weak-after-death, adjudicated 2026-07-15 (audit §5 item 6): reading a weak
+// property whose referent has died yields unknown with reason
+// "weak referent released"; member access on it propagates per the spec's
+// unknown rules (hilow-design.md "unknown propagates through property
+// access"). Implementation is Phase 1.5e (spec edit in the same commit).
+// Today the program does not even compile (.reason on an object-typed value)
+// — it is carried on the gate's REJECTION_FIXTURES until 1.5e.
+#[test]
+#[ignore = "adjudicated weak-after-death semantics (dead-weak read → unknown \"weak referent released\", member access propagates); lands in Phase 1.5e with the spec edit — un-ignore then and remove the program from REJECTION_FIXTURES"]
+fn test_weak_after_death_unknown_integration() {
+    let executable = compile_program("tests/programs/weak_after_death_unknown.hl")
+        .expect("Failed to compile weak_after_death_unknown.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/weak_after_death_unknown.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run weak_after_death_unknown");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
+}

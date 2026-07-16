@@ -1,0 +1,6 @@
+xs removed:
+20
+20
+ys removed:
+1
+after

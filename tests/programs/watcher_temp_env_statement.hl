@@ -1,0 +1,11 @@
+high program(): i32 {
+    function take(w: watcher): i32 {
+        return 0
+    }
+    let xs = []: [i32]
+    let z = 3
+    take(watcher((added)xs) { print(z) })
+    xs.push(1)
+    print("after")
+    return 0
+}
