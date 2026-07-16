@@ -1347,7 +1347,11 @@ impl CodeGenerator {
                 Expression::WatcherExpr(_) => {
                     self.track_heap_owner(name, HeapType::Watcher);
 
-                    // Phase 10-δ-β/10-ε-α: Register heap watcher subscriptions
+                    // Phase 2a: ARRAY watchers register by construction inside
+                    // the watcher expression itself (hl_watcher_new_subscribed)
+                    // — nothing to consume here. The side-channel below is
+                    // populated for SCALAR watcher expressions only
+                    // (compile-time name-keyed wiring, migrates in Phase 3).
                     if let (Some(body_fn_name), subscriptions, captured_vars) = (
                         self.temp_watcher_expr_body_fn.take(),
                         std::mem::take(&mut self.temp_watcher_expr_subscriptions),
@@ -1355,97 +1359,22 @@ impl CodeGenerator {
                     ) {
                         let c_var_name = self.mangle_variable_name(name);
 
-                        // Check if this is an array watcher
-                        let is_array_watcher = subscriptions.iter().any(|s| {
-                            s.resolved_var_type
-                                .borrow()
-                                .as_ref()
-                                .map(|ty| matches!(ty, crate::ast::Type::DynamicArray(_)))
-                                .unwrap_or(false)
-                        });
+                        // Scalar watcher: existing heap registration logic
+                        let all_subscriptions: Vec<String> = subscriptions.iter()
+                            .map(|s| s.variable_name.clone())
+                            .collect();
 
-                        if is_array_watcher {
-                            // Phase 10-ε-α: Emit direct array watcher registration
-                            self.output.push_str(";\n");
-
-                            // Generate environment allocation for captured variables
-                            let env_var_name = if captured_vars.is_empty() {
-                                "NULL".to_string()
-                            } else {
-                                let env_struct_name = format!("hilow_array_watcher_env_{}",
-                                    self.watcher_counter - 1);
-                                let env_var = format!("{}_env", c_var_name);
-
-                                // Allocate the environment
-                                self.output.push_str(&format!("    {}* {} = malloc(sizeof({}));\n",
-                                    env_struct_name, env_var, env_struct_name));
-                                self.output.push_str("    hl_alloc_count++;\n");
-
-                                // Pack captured variables by reference
-                                for var_name in &captured_vars {
-                                    let c_var = self.mangle_variable_name(var_name);
-                                    // Check if this variable is an array type
-                                    if let Some(var_type) = self.variable_types.get(var_name) {
-                                        if matches!(var_type, Type::DynamicArray(_)) {
-                                            // For arrays, store the pointer directly
-                                            self.output.push_str(&format!("    {}->{} = {};\n",
-                                                env_var, var_name, c_var));
-                                        } else {
-                                            // For scalars, store pointer for by-reference access
-                                            self.output.push_str(&format!("    {}->{} = &{};\n",
-                                                env_var, var_name, c_var));
-                                        }
-                                    } else {
-                                        // Default to by-reference for unknown types
-                                        self.output.push_str(&format!("    {}->{} = &{};\n",
-                                            env_var, var_name, c_var));
-                                    }
-                                }
-
-                                // Track the environment for scope cleanup
-                                self.track_heap_owner(&env_var, HeapType::Environment);
-
-                                env_var
-                            };
-
-                            for subscription in &subscriptions {
-                                let c_modifier = match subscription.modifier {
-                                    SubscriptionModifier::Changed => "HL_ARR_CHANGED",
-                                    SubscriptionModifier::Added => "HL_ARR_ADDED",
-                                    SubscriptionModifier::Removed => "HL_ARR_REMOVED",
-                                    SubscriptionModifier::Moved => "HL_ARR_MOVED",
-                                    _ => continue, // Should not happen due to validation
-                                };
-                                let arr_var = self.mangle_variable_name(&subscription.variable_name);
-                                self.output.push_str(&format!(
-                                    "    hl_array_register_watcher({}, {}, {}, {}, {});\n",
-                                    arr_var, c_modifier, body_fn_name, env_var_name, c_var_name
-                                ));
-
-                                // Track array watcher registration for scope cleanup
-                                self.array_watcher_registrations.insert(
-                                    env_var_name.clone(),
-                                    (arr_var, self.scope_depth)
-                                );
-                            }
-                        } else {
-                            // Scalar watcher: existing heap registration logic
-                            let all_subscriptions: Vec<String> = subscriptions.iter()
-                                .map(|s| s.variable_name.clone())
-                                .collect();
-
-                            for subscription in subscriptions {
-                                self.heap_watcher_subscribers
-                                    .entry(subscription.variable_name.clone())
-                                    .or_insert_with(Vec::new)
-                                    .push(HeapWatcherSubscription {
-                                        watcher_var: c_var_name.clone(),
-                                        body_fn_name: body_fn_name.clone(),
-                                        modifier: subscription.modifier.clone(),
-                                        all_subscriptions: all_subscriptions.clone(),
-                                        captured_vars: captured_vars.clone(),
-                                    });
-                            }
+                        for subscription in subscriptions {
+                            self.heap_watcher_subscribers
+                                .entry(subscription.variable_name.clone())
+                                .or_insert_with(Vec::new)
+                                .push(HeapWatcherSubscription {
+                                    watcher_var: c_var_name.clone(),
+                                    body_fn_name: body_fn_name.clone(),
+                                    modifier: subscription.modifier.clone(),
+                                    all_subscriptions: all_subscriptions.clone(),
+                                    captured_vars: captured_vars.clone(),
+                                });
                         }
                     }
                 }
@@ -2954,6 +2883,10 @@ impl CodeGenerator {
 
                 // Generate unique body function name
                 let body_fn_name = format!("hilow_watcher_expr_{}_body", self.watcher_counter);
+                // Captured now: generate_block below can bump the counter for
+                // nested watcher expressions, so `watcher_counter - 1` is not
+                // safe to recompute after body generation.
+                let watcher_index = self.watcher_counter;
                 self.watcher_counter += 1;
 
                 // Generate function signature based on watcher type
@@ -3063,7 +2996,7 @@ impl CodeGenerator {
                     let captures = watcher_expr.captures.borrow();
                     if !captures.is_empty() {
                         // Generate env struct name for this watcher
-                        let env_struct_name = format!("hilow_array_watcher_env_{}", self.watcher_counter - 1);
+                        let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_index);
 
                         // Generate environment struct definition
                         self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
@@ -3132,19 +3065,113 @@ impl CodeGenerator {
                 self.watcher_bodies.push_str(&self.output);
                 self.watcher_bodies.push_str("}\n\n");
 
-                // Restore output and emit the heap watcher creation
+                // Restore output and emit the watcher-value creation
                 self.output = saved_output;
-                self.output.push_str("hl_watcher_new()");
 
-                // Store function name, subscriptions, and captures for let statement to register
-                self.temp_watcher_expr_body_fn = Some(body_fn_name);
-                self.temp_watcher_expr_subscriptions = watcher_expr.subscriptions.clone();
+                if has_arrays {
+                    // Phase 2a: registration by construction. The expression
+                    // value is ONE call that creates the watcher AND
+                    // subscribes it to every cell — any syntactic position
+                    // registers (let RHS, call argument, anywhere). There is
+                    // no side-channel for a statement shape to forget.
+                    let captured_var_names: Vec<String> = watcher_expr.captures.borrow().iter()
+                        .map(|(var_name, _ast_type, _pos)| var_name.clone())
+                        .collect();
 
-                // Phase 10a: Store captured variables
-                let captures = watcher_expr.captures.borrow();
-                self.temp_watcher_expr_captured_vars = captures.iter()
-                    .map(|(var_name, _ast_type, _pos)| var_name.clone())
-                    .collect();
+                    // Env allocation + packing, hoisted to statement level.
+                    // Scope-owned until Phase 2b (watcher-owned envs).
+                    let env_var_name = if captured_var_names.is_empty() {
+                        "NULL".to_string()
+                    } else {
+                        let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_index);
+                        let env_var = format!("__watcher_env_{}", watcher_index);
+
+                        let mut decl = format!("{}* {} = malloc(sizeof({})); hl_alloc_count++;",
+                            env_struct_name, env_var, env_struct_name);
+                        for var_name in &captured_var_names {
+                            let c_var = self.mangle_variable_name(var_name);
+                            let is_array_capture = self.variable_types.get(var_name)
+                                .map(|t| matches!(t, Type::DynamicArray(_)))
+                                .unwrap_or(false);
+                            if is_array_capture {
+                                // Arrays: store the pointer directly (identity capture)
+                                decl.push_str(&format!(" {}->{} = {};", env_var, var_name, c_var));
+                            } else {
+                                // Scalars: store pointer for by-reference access
+                                decl.push_str(&format!(" {}->{} = &{};", env_var, var_name, c_var));
+                            }
+                        }
+                        self.pending_statement_decls.push(decl);
+
+                        if context == ExprContext::Temporary {
+                            // Statement-temporary watcher: env dies with the
+                            // statement (its watcher unsubscribes at temp
+                            // release; unsubscription never touches env).
+                            self.temp_owners.insert(env_var.clone(), (HeapType::Environment, self.scope_depth));
+                        } else {
+                            // Binding position: env lives with the scope.
+                            self.track_heap_owner(&env_var, HeapType::Environment);
+                        }
+                        env_var
+                    };
+
+                    // Build the construction call.
+                    let mut call = format!("hl_watcher_new_subscribed({}, {}", body_fn_name, env_var_name);
+                    let mut n_subs = 0;
+                    let mut sub_args = String::new();
+                    for subscription in &watcher_expr.subscriptions {
+                        let c_modifier = match subscription.modifier {
+                            SubscriptionModifier::Changed => "HL_ARR_CHANGED",
+                            SubscriptionModifier::Added => "HL_ARR_ADDED",
+                            SubscriptionModifier::Removed => "HL_ARR_REMOVED",
+                            SubscriptionModifier::Moved => "HL_ARR_MOVED",
+                            _ => continue, // rejected by validation above
+                        };
+                        let arr_var = self.mangle_variable_name(&subscription.variable_name);
+                        sub_args.push_str(&format!(", &{}->cell, {}", arr_var, c_modifier));
+                        n_subs += 1;
+
+                        if context != ExprContext::Temporary {
+                            // Safety net for scope-owned envs (dies in 2b):
+                            // scope/early-return cleanup unsubscribes by env.
+                            // Known single-slot limitation unchanged (§3.4(b)
+                            // map); real unsubscription is watcher release.
+                            if env_var_name != "NULL" {
+                                self.array_watcher_registrations.insert(
+                                    env_var_name.clone(),
+                                    (arr_var, self.scope_depth)
+                                );
+                            }
+                        }
+                    }
+                    call.push_str(&format!(", {}{})", n_subs, sub_args));
+
+                    if context == ExprContext::Temporary {
+                        // The fresh +1 watcher must be released at statement
+                        // end (which unsubscribes it) — hoist as a tracked
+                        // temp, mirroring the optional-member pattern.
+                        let temp_name = self.next_temp_name();
+                        self.temp_owners.insert(temp_name.clone(), (HeapType::Watcher, self.scope_depth));
+                        self.pending_statement_decls.push(format!("HiLowWatcher* {} = {};", temp_name, call));
+                        self.output.push_str(&temp_name);
+                    } else {
+                        self.output.push_str(&call);
+                    }
+                } else {
+                    // Scalar watcher: unchanged (compile-time name-keyed
+                    // wiring; migrates to cells in Phase 3). The side-channel
+                    // below is consumed by the let path only — the known
+                    // statement-shape limitation persists for scalars.
+                    self.output.push_str("hl_watcher_new()");
+
+                    self.temp_watcher_expr_body_fn = Some(body_fn_name);
+                    self.temp_watcher_expr_subscriptions = watcher_expr.subscriptions.clone();
+
+                    let captures = watcher_expr.captures.borrow();
+                    self.temp_watcher_expr_captured_vars = captures.iter()
+                        .map(|(var_name, _ast_type, _pos)| var_name.clone())
+                        .collect();
+                }
             }
             Expression::ArrayLit(elements, _) => {
                 // Infer element type from first element
@@ -7053,12 +7080,12 @@ impl CodeGenerator {
                                 .find(|(name, _)| self.mangle_variable_name(name) == *arr_var)
                                 .map(|(_, (_, scope))| ((), scope)) {
                                 if *watcher_scope != *arr_scope {
-                                    self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                    self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
                                         arr_var, c_var_name));
                                 }
                             } else {
                                 // Array not in heap_owners (might be stack-allocated), safe to unregister
-                                self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
                                     arr_var, c_var_name));
                             }
                         }
@@ -7223,12 +7250,12 @@ impl CodeGenerator {
                                 .find(|(name, _)| self.mangle_variable_name(name) == *arr_var)
                                 .map(|(_, (_, scope))| ((), scope)) {
                                 if *watcher_scope != *arr_scope {
-                                    self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                    self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
                                         arr_var, c_var_name));
                                 }
                             } else {
                                 // Array not in heap_owners (might be stack-allocated), safe to unregister
-                                self.output.push_str(&format!("    hl_array_unregister_watcher({}, {});\n",
+                                self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
                                     arr_var, c_var_name));
                             }
                         }

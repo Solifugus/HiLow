@@ -5124,12 +5124,10 @@ fn test_watcher_move_capture_env_integration() {
     let _ = fs::remove_file(&executable);
 }
 
-// audit §3.4(b): one captured env registered on two arrays unregisters from
-// only the last at scope death. Expected behavior: the watcher dies with its
-// scope — mutating either array afterwards fires nothing. Currently the
-// non-last array keeps a dangling node → segfault on push.
+// audit §3.4(b), fixed in Phase 2a: the watcher dies with its scope — its
+// release unsubscribes it from BOTH arrays (watcher-identity subscription
+// backrefs), so mutating either array afterwards fires nothing.
 #[test]
-#[ignore = "audit §3.4(b): multi-array watcher env unregisters from only the last array — UAF when the other fires after scope death; adjudicated (§5 item 4) to stay broken until Phase 2b (watcher-owned envs). Program is on KNOWN_MEMORY_BUGS"]
 fn test_watcher_multi_array_capture_unregister_integration() {
     let executable = compile_program("tests/programs/watcher_multi_array_capture_unregister.hl")
         .expect("Failed to compile watcher_multi_array_capture_unregister.hl");
@@ -5147,13 +5145,10 @@ fn test_watcher_multi_array_capture_unregister_integration() {
     let _ = fs::remove_file(&executable);
 }
 
-// audit §3.4(c): no-capture watcher registrations are keyed on the literal
-// string "NULL" and never unregistered. Expected behavior: watchers die with
-// their declaring scope — mutations afterwards fire nothing. Currently both
-// watchers keep firing after scope death (with invalid reads of the freed
-// watcher values).
+// audit §3.4(c), fixed in Phase 2a: no-capture watchers are no longer keyed
+// on the literal "NULL" — scope exit releases the watcher values, which
+// unsubscribe themselves, so mutations after scope death fire nothing.
 #[test]
-#[ignore = "audit §3.4(c): no-capture registrations keyed \"NULL\" are never unregistered — watchers fire after scope death; adjudicated (§5 item 4) to stay broken until Phase 2b. Program is on KNOWN_MEMORY_BUGS"]
 fn test_watcher_null_key_scope_death_integration() {
     let executable = compile_program("tests/programs/watcher_null_key_scope_death.hl")
         .expect("Failed to compile watcher_null_key_scope_death.hl");
@@ -5171,15 +5166,12 @@ fn test_watcher_null_key_scope_death_integration() {
     let _ = fs::remove_file(&executable);
 }
 
-// audit §3.4(d) territory: a statement-temporary watcher expression (passed
-// as a call argument, never bound). Expected behavior: the temporary watcher
-// dies at statement end — later mutation fires nothing, no leak, exit 0.
-// Currently the temp path is broken upstream of the audit's description: the
-// subscriptions are never registered (the temp_watcher_expr_* side-channel is
-// consumed only by the let-binding path) and the watcher allocation leaks
-// (exit 1, MEMORY LEAK).
+// audit §3.4(d), fixed in Phase 2a: an array-watcher expression registers by
+// construction (hl_watcher_new_subscribed — one call, any syntactic
+// position), so the call-argument form subscribes like any other; the
+// temporary watcher's statement-end release unsubscribes it. Later mutation
+// fires nothing, no leak, exit 0.
 #[test]
-#[ignore = "audit §3.4(d): statement-temporary watcher expr never registers and leaks; adjudicated (§5 item 4) to stay broken until Phase 2b (watcher-owned envs / watcher values). Program is on KNOWN_MEMORY_BUGS"]
 fn test_watcher_temp_env_statement_integration() {
     let executable = compile_program("tests/programs/watcher_temp_env_statement.hl")
         .expect("Failed to compile watcher_temp_env_statement.hl");

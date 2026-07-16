@@ -45,17 +45,14 @@ const REJECTION_FIXTURES: &[&str] = &[
 /// Adding an entry requires a citation in its comment and a matching
 /// STATUS.md record. (The object double-release class that originally
 /// populated this list — 17 programs — was fixed in Phase 1.5c "object
-/// ownership discipline".)
+/// ownership discipline". The §3.4(b)/(c)/(d) env-keying bugs were fixed in
+/// Phase 2a: watcher values subscribe at construction and unsubscribe at
+/// release, so scope-shape registration/unregistration holes are gone.)
 ///
-/// Current entries are the four §3.4 env-keying latent bugs, adjudicated
-/// (audit §5 item 4, 2026-07-14) to stay broken until Phase 2 replaces the
-/// env machinery — each has a matching #[ignore]d expected-behavior test in
-/// integration_tests.rs (Phase 1.5d) and a STATUS.md Known issues record.
+/// Remaining entry: the §3.4(a) firing-ABI bug, which lives in the mutator
+/// firing loops that Phase 2c's one-notify-path rewrite replaces.
 const KNOWN_MEMORY_BUGS: &[&str] = &[
-    "watcher_move_capture_env.hl",               // audit §3.4(a): .move fires bodies with a 2-arg cast dropping the env → segfault with captures; fixed in Phase 2c (one firing ABI)
-    "watcher_multi_array_capture_unregister.hl", // audit §3.4(b): one env on two arrays unregisters from only the last → UAF when the other fires after scope death; fixed in Phase 2b (watcher-owned envs)
-    "watcher_null_key_scope_death.hl",           // audit §3.4(c): no-capture registrations keyed "NULL", never unregistered → invalid reads + firing after scope death; fixed in Phase 2b
-    "watcher_temp_env_statement.hl",             // audit §3.4(d) territory: statement-temporary watcher expr (call argument) never registers its subscriptions and leaks its allocation; fixed in Phase 2b
+    "watcher_move_capture_env.hl", // audit §3.4(a): both .move firing sites cast the body to a 2-arg env-less shape, so a capturing watcher reads the array pointer as its env → segfault; fixed in Phase 2c (one firing ABI)
 ];
 
 fn collect_entries(dir: &Path, entries: &mut Vec<PathBuf>) {

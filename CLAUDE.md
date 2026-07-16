@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 2a — cell header: introduce `HiLowCell` header fields (watcher list, parent list, version, deep-watched flag) onto `HiLowArray` — mechanical layout change, firing behavior identical (audit §5 refined phase plan, Phase 2 arrays-first)**
+**Current phase: 2b (rescoped by 2a's landing — see audit 2b annotation): watcher-owned refcounted envs — the watcher retains its env and frees it on final release; delete the codegen scope-owned-env machinery (`array_watcher_registrations`, the Environment cleanup arms, the env-keyed `hl_cell_unsubscribe_env` safety net). Watcher values, construction-registration, release-unsubscription, and the §3.4(b)(c)(d) fixes already landed in 2a.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

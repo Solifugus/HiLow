@@ -155,11 +155,52 @@ typedef struct HiLowFunction {
     void (*env_dtor)(void*); // releases heap fields inside env before free; NULL if none
 } HiLowFunction;
 
-// Watcher value support (Phase 10-δ-α)
+// ---------------------------------------------------------------------------
+// The cell header (Phase 2a, cell-redesign brief "Core decision"): embedded as
+// the FIRST member of every watchable heap value. Arrays in this phase;
+// objects, strings, and boxed scalars embed the same header in later phases.
+// Nothing array-specific lives in the header, its node structs, or the cell
+// operations.
+// ---------------------------------------------------------------------------
+
+// One subscription: a watcher value attached to a cell for one modifier.
+// body_fn's signature is the subscriber's business (cast at the firing site).
+typedef struct HiLowCellWatcher {
+    int modifier;                    // HL_ARR_ADDED / REMOVED / CHANGED / MOVED
+    void* body_fn;
+    void* env;                       // scope-owned until Phase 2b (watcher-owned then)
+    struct HiLowWatcher* watcher;    // gating (active/ended) + identity; NOT owned
+    struct HiLowCellWatcher* next;
+} HiLowCellWatcher;
+
+// Parent-list node (dead until Phase 2d — field exists per the brief's header shape).
+typedef struct HiLowCellParent {
+    struct HiLowCell* parent;
+    struct HiLowCellParent* next;
+} HiLowCellParent;
+
+typedef struct HiLowCell {
+    int refcount;
+    HiLowCellWatcher* watchers;      // subscription list (live as of Phase 2a)
+    HiLowCellParent* parents;        // dead until 2d
+    uint64_t version;                // dead until later phases
+    bool deep_watched;               // dead until 2d
+} HiLowCell;
+
+// Watcher value support (Phase 10-δ-α; subscription backrefs added Phase 2a)
+// A cell→watcher node and its watcher→cell backref are BOTH non-owning;
+// whichever side dies first unlinks itself from the other (hl_cell_release /
+// hl_watcher_release). No refcount cycle, no dangling pointer either way.
+typedef struct HiLowWatcherSub {
+    struct HiLowCell* cell;          // NOT owned
+    struct HiLowWatcherSub* next;
+} HiLowWatcherSub;
+
 typedef struct HiLowWatcher {
     int refcount;          // Reference count for memory management
     bool active;           // Whether the watcher is currently active
     bool ended;            // Whether the watcher has been permanently ended
+    HiLowWatcherSub* subs; // cells this watcher is subscribed on (Phase 2a)
 } HiLowWatcher;
 
 // Object support (Phase 7a)
@@ -262,34 +303,41 @@ void hl_watcher_resume(HiLowWatcher* w);
 void hl_watcher_end(HiLowWatcher* w);
 bool hl_watcher_is_active(HiLowWatcher* w);
 
-// Array support (Array Phase A) and watcher scaffolding (Array Phase B)
-// Forward-declared; full definition populated in Phase 10-ε.
-typedef struct HiLowArrayWatcher HiLowArrayWatcher;
+// Cell operations (Phase 2a). All take HiLowCell* — never a container type.
+// hl_cell_notify (the one firing path) is Phase 2c; the parent walk is 2d.
+void hl_cell_retain(HiLowCell* c);
+// Returns true when the refcount hit zero: the CALLER (the typed container)
+// then does its type-specific teardown and free. On zero this tears down the
+// subscription list (unlinking each node's backref from its watcher) and the
+// parent list.
+bool hl_cell_release(HiLowCell* c);
+// Subscribe w to c for one modifier: prepends a node AND records the backref
+// in w->subs. Called only from hl_watcher_new_subscribed.
+void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w);
+// Remove ALL of w's nodes from c and w's backrefs to c. Idempotent.
+void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w);
+// Legacy env-keyed removal (first matching env node, semantics of the old
+// hl_array_unregister_watcher). Safety net for scope-owned envs; dies in 2b.
+void hl_cell_unsubscribe_env(HiLowCell* c, void* env);
+
+// Watcher construction that registers by construction (Phase 2a): creates the
+// watcher AND subscribes it to n (HiLowCell*, int modifier) varargs pairs.
+// The ONLY way generated code attaches an array watcher — there is no
+// separate register call for codegen to forget.
+HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, int n, ...);
 
 // Element function pointer type (Phase C)
 typedef void (*hl_elem_fn)(void*);
 
 typedef struct HiLowArray {
-    int refcount;
+    HiLowCell cell;                // cell header — MUST be first member (Phase 2a)
     size_t length;
     size_t capacity;
     size_t elem_size;
     void* data;
-    HiLowArrayWatcher* watchers;   // Phase B scaffolding: head of subscription list (always NULL in Phase B)
     hl_elem_fn retain_fn;          // NULL for primitive arrays, hl_object_retain for object arrays
     hl_elem_fn release_fn;         // NULL for primitive arrays, hl_object_release for object arrays
 } HiLowArray;
-
-// Phase B scaffolding: the subscription node. Phase 10-ε fills in the calling
-// convention for firing the watcher body with delta information. For now the
-// struct exists so mutation operations can walk an (always-empty) list.
-struct HiLowArrayWatcher {
-    int modifier;                   // ADDED / REMOVED / CHANGED / DEEP / MOVED (enum values; define a small set)
-    void* body_fn;                  // watcher body function pointer (unused until 10-ε)
-    void* env;                      // captured context environment struct
-    void* watcher_state;            // HiLowWatcher* for active/ended gating (unused until 10-ε)
-    HiLowArrayWatcher* next;
-};
 
 // Array watcher modifier constants (Phase B scaffolding)
 #define HL_ARR_ADDED 1
@@ -317,9 +365,9 @@ typedef struct {
 void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element from index 'from' to index 'to'
 void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements and setting length to 0
 
-// Array watcher registration (Phase 10-ε-α)
-void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* env, void* watcher_state);
-void hl_array_unregister_watcher(HiLowArray* arr, void* env);
+// Array watcher registration/unregistration lives on the cell as of Phase 2a:
+// subscription happens only inside hl_watcher_new_subscribed; env-keyed
+// removal is hl_cell_unsubscribe_env (see cell operations above).
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

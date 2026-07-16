@@ -415,7 +415,28 @@ point of deleting-with-confidence.
 - **2a Cell header.** Introduce `HiLowCell` header fields (watcher list,
   parent list, version, deep-watched flag) onto `HiLowArray` — mechanical
   layout change, firing behavior identical. *Gate: full suite, no behavior
-  change expected.*
+  change expected.* (Landed 2026-07-16, scope adjudicated via the approved 2a
+  plan: the phase instruction added "watcher construction must register by
+  construction — the §3.4(d) never-registers hole becomes structurally
+  impossible for arrays", which cannot be done soundly as layout-only —
+  structural registration forces its dual, release-unsubscribes, which
+  requires watcher→cell subscription backrefs (the watcher-value half of 2b).
+  As landed: standalone `HiLowCell {refcount, watchers, parents, version,
+  deep_watched}` embedded as HiLowArray's first member; cell ops
+  (`hl_cell_retain/release/subscribe/unsubscribe_watcher/unsubscribe_env`)
+  all take `HiLowCell*`, nothing array-specific in header or ops;
+  `hl_watcher_new_subscribed(body, env, n, ...)` is the ONLY way generated
+  code attaches an array watcher — the `temp_watcher_expr_*` side-channel is
+  deleted for arrays (kept for scalars until Phase 3); cell→watcher and
+  watcher→cell links are both non-owning with symmetric unlink-on-death.
+  Consequence: §3.4(b)(c)(d) fixed HERE, their three tests live and their
+  KNOWN_MEMORY_BUGS entries removed. §3.4(a) deliberately preserved — the
+  eight firing loops keep their per-site call shapes byte-identical,
+  including the 2-arg .move casts — dies in 2c. hl_cell_notify is 2c; the
+  parent walk is 2d; parents/version/deep_watched are dead fields until
+  then. Requirement-0 side task: the six placeholder optional-unwrap helpers
+  proved REACHABLE and now abort loudly; enabling bugs recorded in
+  STATUS.md.)
 - **2b Watcher values + owned envs.** Array watcher registration constructs a
   runtime watcher object owning a refcounted env; `hl_array_register_watcher`
   takes the watcher; delete codegen env-free/unregister
@@ -423,7 +444,16 @@ point of deleting-with-confidence.
   Environment arms), delete `array_watcher_registrations`. Scope exit releases
   the watcher value instead. Kills §3.4(b)(c)(d). Write §4.4 item 2 and 3
   tests at the head of this step. *Gate: full suite + valgrind; the
-  dies-with-scope and capture tests are the sentinels.*
+  dies-with-scope and capture tests are the sentinels.* (Rescoped by 2a's
+  landing, 2026-07-16: watcher values, construction-registration,
+  release-unsubscription, and the §3.4(b)(c)(d) fixes landed in 2a. What
+  remains for 2b: **watcher-owned refcounted envs** — the watcher retains its
+  env, freeing it on final release — and the deletion of the codegen
+  scope-owned-env machinery (`array_watcher_registrations`, the Environment
+  cleanup arms, the env-keyed `hl_cell_unsubscribe_env` safety net). Until
+  then, envs remain scope-owned and the env-keyed net covers the
+  capture-escape case exactly as before, including its known single-slot
+  limitation for escaping multi-array capture watchers.)
 - **2c One firing ABI + value deltas.** Unify all eight mutator firing loops
   on the `(env, cell, delta)` call through a single notify helper; fix the
   move 2-arg bug (§3.4a); replace both static temp_buffers with caller-owned /

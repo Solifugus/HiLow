@@ -1,6 +1,7 @@
 #define _GNU_SOURCE  // For timegm
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
+#include <stdarg.h>
 #include "runtime.h"
 
 void print_i32(int32_t value) {
@@ -768,6 +769,114 @@ HiLowFunction* hl_function_new_with_env_dtor(void* fn_ptr, void* env, void (*env
     return f;
 }
 
+// ---------------------------------------------------------------------------
+// Cell operations (Phase 2a). All take HiLowCell*; nothing array-specific.
+// Lifetime rule: a cell→watcher node and its watcher→cell backref are BOTH
+// non-owning; whichever side dies first unlinks itself from the other.
+// ---------------------------------------------------------------------------
+
+void hl_cell_retain(HiLowCell* c) {
+    if (c) {
+        c->refcount++;
+    }
+}
+
+// Remove one backref to `cell` from `w->subs` (used when the cell dies first;
+// duplicates — one backref per subscription node — are removed one at a time).
+static void watcher_drop_backref(HiLowWatcher* w, HiLowCell* cell) {
+    if (!w) return;
+    HiLowWatcherSub** cur = &w->subs;
+    while (*cur) {
+        if ((*cur)->cell == cell) {
+            HiLowWatcherSub* dead = *cur;
+            *cur = dead->next;
+            free(dead);
+            return;
+        }
+        cur = &(*cur)->next;
+    }
+}
+
+bool hl_cell_release(HiLowCell* c) {
+    if (!c) return false;
+    c->refcount--;
+    if (c->refcount > 0) return false;
+
+    // Subscription-list teardown: unlink each node's backref from its
+    // watcher (the watcher value itself is owned by its binding, not us).
+    HiLowCellWatcher* node = c->watchers;
+    while (node) {
+        HiLowCellWatcher* next = node->next;
+        watcher_drop_backref(node->watcher, c);
+        free(node);
+        node = next;
+    }
+    c->watchers = NULL;
+
+    // Parent list (dead until 2d, but tear down for shape-completeness).
+    HiLowCellParent* p = c->parents;
+    while (p) {
+        HiLowCellParent* next = p->next;
+        free(p);
+        p = next;
+    }
+    c->parents = NULL;
+
+    return true;  // caller does its type-specific teardown and free
+}
+
+void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w) {
+    HiLowCellWatcher* node = malloc(sizeof(HiLowCellWatcher));
+    node->modifier = modifier;
+    node->body_fn = body_fn;
+    node->env = env;
+    node->watcher = w;
+    node->next = c->watchers;
+    c->watchers = node;
+
+    if (w) {
+        HiLowWatcherSub* sub = malloc(sizeof(HiLowWatcherSub));
+        sub->cell = c;
+        sub->next = w->subs;
+        w->subs = sub;
+    }
+}
+
+void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
+    if (!c || !w) return;
+    HiLowCellWatcher** cur = &c->watchers;
+    while (*cur) {
+        if ((*cur)->watcher == w) {
+            HiLowCellWatcher* dead = *cur;
+            *cur = dead->next;
+            // Symmetric unlink: one backref per subscription node.
+            watcher_drop_backref(w, c);
+            free(dead);
+        } else {
+            cur = &(*cur)->next;
+        }
+    }
+}
+
+// Legacy env-keyed removal (first matching env node) — semantics of the old
+// hl_array_unregister_watcher. Codegen's scope-owned-env safety net; dies in
+// Phase 2b with watcher-owned envs. Also drops the node's watcher backref so
+// a later watcher release doesn't walk to a node that no longer exists.
+void hl_cell_unsubscribe_env(HiLowCell* c, void* env) {
+    if (!c) return;
+    HiLowCellWatcher** cur = &c->watchers;
+    while (*cur) {
+        if ((*cur)->env == env) {
+            HiLowCellWatcher* dead = *cur;
+            *cur = dead->next;
+            watcher_drop_backref(dead->watcher, c);
+            free(dead);
+            return;
+        }
+        cur = &(*cur)->next;
+    }
+}
+
 // Watcher value operations (Phase 10-δ-α)
 HiLowWatcher* hl_watcher_new(void) {
     HiLowWatcher* w = malloc(sizeof(HiLowWatcher));
@@ -775,6 +884,22 @@ HiLowWatcher* hl_watcher_new(void) {
     w->refcount = 1;           // Initialize refcount to 1
     w->active = true;          // Start active
     w->ended = false;          // Not ended initially
+    w->subs = NULL;            // No subscriptions yet (Phase 2a)
+    return w;
+}
+
+// Registration by construction (Phase 2a): creating an array-watcher value
+// subscribes it. Varargs are n (HiLowCell*, int modifier) pairs.
+HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, int n, ...) {
+    HiLowWatcher* w = hl_watcher_new();
+    va_list args;
+    va_start(args, n);
+    for (int i = 0; i < n; i++) {
+        HiLowCell* cell = va_arg(args, HiLowCell*);
+        int modifier = va_arg(args, int);
+        hl_cell_subscribe(cell, modifier, body_fn, env, w);
+    }
+    va_end(args);
     return w;
 }
 
@@ -788,6 +913,22 @@ void hl_watcher_release(HiLowWatcher* w) {
     if (w != NULL) {
         w->refcount--;
         if (w->refcount == 0) {
+            // Unsubscribe from every cell first (Phase 2a): no cell node may
+            // outlive the watcher it points at.
+            while (w->subs) {
+                HiLowWatcherSub* sub = w->subs;
+                HiLowCell* cell = sub->cell;
+                // hl_cell_unsubscribe_watcher removes ALL of w's nodes on
+                // that cell AND all matching backrefs — including `sub`
+                // itself — so re-read w->subs rather than walking.
+                hl_cell_unsubscribe_watcher(cell, w);
+                // Defensive: if the backref survived (shouldn't happen),
+                // drop it to guarantee loop progress.
+                if (w->subs == sub) {
+                    w->subs = sub->next;
+                    free(sub);
+                }
+            }
             free(w);
             hl_free_count++;
         }
@@ -1270,7 +1411,7 @@ HiLowFunction* hl_function_ref(HiLowFunction* fn) {
 }
 
 HiLowArray* hl_array_ref(HiLowArray* arr) {
-    if (arr) arr->refcount++;
+    if (arr) arr->cell.refcount++;
     return arr;
 }
 
@@ -1296,34 +1437,51 @@ HiLowUnknown* hl_optional_unwrap_unknown(HiLowOptional* opt) {
     return opt ? opt->payload.unk_val : NULL;
 }
 
+// Phase 2a (audit requirement 0): these six were placeholders returning 0,
+// and they ARE reachable from valid programs (typecheck accepts `i64?` etc.,
+// codegen's return-wrap catch-all mis-kinds the value as HL_OPT_I32, and
+// print/f-string dispatch lands here) — silently printing 0/false. Until the
+// optional runtime grows real payload kinds for these types, reaching one is
+// an internal error and must be LOUD, not silently wrong.
+static void hl_optional_unwrap_unimplemented(const char* type_name) {
+    fprintf(stderr, "internal error: optional unwrap for %s not implemented\n", type_name);
+    abort();
+}
+
 int64_t hl_optional_unwrap_i64(HiLowOptional* opt) {
-    // Placeholder - not used by current tests but needed for completeness
-    return 0;
+    (void)opt;
+    hl_optional_unwrap_unimplemented("i64");
+    return 0;  // unreachable
 }
 
 uint32_t hl_optional_unwrap_u32(HiLowOptional* opt) {
-    // Placeholder - not used by current tests but needed for completeness
-    return 0;
+    (void)opt;
+    hl_optional_unwrap_unimplemented("u32");
+    return 0;  // unreachable
 }
 
 uint64_t hl_optional_unwrap_u64(HiLowOptional* opt) {
-    // Placeholder - not used by current tests but needed for completeness
-    return 0;
+    (void)opt;
+    hl_optional_unwrap_unimplemented("u64");
+    return 0;  // unreachable
 }
 
 float hl_optional_unwrap_f32(HiLowOptional* opt) {
-    // Placeholder - not used by current tests but needed for completeness
-    return 0.0f;
+    (void)opt;
+    hl_optional_unwrap_unimplemented("f32");
+    return 0.0f;  // unreachable
 }
 
 double hl_optional_unwrap_f64(HiLowOptional* opt) {
-    // Placeholder - not used by current tests but needed for completeness
-    return 0.0;
+    (void)opt;
+    hl_optional_unwrap_unimplemented("f64");
+    return 0.0;  // unreachable
 }
 
 bool hl_optional_unwrap_bool(HiLowOptional* opt) {
-    // Placeholder - not used by current tests but needed for completeness
-    return false;
+    (void)opt;
+    hl_optional_unwrap_unimplemented("bool");
+    return false;  // unreachable
 }
 
 HiLowTime hl_optional_unwrap_time(HiLowOptional* opt) {
@@ -1887,12 +2045,17 @@ HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn r
     HiLowArray* arr = malloc(sizeof(HiLowArray));
     hl_alloc_count++;
 
-    arr->refcount = 1;
+    // Cell header (Phase 2a)
+    arr->cell.refcount = 1;
+    arr->cell.watchers = NULL;
+    arr->cell.parents = NULL;      // dead until 2d
+    arr->cell.version = 0;         // dead until later phases
+    arr->cell.deep_watched = false; // dead until 2d
+
     arr->length = 0;
     arr->capacity = initial_capacity;
     arr->elem_size = elem_size;
     arr->data = malloc(elem_size * initial_capacity);
-    arr->watchers = NULL;  // Phase B scaffolding: watcher list always empty
     arr->retain_fn = retain_fn;
     arr->release_fn = release_fn;
 
@@ -1901,29 +2064,22 @@ HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn r
 
 void hl_array_retain(HiLowArray* arr) {
     if (arr) {
-        arr->refcount++;
+        hl_cell_retain(&arr->cell);
     }
 }
 
 void hl_array_release(HiLowArray* arr) {
     if (!arr) return;
 
-    arr->refcount--;
-    if (arr->refcount == 0) {
+    // hl_cell_release handles refcount + subscription/parent list teardown
+    // (unlinking watcher backrefs); we do the array-specific teardown on zero.
+    if (hl_cell_release(&arr->cell)) {
         // Release all elements if this is an object array
         if (arr->release_fn != NULL) {
             for (size_t i = 0; i < arr->length; i++) {
                 void* slot = (char*)arr->data + (i * arr->elem_size);
                 arr->release_fn(*(void**)slot);
             }
-        }
-
-        // Free watcher list nodes (but not the watcher state - that's owned by the binding)
-        HiLowArrayWatcher* current = arr->watchers;
-        while (current != NULL) {
-            HiLowArrayWatcher* next = current->next;
-            free(current);
-            current = next;
         }
         free(arr->data);
         free(arr);
@@ -1951,8 +2107,8 @@ void hl_array_push(HiLowArray* arr, void* elem) {
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = w->watcher;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -1998,8 +2154,8 @@ void* hl_array_pop(HiLowArray* arr) {
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = w->watcher;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -2044,8 +2200,8 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
 
     // Phase 10-ε-β: fire watchers registered on this array with delta-passing
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = w->watcher;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -2085,8 +2241,8 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
 
     // Fire watchers with captured element as delta
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = w->watcher;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -2142,8 +2298,8 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
 
     // Fire watchers with inserted element as delta
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = w->watcher;
         if (state != NULL && state->active && !state->ended) {
             void* delta = NULL;
             int fires = 0;
@@ -2178,8 +2334,8 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
         // Still fire watchers with delta (or skip - documented choice: still fire)
         HiLowMovedDelta delta = { ._0 = from, ._1 = to };
         if (hl_stealth_depth == 0) {
-            for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-                HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+            for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+                HiLowWatcher* state = w->watcher;
             if (state != NULL && state->active && !state->ended) {
                 void* delta_ptr = NULL;
                 int fires = 0;
@@ -2225,8 +2381,8 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
     // Fire watchers with (from,to) delta
     HiLowMovedDelta delta = { ._0 = from, ._1 = to };
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+            HiLowWatcher* state = w->watcher;
         if (state != NULL && state->active && !state->ended) {
             void* delta_ptr = NULL;
             int fires = 0;
@@ -2259,8 +2415,8 @@ void hl_array_clear(HiLowArray* arr) {
 
     // Fire watchers: CHANGED and DEEP get NULL delta; ADDED/REMOVED/MOVED do NOT fire
     if (hl_stealth_depth == 0) {
-        for (HiLowArrayWatcher* w = arr->watchers; w != NULL; w = w->next) {
-                HiLowWatcher* state = (HiLowWatcher*)w->watcher_state;
+        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
+                HiLowWatcher* state = w->watcher;
             if (state != NULL && state->active && !state->ended) {
                 if (w->modifier == HL_ARR_CHANGED) {
                     ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, NULL);
@@ -2271,29 +2427,9 @@ void hl_array_clear(HiLowArray* arr) {
 }
 
 // Array watcher registration (Phase 10-ε-α)
-void hl_array_register_watcher(HiLowArray* arr, int modifier, void* body_fn, void* env, void* watcher_state) {
-    HiLowArrayWatcher* new_watcher = malloc(sizeof(HiLowArrayWatcher));
-    new_watcher->modifier = modifier;
-    new_watcher->body_fn = body_fn;
-    new_watcher->env = env;
-    new_watcher->watcher_state = watcher_state;
-    new_watcher->next = arr->watchers;
-    arr->watchers = new_watcher;  // Prepend to list
-}
-
-void hl_array_unregister_watcher(HiLowArray* arr, void* env) {
-    HiLowArrayWatcher** current = &arr->watchers;
-
-    while (*current != NULL) {
-        if ((*current)->env == env) {
-            HiLowArrayWatcher* to_remove = *current;
-            *current = (*current)->next;  // Remove from list
-            free(to_remove);  // Free the watcher node
-            return;
-        }
-        current = &(*current)->next;
-    }
-}
+// Array watcher registration/unregistration moved onto the cell (Phase 2a):
+// hl_watcher_new_subscribed / hl_cell_unsubscribe_env, defined with the cell
+// operations above.
 
 // String operations (Managed Strings Sub-phase 1)
 bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs) {
