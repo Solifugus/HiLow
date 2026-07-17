@@ -1,0 +1,4 @@
+high program(): i32 {
+    let x: bool? = unknown("not built yet")
+    return 0
+}

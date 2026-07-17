@@ -5211,3 +5211,66 @@ fn test_weak_after_death_unknown_integration() {
 
     let _ = fs::remove_file(&executable);
 }
+
+// ============================================================================
+// Phase 2b step zero (audit §5 item 7): optional inners without a runtime
+// payload kind are rejected at compile time citing Phase 3; the narrow
+// optional-return type check closes the mis-kinding path.
+// ============================================================================
+
+#[test]
+fn test_optional_i64_rejected() {
+    let result = compile_program("tests/programs/optional_i64_rejected.hl");
+    assert!(result.is_err(), "i64? declaration should be rejected");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("optional type 'i64?' is not supported yet")
+            && msg.contains("Phase 3 (scalar boxing)"),
+        "diagnostic should cite the payload matrix and Phase 3, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_optional_bool_let_rejected() {
+    let result = compile_program("tests/programs/optional_bool_let_rejected.hl");
+    assert!(result.is_err(), "bool? let annotation should be rejected");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("optional type 'bool?' is not supported yet")
+            && msg.contains("Phase 3 (scalar boxing)"),
+        "diagnostic should cite the payload matrix and Phase 3, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_optional_return_mismatch_rejected() {
+    let result = compile_program("tests/programs/optional_return_mismatch_rejected.hl");
+    assert!(result.is_err(), "returning string from i32? should be rejected");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("cannot return string from a function declared to return i32?"),
+        "diagnostic should name both types, got: {}",
+        msg
+    );
+}
+
+// Phase 2b: a watcher capturing function-frame variables cannot escape its
+// declaring function (its env holds addresses into the dead frame). The
+// `let w = ...; return w` shape previously dodged every escape check and was
+// kept sound only by the scope-owned-env safety net this phase deleted.
+// Sound escape lands in Phase 3 (boxing), where the restriction drops
+// entirely per audit §5 item 1.
+#[test]
+fn test_watcher_capture_escape_rejected() {
+    let result = compile_program("tests/programs/watcher_capture_escape_rejected.hl");
+    assert!(result.is_err(), "capture-escape should be rejected");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("watcher 'w' captures 'z'")
+            && msg.contains("cannot escape its declaring function until Phase 3"),
+        "diagnostic should name the watcher and captured variable, got: {}",
+        msg
+    );
+}

@@ -1,0 +1,9 @@
+high program(): i32 {
+    function f(flag: i32): i32? {
+        if (flag ?= 0) {
+            return unknown("zero")
+        }
+        return "text"
+    }
+    return 0
+}

@@ -40,7 +40,6 @@ struct HeapWatcherSubscription {
 pub enum HeapType {
     Object,         // HiLowObject*
     Function,       // HiLowFunction*
-    Environment,    // hilow_env_N*
     FStringBuffer,  // char* from f-string
     Unknown,        // HiLowUnknown*
     Optional,       // T? - may contain unknown or success value
@@ -201,9 +200,6 @@ pub struct CodeGenerator {
     temp_watcher_expr_captured_vars: Vec<String>,
     /// Phase 10a: tracks captured variables in scalar watchers for pointer-dereference access
     scalar_watcher_captures: HashSet<String>,
-    /// Phase 10a: track array watchers for scope cleanup (env unregister before free)
-    /// Maps env_var_name to (array_var_name, scope_depth)
-    array_watcher_registrations: HashMap<String, (String, usize)>,
 }
 
 impl CodeGenerator {
@@ -249,7 +245,6 @@ impl CodeGenerator {
             temp_watcher_expr_subscriptions: Vec::new(),
             temp_watcher_expr_captured_vars: Vec::new(),
             scalar_watcher_captures: HashSet::new(),
-            array_watcher_registrations: HashMap::new(),
         }
     }
 
@@ -1660,12 +1655,14 @@ impl CodeGenerator {
                 // functions and closures — it reflects the enclosing function).
                 // For optional-wrapped returns the temp must be the wrapper type.
                 let value_type_for_temp = self.infer_expression_type_for_codegen(value);
+                // Phase 2b step zero: the wrap set matches the optional
+                // payload allow-list exactly (unsupported inners are rejected
+                // at typecheck; the constructor dispatch below errors rather
+                // than mis-kind if one slips through).
                 let wrap_for_temp = if let Some(ref return_type) = self.current_function_return_type {
                     if let Type::Optional(_) = return_type {
-                        matches!(value_type_for_temp, Type::I8 | Type::I16 | Type::I32 | Type::I64 |
-                                             Type::U8 | Type::U16 | Type::U32 | Type::U64 |
-                                             Type::F32 | Type::F64 | Type::Bool | Type::String |
-                                             Type::UnknownType)
+                        matches!(value_type_for_temp, Type::I32 | Type::String | Type::UnknownType |
+                                             Type::Time | Type::Duration | Type::Money | Type::MoneyOf(_))
                     } else { false }
                 } else { false };
                 let ret_c_type = if wrap_for_temp {
@@ -1676,19 +1673,7 @@ impl CodeGenerator {
                 let ret_temp = format!("__ret_{}", self.var_counter);
                 self.var_counter += 1;
 
-                let need_optional_wrap = if let Some(ref return_type) = self.current_function_return_type {
-                    if let Type::Optional(_inner_type) = return_type {
-                        let value_type = self.infer_expression_type_for_codegen(value);
-                        matches!(value_type, Type::I8 | Type::I16 | Type::I32 | Type::I64 |
-                                             Type::U8 | Type::U16 | Type::U32 | Type::U64 |
-                                             Type::F32 | Type::F64 | Type::Bool | Type::String |
-                                             Type::UnknownType)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                let need_optional_wrap = wrap_for_temp;
 
                 // Phase 1.5c ownership axiom: a function's return value is
                 // always +1 to the caller. Owner idents were transferred
@@ -1714,12 +1699,22 @@ impl CodeGenerator {
 
                 self.output.push_str(&format!("  {} {} = ", ret_c_type, ret_temp));
                 if need_optional_wrap {
-                    let value_type = self.infer_expression_type_for_codegen(value);
-                    match value_type {
+                    // Phase 2b step zero: explicit constructor per payload
+                    // kind. No catch-all — a value type outside the allow-list
+                    // is a hard error, never a mis-kinded HL_OPT_I32.
+                    match &value_type_for_temp {
                         Type::I32 => self.output.push_str("hl_optional_new_i32("),
                         Type::String => self.output.push_str("hl_optional_new_string("),
                         Type::UnknownType => self.output.push_str("hl_optional_new_unknown("),
-                        _ => self.output.push_str("hl_optional_new_i32("),
+                        Type::Time => self.output.push_str("hl_optional_new_time("),
+                        Type::Duration => self.output.push_str("hl_optional_new_duration("),
+                        Type::Money | Type::MoneyOf(_) => self.output.push_str("hl_optional_new_money("),
+                        other => {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("optional wrap for return value of type {}", other),
+                                phase: "Phase 3 (scalar boxing builds the optional payload matrix)".to_string(),
+                            });
+                        }
                     }
                 }
                 if let Some(ref_fn) = ref_wrap {
@@ -2648,7 +2643,7 @@ impl CodeGenerator {
                     if let Some(ref refined) = refined_type {
                         // If the variable is narrowed, emit unwrap for the refined type
                         let types_refined = Type::from_ast_type(refined);
-                        self.emit_refined_variable_access(name, &types_refined);
+                        self.emit_refined_variable_access(name, &types_refined)?;
                     } else {
                         self.output.push_str(name);
                     }
@@ -2675,7 +2670,7 @@ impl CodeGenerator {
                     if let Some(ref refined) = refined_type {
                         // If the variable is narrowed, emit unwrap for the refined type
                         let types_refined = Type::from_ast_type(refined);
-                        self.emit_refined_variable_access(name, &types_refined);
+                        self.emit_refined_variable_access(name, &types_refined)?;
                     } else {
                         let c_var_name = self.mangle_variable_name(name);
                         self.output.push_str(&c_var_name);
@@ -3079,7 +3074,9 @@ impl CodeGenerator {
                         .collect();
 
                     // Env allocation + packing, hoisted to statement level.
-                    // Scope-owned until Phase 2b (watcher-owned envs).
+                    // Phase 2b: ownership passes to hl_watcher_new_subscribed
+                    // — the watcher frees the env on its final release. No
+                    // scope/temp tracking of the env anywhere.
                     let env_var_name = if captured_var_names.is_empty() {
                         "NULL".to_string()
                     } else {
@@ -3102,16 +3099,6 @@ impl CodeGenerator {
                             }
                         }
                         self.pending_statement_decls.push(decl);
-
-                        if context == ExprContext::Temporary {
-                            // Statement-temporary watcher: env dies with the
-                            // statement (its watcher unsubscribes at temp
-                            // release; unsubscription never touches env).
-                            self.temp_owners.insert(env_var.clone(), (HeapType::Environment, self.scope_depth));
-                        } else {
-                            // Binding position: env lives with the scope.
-                            self.track_heap_owner(&env_var, HeapType::Environment);
-                        }
                         env_var
                     };
 
@@ -3130,19 +3117,6 @@ impl CodeGenerator {
                         let arr_var = self.mangle_variable_name(&subscription.variable_name);
                         sub_args.push_str(&format!(", &{}->cell, {}", arr_var, c_modifier));
                         n_subs += 1;
-
-                        if context != ExprContext::Temporary {
-                            // Safety net for scope-owned envs (dies in 2b):
-                            // scope/early-return cleanup unsubscribes by env.
-                            // Known single-slot limitation unchanged (§3.4(b)
-                            // map); real unsubscription is watcher release.
-                            if env_var_name != "NULL" {
-                                self.array_watcher_registrations.insert(
-                                    env_var_name.clone(),
-                                    (arr_var, self.scope_depth)
-                                );
-                            }
-                        }
                     }
                     call.push_str(&format!(", {}{})", n_subs, sub_args));
 
@@ -7072,25 +7046,6 @@ impl CodeGenerator {
                     HeapType::Function => {
                         self.output.push_str(&format!("    hl_function_release({});\n", c_var_name));
                     }
-                    HeapType::Environment => {
-                        // Phase 10a: Unregister array watchers before freeing environment
-                        // Only unregister if array is in a different scope (to avoid double-free in flat-scope cases)
-                        if let Some((arr_var, watcher_scope)) = self.array_watcher_registrations.get(var_name) {
-                            if let Some((_, arr_scope)) = self.heap_owners.iter()
-                                .find(|(name, _)| self.mangle_variable_name(name) == *arr_var)
-                                .map(|(_, (_, scope))| ((), scope)) {
-                                if *watcher_scope != *arr_scope {
-                                    self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
-                                        arr_var, c_var_name));
-                                }
-                            } else {
-                                // Array not in heap_owners (might be stack-allocated), safe to unregister
-                                self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
-                                    arr_var, c_var_name));
-                            }
-                        }
-                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
-                    }
                     HeapType::FStringBuffer => {
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
                     }
@@ -7102,6 +7057,7 @@ impl CodeGenerator {
                         self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
                     }
                     HeapType::Watcher => {
+                        // Phase 2b: releases the watcher's owned env too
                         self.output.push_str(&format!("    hl_watcher_release({});\n", c_var_name));
                     }
                     HeapType::Array => {
@@ -7142,8 +7098,6 @@ impl CodeGenerator {
         // Remove released variables from tracking
         for var_name in &vars_to_release {
             self.heap_owners.remove(var_name);
-            // Also clean up array watcher registrations for freed environments
-            self.array_watcher_registrations.remove(var_name);
         }
     }
 
@@ -7156,9 +7110,6 @@ impl CodeGenerator {
             }
             HeapType::Function => {
                 self.output.push_str(&format!("  hl_function_release({});\n", temp_name));
-            }
-            HeapType::Environment => {
-                self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
             }
             HeapType::FStringBuffer => {
                 self.output.push_str(&format!("  free({}); hl_free_count++;\n", temp_name));
@@ -7242,25 +7193,6 @@ impl CodeGenerator {
                     HeapType::Function => {
                         self.output.push_str(&format!("    hl_function_release({});\n", c_var_name));
                     }
-                    HeapType::Environment => {
-                        // Phase 10a: Unregister array watchers before freeing environment
-                        // Only unregister if array is in a different scope (to avoid double-free in flat-scope cases)
-                        if let Some((arr_var, watcher_scope)) = self.array_watcher_registrations.get(var_name) {
-                            if let Some((_, arr_scope)) = self.heap_owners.iter()
-                                .find(|(name, _)| self.mangle_variable_name(name) == *arr_var)
-                                .map(|(_, (_, scope))| ((), scope)) {
-                                if *watcher_scope != *arr_scope {
-                                    self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
-                                        arr_var, c_var_name));
-                                }
-                            } else {
-                                // Array not in heap_owners (might be stack-allocated), safe to unregister
-                                self.output.push_str(&format!("    hl_cell_unsubscribe_env(&{}->cell, {});\n",
-                                    arr_var, c_var_name));
-                            }
-                        }
-                        self.output.push_str(&format!("    free({}); hl_free_count++;\n", c_var_name));
-                    }
                     HeapType::FStringBuffer => {
                         self.output.push_str(&format!("    free({}); hl_free_count++;\n", var_name));
                     }
@@ -7272,6 +7204,7 @@ impl CodeGenerator {
                         self.output.push_str(&format!("    hl_optional_release({});\n", c_var_name));
                     }
                     HeapType::Watcher => {
+                        // Phase 2b: releases the watcher's owned env too
                         self.output.push_str(&format!("    hl_watcher_release({});\n", c_var_name));
                     }
                     HeapType::Array => {
@@ -7310,14 +7243,6 @@ impl CodeGenerator {
         }
 
         // Do NOT modify heap_owners - function-end cleanup needs the same list
-        // But clean up array watcher registrations for freed environments
-        for var_name in &vars_to_release {
-            if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
-                if matches!(heap_type, HeapType::Environment) {
-                    self.array_watcher_registrations.remove(var_name);
-                }
-            }
-        }
     }
 
     fn emit_leak_check_and_return(&mut self) {
@@ -7438,7 +7363,7 @@ impl CodeGenerator {
     }
 
     /// Emit code to access a variable that has been narrowed through type refinement
-    fn emit_refined_variable_access(&mut self, var_name: &str, refined_type: &Type) {
+    fn emit_refined_variable_access(&mut self, var_name: &str, refined_type: &Type) -> Result<(), CodegenError> {
         let c_var_name = self.mangle_variable_name(var_name);
 
         // Get the variable's declared type to determine how to unwrap
@@ -7459,9 +7384,19 @@ impl CodeGenerator {
                         Type::Duration => {
                             self.output.push_str(&format!("hl_optional_unwrap_duration({})", c_var_name));
                         }
-                        _ => {
-                            // For other types, use the raw variable for now
-                            self.output.push_str(&c_var_name);
+                        Type::Money | Type::MoneyOf(_) => {
+                            self.output.push_str(&format!("hl_optional_unwrap_money({})", c_var_name));
+                        }
+                        other => {
+                            // Phase 2b step zero: no raw-variable fallback —
+                            // that emitted a HiLowOptional* where the narrowed
+                            // C type was expected (latent type mismatch).
+                            // Unsupported inners are rejected at typecheck;
+                            // this is defense-in-depth.
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("narrowed access to a {}? value", other),
+                                phase: "Phase 3 (scalar boxing builds the optional payload matrix)".to_string(),
+                            });
                         }
                     }
                 }
@@ -7479,6 +7414,7 @@ impl CodeGenerator {
             // Fallback: use the variable name directly
             self.output.push_str(&c_var_name);
         }
+        Ok(())
     }
 
     /// Phase 10-γ: Check if a type is allowed for watching (numeric/bool/array types)

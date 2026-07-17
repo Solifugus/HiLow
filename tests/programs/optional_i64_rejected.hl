@@ -1,0 +1,6 @@
+high program(): i32 {
+    function f(): i64? {
+        return unknown("not built yet")
+    }
+    return 0
+}

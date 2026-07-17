@@ -858,25 +858,6 @@ void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
     }
 }
 
-// Legacy env-keyed removal (first matching env node) — semantics of the old
-// hl_array_unregister_watcher. Codegen's scope-owned-env safety net; dies in
-// Phase 2b with watcher-owned envs. Also drops the node's watcher backref so
-// a later watcher release doesn't walk to a node that no longer exists.
-void hl_cell_unsubscribe_env(HiLowCell* c, void* env) {
-    if (!c) return;
-    HiLowCellWatcher** cur = &c->watchers;
-    while (*cur) {
-        if ((*cur)->env == env) {
-            HiLowCellWatcher* dead = *cur;
-            *cur = dead->next;
-            watcher_drop_backref(dead->watcher, c);
-            free(dead);
-            return;
-        }
-        cur = &(*cur)->next;
-    }
-}
-
 // Watcher value operations (Phase 10-δ-α)
 HiLowWatcher* hl_watcher_new(void) {
     HiLowWatcher* w = malloc(sizeof(HiLowWatcher));
@@ -885,13 +866,17 @@ HiLowWatcher* hl_watcher_new(void) {
     w->active = true;          // Start active
     w->ended = false;          // Not ended initially
     w->subs = NULL;            // No subscriptions yet (Phase 2a)
+    w->env = NULL;             // No owned env (Phase 2b)
     return w;
 }
 
 // Registration by construction (Phase 2a): creating an array-watcher value
 // subscribes it. Varargs are n (HiLowCell*, int modifier) pairs.
+// Phase 2b: the watcher takes OWNERSHIP of env — it is freed on the
+// watcher's final release, never by scope cleanup.
 HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, int n, ...) {
     HiLowWatcher* w = hl_watcher_new();
+    w->env = env;
     va_list args;
     va_start(args, n);
     for (int i = 0; i < n; i++) {
@@ -928,6 +913,12 @@ void hl_watcher_release(HiLowWatcher* w) {
                     w->subs = sub->next;
                     free(sub);
                 }
+            }
+            // Phase 2b: the watcher owns its env — free it after
+            // unsubscribing (env contents are borrowed pointers, no dtor).
+            if (w->env) {
+                free(w->env);
+                hl_free_count++;
             }
             free(w);
             hl_free_count++;

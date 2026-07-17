@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 2b (rescoped by 2a's landing — see audit 2b annotation): watcher-owned refcounted envs — the watcher retains its env and frees it on final release; delete the codegen scope-owned-env machinery (`array_watcher_registrations`, the Environment cleanup arms, the env-keyed `hl_cell_unsubscribe_env` safety net). Watcher values, construction-registration, release-unsubscription, and the §3.4(b)(c)(d) fixes already landed in 2a.**
+**Current phase: 2c — one firing ABI + value deltas: unify all eight mutator firing loops on the `(env, cell, delta)` call through a single notify helper; fix the `.move` 2-arg env-drop (§3.4(a)); replace both static temp_buffers with caller-owned/heap-copied deltas; move `hl_array_remove`'s return off the static buffer; un-ignore test_watcher_move_capture_env_integration and empty KNOWN_MEMORY_BUGS. The re-entrancy test stays ignored until Phase 5 (1.5d ruling supersedes the audit 2c note).**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

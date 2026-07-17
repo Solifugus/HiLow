@@ -35,6 +35,10 @@ const REJECTION_FIXTURES: &[&str] = &[
     "phase3/types2.hl",                              // verify_phase3.rs test_types2_fails_type_check
     "phase3/types3.hl",                              // verify_phase3.rs test_types3_fails_type_check
     "unknown_with_options.hl",                       // Phase 9b deferral: unknown constructor with options is UnsupportedFeature in codegen (generate_unknown_constructor)
+    "optional_i64_rejected.hl",                      // is_err test test_optional_i64_rejected — Phase 2b step zero (audit §5 item 7): optional payload matrix lands in Phase 3
+    "optional_bool_let_rejected.hl",                 // is_err test test_optional_bool_let_rejected — same adjudication
+    "optional_return_mismatch_rejected.hl",          // is_err test test_optional_return_mismatch_rejected — narrow optional-return type check (Phase 2b step zero)
+    "watcher_capture_escape_rejected.hl",            // is_err test test_watcher_capture_escape_rejected — capture-escape rejected until Phase 3 boxing (Phase 2b)
 ];
 
 /// Programs with a KNOWN, adjudicated memory bug: they compile and run, but

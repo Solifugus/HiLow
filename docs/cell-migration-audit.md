@@ -453,7 +453,23 @@ point of deleting-with-confidence.
   cleanup arms, the env-keyed `hl_cell_unsubscribe_env` safety net). Until
   then, envs remain scope-owned and the env-keyed net covers the
   capture-escape case exactly as before, including its known single-slot
-  limitation for escaping multi-array capture watchers.)
+  limitation for escaping multi-array capture watchers.) (Landed 2026-07-16
+  as rescoped. `HiLowWatcher` owns `env` — freed on final release after
+  unsubscription; the watcher's refcount IS the env's refcount (envs are
+  never shared — a separate counter is deliberately not added until a phase
+  shares them). `hl_cell_unsubscribe_env`, `array_watcher_registrations`,
+  the `HeapType::Environment` variant, and all three Environment cleanup
+  arms deleted. STOP-item resolved via the approved plan: capture-escape
+  (`let w = <capturing watcher>; return w`) was reachable — the escape pass
+  ran only on direct WatcherExpr returns and never inspected captures — and
+  was kept sound only by the deleted net; it is now rejected at compile time
+  (escape check walks captures; capture-unsafe watcher bindings tracked
+  per-function and rejected at `return`) until Phase 3 boxing drops the
+  restriction per §5 item 1. Residual known hole: laundering through helper
+  calls is not caught (needs dataflow Phase 3 obsoletes) — STATUS.md Known
+  issues. "§4.4 items 2 and 3" were already written in 1.5d per §4.4's own
+  footnote — item 3 flipped in 2a, item 2 flips in 2c; no new copies. Also
+  in this commit: step zero, §5 item 7 — optional-inner rejection.)
 - **2c One firing ABI + value deltas.** Unify all eight mutator firing loops
   on the `(env, cell, delta)` call through a single notify helper; fix the
   move 2-arg bug (§3.4a); replace both static temp_buffers with caller-owned /
@@ -582,3 +598,19 @@ named and are not to be re-litigated.
    test was written in 1.5d as `#[ignore]`d
    (test_weak_after_death_unknown_integration), its program carried on the
    gate's REJECTION_FIXTURES until 1.5e makes it compile.
+7. **Optional payload matrix (adjudicated 2026-07-16, implemented in Phase 2b
+   step zero): optional inners without a runtime payload kind are rejected at
+   compile time with a diagnostic citing Phase 3.** The 2a requirement-0
+   audit found `i64?`/`f64?`/`bool?` (and every other inner the missing
+   return-type check admitted) constructible as mis-kinded `HL_OPT_I32`
+   optionals. Ruling: reject at declaration (allow-list: i32, string, time,
+   duration, money, plus the internal object case weak reads produce); the
+   full payload matrix is scheduled into Phase 3, where scalar boxing builds
+   the representation anyway. The three enabling bugs each reject cleanly or
+   were fixed in the same commit: the missing return-type check got a narrow
+   optional-only version (returns into `T?` must be `T`, `T?`, or unknown —
+   the general return-type gap stays open); the `hl_optional_new_i32`
+   constructor catch-all became explicit arms (+time/duration/money, which
+   were previously unconstructible from user functions) with a hard error
+   default; the refined-access raw-variable fallback became a hard error,
+   with a money arm added.

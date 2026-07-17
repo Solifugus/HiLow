@@ -168,7 +168,7 @@ typedef struct HiLowFunction {
 typedef struct HiLowCellWatcher {
     int modifier;                    // HL_ARR_ADDED / REMOVED / CHANGED / MOVED
     void* body_fn;
-    void* env;                       // scope-owned until Phase 2b (watcher-owned then)
+    void* env;                       // borrowed from the owning watcher (Phase 2b)
     struct HiLowWatcher* watcher;    // gating (active/ended) + identity; NOT owned
     struct HiLowCellWatcher* next;
 } HiLowCellWatcher;
@@ -201,6 +201,10 @@ typedef struct HiLowWatcher {
     bool active;           // Whether the watcher is currently active
     bool ended;            // Whether the watcher has been permanently ended
     HiLowWatcherSub* subs; // cells this watcher is subscribed on (Phase 2a)
+    void* env;             // captured environment, OWNED: freed on final
+                           // release (Phase 2b). The watcher's refcount is the
+                           // env's refcount — envs are never shared. Contents
+                           // are borrowed pointers (no dtor needed).
 } HiLowWatcher;
 
 // Object support (Phase 7a)
@@ -316,9 +320,6 @@ bool hl_cell_release(HiLowCell* c);
 void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w);
 // Remove ALL of w's nodes from c and w's backrefs to c. Idempotent.
 void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w);
-// Legacy env-keyed removal (first matching env node, semantics of the old
-// hl_array_unregister_watcher). Safety net for scope-owned envs; dies in 2b.
-void hl_cell_unsubscribe_env(HiLowCell* c, void* env);
 
 // Watcher construction that registers by construction (Phase 2a): creates the
 // watcher AND subscribes it to n (HiLowCell*, int modifier) varargs pairs.
