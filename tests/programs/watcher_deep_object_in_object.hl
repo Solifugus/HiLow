@@ -1,0 +1,9 @@
+high program(args: [string]): i32 {
+  let inner = { x: 1 }
+  let outer = { child: inner }
+  let wi = watcher((deep)inner) { print("inner deep") }
+  let wo = watcher((deep)outer) { print("outer deep") }
+  outer.child.x = 7
+  print("after")
+  return 0
+}

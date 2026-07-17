@@ -1,0 +1,11 @@
+high program(args: [string]): i32 {
+  let c = { x: 1 }
+  let holder = { child: c }
+  let w = watcher((deep)holder) { print("fired") }
+  stealth {
+    c.x = 2
+  }
+  c.x = 3
+  print("after")
+  return 0
+}

@@ -1,0 +1,10 @@
+high program(args: [string]): i32 {
+  let c = { x: 1 }
+  let weakholder = { r: weak c }
+  let strongholder = { keep: c }
+  let ww = watcher((deep)weakholder) { print("weak fired") }
+  let ws = watcher((deep)strongholder) { print("strong fired") }
+  c.x = 5
+  print("after")
+  return 0
+}

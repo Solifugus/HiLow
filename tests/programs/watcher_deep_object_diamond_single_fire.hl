@@ -1,0 +1,8 @@
+high program(args: [string]): i32 {
+  let common = { x: 1 }
+  let outer = { a: common, b: common }
+  let w = watcher((deep)outer) { print("fired") }
+  common.x = 2
+  print("after")
+  return 0
+}

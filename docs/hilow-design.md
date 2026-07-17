@@ -1225,6 +1225,10 @@ Semantics:
   follows the standard unknown-propagation rule: on a live referent, a
   property of type `T` reads as `T?`; on a dead one, the access returns the
   same unknown.
+- **No deep propagation.** A weak property creates no containment link, and
+  `(deep)` watching does not cross a weak reference — mutations under a
+  weakly-held value never fire the weak holder's watchers. Weak is
+  observation without ownership.
 
 ```hilow
 print(holder.ref.name)              // "T" while target is alive

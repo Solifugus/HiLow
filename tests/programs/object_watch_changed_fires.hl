@@ -1,0 +1,8 @@
+high program(args: [string]): i32 {
+  let o = { x: 1 }
+  let w = watcher((changed)o) { print(o.x) }
+  o.x = 5
+  o.x = 6
+  print("after")
+  return 0
+}

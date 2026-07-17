@@ -1484,6 +1484,12 @@ impl CodeGenerator {
                             self.output.push_str(&format!("  hl_function_retain({});\n", c_var_name));
                             self.track_heap_owner(name, HeapType::Function);
                         }
+                        Type::DynamicArray(_) => {
+                            // Phase 2e: array member reads are borrows
+                            // (hl_object_get_array), mirroring objects
+                            self.output.push_str(&format!("  hl_array_retain({});\n", c_var_name));
+                            self.track_heap_owner(name, HeapType::Array);
+                        }
                         Type::String => {
                             self.track_heap_owner(name, HeapType::Array);
                         }
@@ -2137,13 +2143,14 @@ impl CodeGenerator {
                     self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
                     self.output.push_str(");\n");
                 }
-            } else if matches!(value_type, Type::Object(_) | Type::Function(_, _) | Type::String)
+            } else if matches!(value_type, Type::Object(_) | Type::Function(_, _) | Type::String | Type::DynamicArray(_))
                 && Self::needs_site_release_after_store(&assign_stmt.value, &value_type)
             {
                 let (c_type, setter, release) = match &value_type {
                     Type::Object(_) => ("HiLowObject*", "hl_object_set_object", "hl_object_release"),
                     Type::Function(_, _) => ("HiLowFunction*", "hl_object_set_function", "hl_function_release"),
                     Type::String => ("HiLowArray*", "hl_object_set_str", "hl_array_release"),
+                    Type::DynamicArray(_) => ("HiLowArray*", "hl_object_set_array", "hl_array_release"),
                     _ => unreachable!("matched above"),
                 };
                 self.output.push_str(&format!("{{ {} __pv = ", c_type));
@@ -2163,6 +2170,7 @@ impl CodeGenerator {
                     Type::String => self.output.push_str("hl_object_set_str("),
                     Type::Object(_) => self.output.push_str("hl_object_set_object("),
                     Type::Function(_, _) => self.output.push_str("hl_object_set_function("),
+                    Type::DynamicArray(_) => self.output.push_str("hl_object_set_array("),
                     _ => {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: format!("assignment of type {} to object property", value_type),
@@ -2623,13 +2631,14 @@ impl CodeGenerator {
                     let is_array_watcher_env = env_struct.contains("array_watcher_env");
 
                     if is_array_watcher_env {
-                        // For array watcher environments, check if this is an array type
+                        // Container captures (arrays; objects as of Phase 2e)
+                        // are stored directly; scalars by pointer
                         let is_array_type = self.variable_types.get(name)
-                            .map(|ty| matches!(ty, Type::DynamicArray(_)))
+                            .map(|ty| matches!(ty, Type::DynamicArray(_) | Type::Object(_)))
                             .unwrap_or(false);
 
                         if is_array_type {
-                            // Arrays are stored directly, no dereferencing needed
+                            // Containers are stored directly, no dereferencing needed
                             self.output.push_str(&format!("{}->", env_var));
                         } else {
                             // Scalars are stored as pointers, need dereferencing
@@ -2649,7 +2658,7 @@ impl CodeGenerator {
                     }
 
                     if is_array_watcher_env && !self.variable_types.get(name)
-                        .map(|ty| matches!(ty, Type::DynamicArray(_)))
+                        .map(|ty| matches!(ty, Type::DynamicArray(_) | Type::Object(_)))
                         .unwrap_or(false) {
                         // Close the dereference paren for scalars
                         self.output.push_str(")");
@@ -2804,11 +2813,17 @@ impl CodeGenerator {
                 self.output.push_str(&format!("._{}", index));
             }
             Expression::WatcherExpr(watcher_expr) => {
-                // Phase 10-δ-β: Validate subscribed variable types (same rules as declaration-form)
+                // Phase 10-δ-β: Validate subscribed variable types.
+                // Phase 2e: objects are watchable in expression form (the
+                // cell path); the decl-form gate is unchanged — decl-form
+                // wires through the legacy name-keyed map that dies in
+                // Phase 3.
                 for subscription in &watcher_expr.subscriptions {
                     let var_name = &subscription.variable_name;
                     if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                        if !self.is_ast_type_watchable_in_phase_10g(var_type) {
+                        if !self.is_ast_type_watchable_in_phase_10g(var_type)
+                            && !matches!(var_type, crate::ast::Type::Object(_))
+                        {
                             return Err(CodegenError::UnsupportedFeature {
                                 feature: format!("watching value of type {:?}", var_type),
                                 phase: "future phase (string and composite watching)".to_string(),
@@ -2829,13 +2844,20 @@ impl CodeGenerator {
                         .as_ref()
                         .map(|ty| matches!(ty, crate::ast::Type::DynamicArray(_)))
                         .unwrap_or(false);
+                    let is_object = subscription.resolved_var_type
+                        .borrow()
+                        .as_ref()
+                        .map(|ty| matches!(ty, crate::ast::Type::Object(_)))
+                        .unwrap_or(false);
 
                     match subscription.modifier {
                         SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
-                            // These are supported for all watchable types
+                            // Changed: all watchable types. Assigned on
+                            // objects is rejected at typecheck (Phase 2e).
                         }
                         SubscriptionModifier::Added | SubscriptionModifier::Removed => {
-                            // Phase 10-ε-β: Added/Removed now supported for arrays
+                            // Phase 10-ε-β: arrays only (objects rejected at
+                            // typecheck — Phase 2e)
                             if !is_array {
                                 return Err(CodegenError::UnsupportedFeature {
                                     feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
@@ -2853,35 +2875,50 @@ impl CodeGenerator {
                             }
                         }
                         SubscriptionModifier::Deep => {
-                            // Phase 2d: deep supported for arrays only
-                            if !is_array {
+                            // Phase 2d arrays; Phase 2e objects
+                            if !is_array && !is_object {
                                 return Err(CodegenError::UnsupportedFeature {
-                                    feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
-                                    phase: "deep watching applies to arrays until other values gain the cell header".to_string(),
+                                    feature: format!("watcher modifier {:?} on non-container type", subscription.modifier),
+                                    phase: "deep watching applies to arrays and objects until scalars gain cells (Phase 3)".to_string(),
                                 });
                             }
                         }
                     }
                 }
 
-                // Check for mixed scalar+array subscriptions (reject)
+                // Classify subscriptions: container cells (arrays Phase 2a,
+                // objects Phase 2e) vs scalars (legacy path until Phase 3)
                 let mut has_arrays = false;
+                let mut has_objects = false;
                 let mut has_scalars = false;
                 for subscription in &watcher_expr.subscriptions {
                     if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                            if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
+                        if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
                             has_arrays = true;
+                        } else if matches!(ast_var_type, crate::ast::Type::Object(_)) {
+                            has_objects = true;
                         } else {
                             has_scalars = true;
                         }
                     }
                 }
+                let has_cells = has_arrays || has_objects;
 
-
-                if has_arrays && has_scalars {
+                if has_cells && has_scalars {
                     return Err(CodegenError::UnsupportedFeature {
-                        feature: "mixed scalar and array subscriptions in one watcher".to_string(),
-                        phase: "Phase 10-ε-α supports only pure array or pure scalar watchers".to_string(),
+                        feature: "mixed scalar and container subscriptions in one watcher".to_string(),
+                        phase: "Phase 10-ε-α supports only pure container or pure scalar watchers".to_string(),
+                    });
+                }
+
+                // Phase 2e: the body prologue casts the fired cell to the
+                // FIRST subscription's container type, which is unsound when
+                // a watcher mixes arrays and objects — rejected until a typed
+                // rebind per subscription exists.
+                if has_arrays && has_objects {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: "mixed array and object subscriptions in one watcher".to_string(),
+                        phase: "a future phase (needs a per-subscription typed rebind; Phase 2e watchers are single-container-kind)".to_string(),
                     });
                 }
 
@@ -2896,12 +2933,13 @@ impl CodeGenerator {
                 // Generate function signature based on watcher type
                 self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
 
-                if has_arrays {
+                if has_cells {
                     // One firing ABI (Phase 2c): env-first, cell second, value
                     // delta third. The watched variable name rebinds from the
                     // cell (the container's first member), preserving the
-                    // pre-2c semantics — including the multi-array case where
-                    // the first subscription's name binds whichever fired.
+                    // pre-2c semantics — including the multi-container case
+                    // where the first subscription's name binds whichever
+                    // fired. Objects joined this path in Phase 2e.
                     self.watcher_bodies.push_str("void* env, HiLowCell* hilow_cell, const HiLowDelta* delta");
                 } else {
                     // Scalar watcher: watched variables as value parameters
@@ -2937,11 +2975,15 @@ impl CodeGenerator {
                 // for added/removed/moved with alias, bind from the value
                 // delta (copied at body entry, so aliases survive nested
                 // mutation exactly as before).
-                if has_arrays {
+                if has_cells {
                     let first_subscription = &watcher_expr.subscriptions[0];
+                    // Phase 2e: cast to the first subscription's container
+                    // type (mixed array+object watchers are rejected above,
+                    // so the cast is uniform across all subscriptions)
+                    let container_c_type = if has_objects { "HiLowObject*" } else { "HiLowArray*" };
                     self.watcher_bodies.push_str(&format!(
-                        "    HiLowArray* {} = (HiLowArray*)hilow_cell;\n",
-                        first_subscription.variable_name
+                        "    {} {} = ({})hilow_cell;\n",
+                        container_c_type, first_subscription.variable_name, container_c_type
                     ));
                     for subscription in &watcher_expr.subscriptions {
                         if matches!(subscription.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
@@ -2977,9 +3019,9 @@ impl CodeGenerator {
                 let old_hoisted_variables = self.hoisted_variables.clone();
                 let old_current_env_var = self.current_env_var.clone();
 
-                if has_arrays {
-                    // Array watcher: add the array parameter to scope
-                    // Array parameter is always the variable name; alias (if any) binds to delta element
+                if has_cells {
+                    // Container watcher: add the container parameter to scope
+                    // Parameter is always the variable name; alias (if any) binds to delta element
                     let first_subscription = &watcher_expr.subscriptions[0];
                     let param_name = &first_subscription.variable_name;
                     if let Some(ast_var_type) = first_subscription.resolved_var_type.borrow().as_ref() {
@@ -3015,9 +3057,11 @@ impl CodeGenerator {
                         self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
                         for (var_name, ast_type, _pos) in captures.iter() {
                             let c_type = self.ast_type_to_c(ast_type);
-                            // For scalar types, store pointers for by-reference access
-                            // For array types, store the array pointer directly
-                            if matches!(ast_type, crate::ast::Type::DynamicArray(_)) {
+                            // For scalar types, store pointers for by-reference access.
+                            // For container types (arrays; objects as of
+                            // Phase 2e), store the pointer directly (identity
+                            // capture).
+                            if matches!(ast_type, crate::ast::Type::DynamicArray(_) | crate::ast::Type::Object(_)) {
                                 self.environment_structs.push_str(&format!("    {} {};\n", c_type, var_name));
                             } else {
                                 self.environment_structs.push_str(&format!("    {}* {};\n", c_type, var_name));
@@ -3081,7 +3125,7 @@ impl CodeGenerator {
                 // Restore output and emit the watcher-value creation
                 self.output = saved_output;
 
-                if has_arrays {
+                if has_cells {
                     // Phase 2a: registration by construction. The expression
                     // value is ONE call that creates the watcher AND
                     // subscribes it to every cell — any syntactic position
@@ -3105,11 +3149,12 @@ impl CodeGenerator {
                             env_struct_name, env_var, env_struct_name);
                         for var_name in &captured_var_names {
                             let c_var = self.mangle_variable_name(var_name);
-                            let is_array_capture = self.variable_types.get(var_name)
-                                .map(|t| matches!(t, Type::DynamicArray(_)))
+                            let is_container_capture = self.variable_types.get(var_name)
+                                .map(|t| matches!(t, Type::DynamicArray(_) | Type::Object(_)))
                                 .unwrap_or(false);
-                            if is_array_capture {
-                                // Arrays: store the pointer directly (identity capture)
+                            if is_container_capture {
+                                // Containers (arrays; objects as of Phase 2e):
+                                // store the pointer directly (identity capture)
                                 decl.push_str(&format!(" {}->{} = {};", env_var, var_name, c_var));
                             } else {
                                 // Scalars: store pointer for by-reference access
@@ -3135,9 +3180,11 @@ impl CodeGenerator {
                         };
                         let arr_var = self.mangle_variable_name(&subscription.variable_name);
                         if matches!(subscription.modifier, SubscriptionModifier::Deep) {
-                            // Phase 2d: a (deep) subscription marks the whole
-                            // subtree deep-watched so nested mutations walk up.
-                            self.pending_statement_decls.push(format!("hl_array_mark_deep({});", arr_var));
+                            // Phase 2d/2e: a (deep) subscription marks the
+                            // whole subtree deep-watched so nested mutations
+                            // walk up. The mark call is container-typed.
+                            let mark_fn = if has_objects { "hl_object_mark_deep" } else { "hl_array_mark_deep" };
+                            self.pending_statement_decls.push(format!("{}({});", mark_fn, arr_var));
                         }
                         sub_args.push_str(&format!(", &{}->cell, {}", arr_var, c_modifier));
                         n_subs += 1;
@@ -5809,6 +5856,24 @@ impl CodeGenerator {
                     }
                     continue;
                 }
+                Type::DynamicArray(_) => {
+                    // Phase 2e: array-valued properties — same ownership shape
+                    // as objects (store retains; site releases untracked fresh
+                    // +1 productions like array literals)
+                    if Self::needs_site_release_after_store(prop_expr, &expr_type) {
+                        self.output.push_str("    { HiLowArray* __pv = ");
+                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(&format!(
+                            "; hl_object_set_array(obj, \"{}\", __pv); hl_array_release(__pv); }}\n",
+                            prop_name
+                        ));
+                    } else {
+                        self.output.push_str(&format!("    hl_object_set_array(obj, \"{}\", ", prop_name));
+                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                        self.output.push_str(");\n");
+                    }
+                    continue;
+                }
                 _ => {}
             }
 
@@ -6161,6 +6226,7 @@ impl CodeGenerator {
                 Type::String => self.output.push_str("hl_object_get_str("),
                 Type::Object(_) => self.output.push_str("hl_object_get_object("),
                 Type::Function(_, _) => self.output.push_str("hl_object_get_function("),
+                Type::DynamicArray(_) => self.output.push_str("hl_object_get_array("),  // Phase 2e: borrow
                 Type::Nothing => {
                     // Property doesn't exist, return the nothing singleton
                     self.output.push_str("&the_nothing");

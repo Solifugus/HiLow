@@ -1,0 +1,9 @@
+high program(args: [string]): i32 {
+  let p = { sound: 1 }
+  let d = { proto: p, name: 2 }
+  let w = watcher((deep)d) { print("deep") }
+  p.sound = 3
+  print(d.sound)
+  print("after")
+  return 0
+}

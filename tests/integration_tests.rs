@@ -5373,17 +5373,172 @@ fn test_watcher_deep_new_child_marked_integration() {
     run_deep_fixture("watcher_deep_new_child_marked");
 }
 
-// Phase 2d boundary: (deep) on a non-array is rejected until other values
-// gain the cell header (scalars: Phase 3 boxing; objects: unscheduled).
+// Phase 2d/2e boundary: (deep) on a non-container is rejected until scalars
+// gain cells (Phase 3 boxing). Objects joined the containers in Phase 2e.
 #[test]
 fn test_watcher_deep_scalar_rejected() {
     let result = compile_program("tests/programs/watcher_deep_scalar_rejected.hl");
     assert!(result.is_err(), "Expected compilation to fail for (deep) on a scalar");
     let msg = result.unwrap_err();
     assert!(
-        msg.contains("(deep) modifier requires an array type in this phase")
+        msg.contains("(deep) modifier requires an array or object type in this phase")
             && msg.contains("Phase 3 (boxing)"),
         "Expected the deep-on-scalar diagnostic citing Phase 3, got: {}",
+        msg
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2e: objects join the cell model — parent lists via property/proto
+// stores, deep propagation across array↔object containment in both
+// directions, and the minimal object event mapping (existing-property set →
+// CHANGED; proto reassignment → CHANGED; ADDED reserved for dynamic property
+// addition, which is not yet expressible; no REMOVED per the tombstone
+// ruling). run_deep_fixture is reused — same compile/run/compare shape.
+
+// Array-valued object properties (enabling work): store, read through the
+// borrow getter, mutate through the property.
+#[test]
+fn test_object_array_property_basic_integration() {
+    run_deep_fixture("object_array_property_basic");
+}
+
+// (changed) on an object fires on every property set; the body binds the
+// object's post-mutation state.
+#[test]
+fn test_object_watch_changed_fires_integration() {
+    run_deep_fixture("object_watch_changed_fires");
+}
+
+// Proto is an ordinary property: reassignment fires CHANGED and delegation
+// switches to the new prototype.
+#[test]
+fn test_object_watch_proto_reassign_fires_integration() {
+    run_deep_fixture("object_watch_proto_reassign_fires");
+}
+
+// Nested object mutation fires the mutated object's own deep watcher
+// (own-list DEEP rule) and then the ancestor's, inner-to-outer.
+#[test]
+fn test_watcher_deep_object_in_object_integration() {
+    run_deep_fixture("watcher_deep_object_in_object");
+}
+
+// Deep crosses array-in-object: pushing into an object's array property
+// fires the holder's deep watcher.
+#[test]
+fn test_watcher_deep_array_in_object_integration() {
+    run_deep_fixture("watcher_deep_array_in_object");
+}
+
+// Deep crosses object-in-array: mutating a contained object's property
+// fires the array's deep watcher.
+#[test]
+fn test_watcher_deep_object_in_array_integration() {
+    run_deep_fixture("watcher_deep_object_in_array");
+}
+
+// Proto links are containment: mutating a prototype fires deep watchers on
+// objects that delegate to it.
+#[test]
+fn test_watcher_deep_proto_chain_fires_integration() {
+    run_deep_fixture("watcher_deep_proto_chain_fires");
+}
+
+// The same child under two properties of one parent fires the parent's deep
+// watcher exactly once per mutation (epoch revisit-suppression; true object
+// cycles are unrepresentable — see STATUS.md Phase 2e entry).
+#[test]
+fn test_watcher_deep_object_diamond_single_fire_integration() {
+    run_deep_fixture("watcher_deep_object_diamond_single_fire");
+}
+
+// Sibling isolation: mutating one child fires the shared parent but not a
+// deep watcher on the sibling; positive control on the sibling itself.
+#[test]
+fn test_watcher_deep_object_sibling_no_fire_integration() {
+    run_deep_fixture("watcher_deep_object_sibling_no_fire");
+}
+
+// stealth {} suppresses object fires (and their deep propagation) via
+// hl_cell_notify's single gate.
+#[test]
+fn test_watcher_deep_object_stealth_suppressed_integration() {
+    run_deep_fixture("watcher_deep_object_stealth_suppressed");
+}
+
+// Adjudicated weak boundary: a weak property creates no parent link, so
+// mutation under a weakly-held child does NOT fire the weak holder's deep
+// watcher; a strong holder of the same child does fire (positive control).
+#[test]
+fn test_watcher_deep_object_weak_no_fire_integration() {
+    run_deep_fixture("watcher_deep_object_weak_no_fire");
+}
+
+// Property overwrite into a deep-watched object marks the entering child
+// (its mutations fire) and unlinks exactly one backref from the replaced
+// child (its mutations go silent).
+#[test]
+fn test_watcher_deep_object_new_child_marked_integration() {
+    run_deep_fixture("watcher_deep_object_new_child_marked");
+}
+
+// Phase 2e adjudication: (added) on objects is rejected while dynamic
+// property addition is unexpressible — a subscription that provably cannot
+// fire is a trap, not a feature.
+#[test]
+fn test_object_watch_added_rejected() {
+    let result = compile_program("tests/programs/object_watch_added_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for (added) on an object");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("(added) on objects is unscheduled")
+            && msg.contains("dynamic property addition is unimplemented"),
+        "Expected the added-on-object diagnostic, got: {}",
+        msg
+    );
+}
+
+// No REMOVED event exists for objects (tombstone ruling: removal
+// unimplemented, indices append-only).
+#[test]
+fn test_object_watch_removed_rejected() {
+    let result = compile_program("tests/programs/object_watch_removed_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for (removed) on an object");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("(removed) on objects is unscheduled")
+            && msg.contains("tombstone ruling"),
+        "Expected the removed-on-object diagnostic, got: {}",
+        msg
+    );
+}
+
+// (assigned) means rebinding-fires — scalar boxing machinery (Phase 3), not
+// a container-cell event.
+#[test]
+fn test_object_watch_assigned_rejected() {
+    let result = compile_program("tests/programs/object_watch_assigned_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for (assigned) on an object");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("(assigned) subscriptions on objects land with Phase 3 (boxing)"),
+        "Expected the assigned-on-object diagnostic, got: {}",
+        msg
+    );
+}
+
+// The body prologue casts the fired cell to the first subscription's
+// container type — unsound across mixed containers, so mixed watchers are
+// rejected until a per-subscription typed rebind exists.
+#[test]
+fn test_watcher_mixed_array_object_rejected() {
+    let result = compile_program("tests/programs/watcher_mixed_array_object_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for a mixed array+object watcher");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("mixed array and object subscriptions in one watcher"),
+        "Expected the mixed-container diagnostic, got: {}",
         msg
     );
 }

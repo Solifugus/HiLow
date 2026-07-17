@@ -1,0 +1,4 @@
+outer fired
+b fired
+outer fired
+after

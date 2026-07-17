@@ -56,6 +56,12 @@ static uint64_t hl_deep_epoch = 0;
 static void array_element_stored(HiLowArray* arr, void* slot);
 static void array_element_removed(HiLowArray* arr, void* slot);
 
+// Phase 2e: object-side containment bookkeeping and the audience check are
+// needed by set_property, which precedes their definitions.
+static bool cell_has_audience(const HiLowCell* c);
+static void object_property_stored(HiLowObject* holder, const HiLowValue* v);
+static void object_property_removed(HiLowObject* holder, const HiLowValue* v);
+
 // Unknown type support (Phase 9b)
 
 // Internal helper for C string literals
@@ -328,7 +334,14 @@ static HiLowObject* hl_object_get_proto(HiLowObject* obj);
 HiLowObject* hl_object_new(void) {
     HiLowObject* obj = malloc(sizeof(HiLowObject));
     hl_alloc_count++;
-    obj->refcount = 1;         // Initialize refcount to 1 (Phase 8b)
+
+    // Cell header (Phase 2e — mirrors hl_array_new)
+    obj->cell.refcount = 1;
+    obj->cell.watchers = NULL;
+    obj->cell.parents = NULL;
+    obj->cell.version = 0;
+    obj->cell.deep_watched = false;
+
     obj->properties = NULL;
     obj->property_count = 0;
     obj->property_capacity = 0;
@@ -356,10 +369,24 @@ static void ensure_capacity(HiLowObject* obj) {
     }
 }
 
-// Helper function to add or update a property
+// Helper function to add or update a property.
+// Phase 2e: this is the single strong-store choke point, so it also carries
+// the containment bookkeeping (parent backrefs for object/array values) and
+// the object event mapping: overwriting an existing key fires CHANGED, a new
+// key fires ADDED (currently unreachable from the surface — dynamic property
+// addition is rejected at compile time — but the mapping is complete for the
+// day it lands). No REMOVED: property removal is unimplemented (tombstone
+// ruling). Deltas are NULL — object subscriptions carry no aliases.
 static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
     Property* existing = find_property(obj, key);
+    bool existed = (existing != NULL);
     if (existing) {
+        // Phase 2e: an old strong container value loses its containment
+        // backref before it is released (mirrors the 2d remove-before-release
+        // ordering in the array mutators)
+        if (!existing->is_weak) {
+            object_property_removed(obj, &existing->value);
+        }
         // Drop the old reference: a weak old value is unregistered (never
         // released); a strong heap value is released exactly once (Phase 1.5c)
         if (existing->value.type == HL_VALUE_OBJECT && existing->value.value.obj_val) {
@@ -373,6 +400,8 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
             hl_function_release(existing->value.value.fn_val);
         } else if (existing->value.type == HL_VALUE_STR && existing->value.value.str_val) {
             hl_array_release(existing->value.value.str_val);
+        } else if (existing->value.type == HL_VALUE_ARRAY && existing->value.value.arr_val) {
+            hl_array_release(existing->value.value.arr_val);
         }
         existing->value = value;
         existing->is_weak = false;  // this store is strong
@@ -394,6 +423,18 @@ static void set_property(HiLowObject* obj, const char* key, HiLowValue value) {
         hl_function_retain(value.value.fn_val);
     } else if (value.type == HL_VALUE_STR && value.value.str_val) {
         hl_array_retain(value.value.str_val);
+    } else if (value.type == HL_VALUE_ARRAY && value.value.arr_val) {
+        hl_array_retain(value.value.arr_val);
+    }
+
+    // Phase 2e: a strong container store links the child back to this holder
+    // (and pulls it into an already-deep-watched subtree)
+    object_property_stored(obj, &value);
+
+    // Phase 2e firing (same guard shape as the 2d array mutators; the guard
+    // only skips work — hl_cell_notify remains the authoritative gate)
+    if (hl_stealth_depth == 0 && cell_has_audience(&obj->cell)) {
+        hl_cell_notify(&obj->cell, existed ? HL_ARR_CHANGED : HL_ARR_ADDED, NULL);
     }
 }
 
@@ -440,6 +481,13 @@ void hl_object_set_str(HiLowObject* obj, const char* key, HiLowArray* value) {
 
 void hl_object_set_object(HiLowObject* obj, const char* key, HiLowObject* value) {
     HiLowValue val = { .type = HL_VALUE_OBJECT, .value.obj_val = value };
+    set_property(obj, key, val);
+}
+
+// Phase 2e: array-valued properties. set_property retains on store and
+// handles containment + firing like every other strong store.
+void hl_object_set_array(HiLowObject* obj, const char* key, HiLowArray* value) {
+    HiLowValue val = { .type = HL_VALUE_ARRAY, .value.arr_val = value };
     set_property(obj, key, val);
 }
 
@@ -695,6 +743,38 @@ HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key) {
         if (prop) {
             if (prop->value.type == HL_VALUE_OBJECT) {
                 return prop->value.value.obj_val;
+            } else {
+                fprintf(stderr, "type mismatch on property '%s'\n", key);
+                exit(1);
+            }
+        }
+
+        HiLowObject* proto = hl_object_get_proto(current);
+        if (!proto) break;
+        current = proto;
+        depth++;
+    }
+
+    if (depth >= MAX_PROTO_DEPTH) {
+        fprintf(stderr, "prototype chain depth exceeded for property '%s'\n", key);
+        exit(1);
+    }
+
+    fprintf(stderr, "property '%s' not found\n", key);
+    exit(1);
+}
+
+// Phase 2e: borrow, mirroring hl_object_get_object (the property keeps its
+// own strong reference; callers that need to keep the array retain it).
+HiLowArray* hl_object_get_array(HiLowObject* obj, const char* key) {
+    HiLowObject* current = obj;
+    int depth = 0;
+
+    while (current && depth < MAX_PROTO_DEPTH) {
+        Property* prop = find_property(current, key);
+        if (prop) {
+            if (prop->value.type == HL_VALUE_ARRAY) {
+                return prop->value.value.arr_val;
             } else {
                 fprintf(stderr, "type mismatch on property '%s'\n", key);
                 exit(1);
@@ -1141,6 +1221,7 @@ int hl_object_property_type_at(HiLowObject* obj, size_t index) {
         case HL_VALUE_STR: return TYPE_STR;
         case HL_VALUE_OBJECT: return TYPE_OBJECT;
         case HL_VALUE_FUNCTION: return TYPE_FUNCTION;
+        case HL_VALUE_ARRAY: return TYPE_ARRAY;
         default: return 0;
     }
 }
@@ -1258,17 +1339,19 @@ void hl_function_free(HiLowFunction* fn) {
     }
 }
 
-// Refcounting operations (Phase 8b)
+// Refcounting operations (Phase 8b; cell-based as of Phase 2e — the cell
+// header owns the refcount, hl_cell_release tears down the subscription and
+// parent lists, and the object does its type-specific teardown on zero,
+// mirroring hl_array_release)
 void hl_object_retain(HiLowObject* obj) {
     if (obj) {
-        obj->refcount++;
+        hl_cell_retain(&obj->cell);
     }
 }
 
 void hl_object_release(HiLowObject* obj) {
     if (obj) {
-        obj->refcount--;
-        if (obj->refcount == 0) {
+        if (hl_cell_release(&obj->cell)) {
             // Step 1: Handle weak properties first - unregister from targets, no release
             for (size_t i = 0; i < obj->property_count; i++) {
                 if (obj->properties[i].is_weak && obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
@@ -1276,13 +1359,18 @@ void hl_object_release(HiLowObject* obj) {
                 }
             }
 
-            // Step 2: Release strong properties normally
+            // Step 2: Release strong properties normally. Phase 2e: holder
+            // death drops its containments' backrefs (symmetric unlink)
+            // before releasing each container value.
             for (size_t i = 0; i < obj->property_count; i++) {
                 if (!obj->properties[i].is_weak) {
+                    object_property_removed(obj, &obj->properties[i].value);
                     if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
                         hl_object_release(obj->properties[i].value.value.obj_val);
                     } else if (obj->properties[i].value.type == HL_VALUE_FUNCTION && obj->properties[i].value.value.fn_val) {
                         hl_function_release(obj->properties[i].value.value.fn_val);
+                    } else if (obj->properties[i].value.type == HL_VALUE_ARRAY && obj->properties[i].value.value.arr_val) {
+                        hl_array_release(obj->properties[i].value.value.arr_val);
                     }
                 }
             }
@@ -1356,9 +1444,17 @@ void hl_object_weak_unregister(HiLowObject* target, HiLowObject* holder, size_t 
 // correctly (unregister if weak, release if strong).
 void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* target) {
     Property* existing = find_property(obj, key);
+    bool existed = (existing != NULL);
     size_t prop_index;
     if (existing) {
         prop_index = (size_t)(existing - obj->properties);
+        // Phase 2e: an overwritten strong container value loses its
+        // containment backref before release. The weak store itself adds NO
+        // parent link — weak is observation without ownership, and deep
+        // propagation does not cross weak references.
+        if (!existing->is_weak) {
+            object_property_removed(obj, &existing->value);
+        }
         if (existing->value.type == HL_VALUE_OBJECT && existing->value.value.obj_val) {
             if (existing->is_weak) {
                 hl_object_weak_unregister(existing->value.value.obj_val, obj, prop_index);
@@ -1369,6 +1465,8 @@ void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* t
             hl_function_release(existing->value.value.fn_val);
         } else if (existing->value.type == HL_VALUE_STR && existing->value.value.str_val) {
             hl_array_release(existing->value.value.str_val);
+        } else if (existing->value.type == HL_VALUE_ARRAY && existing->value.value.arr_val) {
+            hl_array_release(existing->value.value.arr_val);
         }
         existing->value = (HiLowValue){ .type = HL_VALUE_OBJECT, .value.obj_val = target };
         existing->is_weak = true;
@@ -1383,6 +1481,12 @@ void hl_object_set_object_weak(HiLowObject* obj, const char* key, HiLowObject* t
     }
     if (target) {
         hl_object_weak_register(target, obj, prop_index);
+    }
+
+    // Phase 2e: a weak store is still a mutation of the HOLDER — same event
+    // mapping as set_property (weakness affects containment, not firing)
+    if (hl_stealth_depth == 0 && cell_has_audience(&obj->cell)) {
+        hl_cell_notify(&obj->cell, existed ? HL_ARR_CHANGED : HL_ARR_ADDED, NULL);
     }
 }
 
@@ -1524,7 +1628,7 @@ HiLowOptional* hl_optional_member_object(HiLowOptional* opt, const char* key) {
 // Retain-and-return helpers for expression positions (Phase 1.5c): turn a
 // borrowed reference into an owned +1 inline.
 HiLowObject* hl_object_ref(HiLowObject* obj) {
-    if (obj) obj->refcount++;
+    if (obj) obj->cell.refcount++;
     return obj;
 }
 
@@ -2213,11 +2317,16 @@ void hl_array_release(HiLowArray* arr) {
     }
 }
 
-// Phase 2d helpers. Element kind detection: codegen passes exactly
-// hl_array_retain for nested-array elements (objects get hl_object_retain,
-// strings/primitives NULL), so retain_fn identity is the discriminator.
+// Phase 2d helpers (generalized to object elements in Phase 2e). Element
+// kind detection: codegen passes exactly hl_array_retain for nested-array
+// elements and hl_object_retain for object elements (strings/primitives
+// NULL), so retain_fn identity is the discriminator.
 static bool elems_are_arrays(const HiLowArray* arr) {
     return arr->retain_fn == (hl_elem_fn)hl_array_retain;
+}
+
+static bool elems_are_objects(const HiLowArray* arr) {
+    return arr->retain_fn == (hl_elem_fn)hl_object_retain;
 }
 
 // A mutation needs notification when the cell has direct subscribers OR a
@@ -2235,17 +2344,47 @@ void hl_array_mark_deep(HiLowArray* arr) {
             void* slot = (char*)arr->data + (i * arr->elem_size);
             hl_array_mark_deep(*(HiLowArray**)slot);
         }
+    } else if (elems_are_objects(arr)) {
+        for (size_t i = 0; i < arr->length; i++) {
+            void* slot = (char*)arr->data + (i * arr->elem_size);
+            hl_object_mark_deep(*(HiLowObject**)slot);
+        }
+    }
+}
+
+// Phase 2e: object counterpart, mutually recursive with hl_array_mark_deep.
+// Recurses STRONG object/array properties only — weak properties are
+// skipped, because deep propagation does not cross weak references (the
+// marked-implies-subtree-marked invariant is over the strong-reachable
+// subtree).
+void hl_object_mark_deep(HiLowObject* obj) {
+    if (obj->cell.deep_watched) return;
+    obj->cell.deep_watched = true;
+    for (size_t i = 0; i < obj->property_count; i++) {
+        if (obj->properties[i].is_weak) continue;
+        if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
+            hl_object_mark_deep(obj->properties[i].value.value.obj_val);
+        } else if (obj->properties[i].value.type == HL_VALUE_ARRAY && obj->properties[i].value.value.arr_val) {
+            hl_array_mark_deep(obj->properties[i].value.value.arr_val);
+        }
     }
 }
 
 // Containment-add bookkeeping (push/insert/set store paths): link the child
 // back to this parent and pull it into an already-deep-watched subtree.
 static void array_element_stored(HiLowArray* arr, void* slot) {
-    if (!elems_are_arrays(arr)) return;
-    HiLowArray* child = *(HiLowArray**)slot;
-    hl_cell_add_parent(&child->cell, &arr->cell);
-    if (arr->cell.deep_watched) {
-        hl_array_mark_deep(child);
+    if (elems_are_arrays(arr)) {
+        HiLowArray* child = *(HiLowArray**)slot;
+        hl_cell_add_parent(&child->cell, &arr->cell);
+        if (arr->cell.deep_watched) {
+            hl_array_mark_deep(child);
+        }
+    } else if (elems_are_objects(arr)) {
+        HiLowObject* child = *(HiLowObject**)slot;
+        hl_cell_add_parent(&child->cell, &arr->cell);
+        if (arr->cell.deep_watched) {
+            hl_object_mark_deep(child);
+        }
     }
 }
 
@@ -2253,9 +2392,38 @@ static void array_element_stored(HiLowArray* arr, void* slot) {
 // drop exactly one backref. The deep_watched bit is deliberately left set
 // (stale bit = wasted walk, never a wrong fire).
 static void array_element_removed(HiLowArray* arr, void* slot) {
-    if (!elems_are_arrays(arr)) return;
-    HiLowArray* child = *(HiLowArray**)slot;
-    hl_cell_remove_parent(&child->cell, &arr->cell);
+    if (elems_are_arrays(arr)) {
+        HiLowArray* child = *(HiLowArray**)slot;
+        hl_cell_remove_parent(&child->cell, &arr->cell);
+    } else if (elems_are_objects(arr)) {
+        HiLowObject* child = *(HiLowObject**)slot;
+        hl_cell_remove_parent(&child->cell, &arr->cell);
+    }
+}
+
+// Phase 2e: object-side containment bookkeeping — the property-table
+// counterpart of array_element_stored/removed. Acts only on STRONG
+// object/array values (the callers guard is_weak; weak stores never link).
+static void object_property_stored(HiLowObject* holder, const HiLowValue* v) {
+    if (v->type == HL_VALUE_OBJECT && v->value.obj_val) {
+        hl_cell_add_parent(&v->value.obj_val->cell, &holder->cell);
+        if (holder->cell.deep_watched) {
+            hl_object_mark_deep(v->value.obj_val);
+        }
+    } else if (v->type == HL_VALUE_ARRAY && v->value.arr_val) {
+        hl_cell_add_parent(&v->value.arr_val->cell, &holder->cell);
+        if (holder->cell.deep_watched) {
+            hl_array_mark_deep(v->value.arr_val);
+        }
+    }
+}
+
+static void object_property_removed(HiLowObject* holder, const HiLowValue* v) {
+    if (v->type == HL_VALUE_OBJECT && v->value.obj_val) {
+        hl_cell_remove_parent(&v->value.obj_val->cell, &holder->cell);
+    } else if (v->type == HL_VALUE_ARRAY && v->value.arr_val) {
+        hl_cell_remove_parent(&v->value.arr_val->cell, &holder->cell);
+    }
 }
 
 void hl_array_push(HiLowArray* arr, void* elem) {

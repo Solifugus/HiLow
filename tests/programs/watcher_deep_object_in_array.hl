@@ -1,0 +1,8 @@
+high program(args: [string]): i32 {
+  let o = { x: 1 }
+  let arr = [o]
+  let w = watcher((deep)arr) { print("deep") }
+  o.x = 9
+  print("after")
+  return 0
+}

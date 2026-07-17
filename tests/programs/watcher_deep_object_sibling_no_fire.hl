@@ -1,0 +1,11 @@
+high program(args: [string]): i32 {
+  let a = { x: 1 }
+  let b = { y: 1 }
+  let outer = { left: a, right: b }
+  let wo = watcher((deep)outer) { print("outer fired") }
+  let wb = watcher((deep)b) { print("b fired") }
+  a.x = 2
+  b.y = 2
+  print("after")
+  return 0
+}

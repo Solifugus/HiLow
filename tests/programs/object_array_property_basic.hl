@@ -1,0 +1,8 @@
+high program(args: [string]): i32 {
+  let holder = { data: [1, 2] }
+  holder.data.push(3)
+  print(holder.data.length)
+  print(holder.data[0])
+  print(holder.data[2])
+  return 0
+}

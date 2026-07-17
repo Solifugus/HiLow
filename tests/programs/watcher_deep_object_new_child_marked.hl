@@ -1,0 +1,11 @@
+high program(args: [string]): i32 {
+  let old = { x: 1 }
+  let outer = { child: old }
+  let w = watcher((deep)outer) { print("fired") }
+  let fresh = { x: 2 }
+  outer.child = fresh
+  fresh.x = 9
+  old.x = 9
+  print("after")
+  return 0
+}

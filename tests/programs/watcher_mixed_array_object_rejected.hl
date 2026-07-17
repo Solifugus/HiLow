@@ -1,0 +1,6 @@
+high program(args: [string]): i32 {
+  let o = { x: 1 }
+  let xs = [1, 2]
+  let w = watcher((changed)o, (changed)xs) { print("either") }
+  return 0
+}

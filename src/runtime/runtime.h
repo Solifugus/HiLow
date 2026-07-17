@@ -255,7 +255,8 @@ typedef enum {
     HL_VALUE_STR,
     HL_VALUE_OBJECT,
     HL_VALUE_FUNCTION,
-    HL_VALUE_MONEY
+    HL_VALUE_MONEY,
+    HL_VALUE_ARRAY    // Phase 2e: array-valued properties (strong, container cell)
 } HiLowValueType;
 
 typedef struct HiLowValue {
@@ -269,6 +270,7 @@ typedef struct HiLowValue {
         double f64_val;
         bool bool_val;
         HiLowArray* str_val;
+        HiLowArray* arr_val;   // Phase 2e: same shape as str_val, distinct tag
         struct HiLowObject* obj_val;
         HiLowFunction* fn_val;
         HiLowMoney money_val;
@@ -286,13 +288,15 @@ typedef struct Property {
     bool is_weak;  // NEW: indicates if this property holds a weak reference
 } Property;
 
-// Object representation (heap-allocated with property table)
+// Object representation (heap-allocated with property table).
+// Phase 2e: the cell header replaced the bare refcount — objects are the
+// second container in the cell model (arrays joined in Phase 2a).
 typedef struct HiLowObject {
-    int refcount;              // Reference count (Phase 8b)
+    HiLowCell cell;            // cell header — MUST be first member (Phase 2e)
     Property* properties;
     size_t property_count;
     size_t property_capacity;
-    struct WeakRef* weak_refs; // NEW: linked list of weak references to this object
+    struct WeakRef* weak_refs; // linked list of weak references to this object
 } HiLowObject;
 
 // Weak reference tracking (Phase 8c; reworked in Phase 1.5c). Keyed on
@@ -316,6 +320,7 @@ void hl_object_set_bool(HiLowObject* obj, const char* key, bool value);
 void hl_object_set_str(HiLowObject* obj, const char* key, HiLowArray* value);
 void hl_object_set_object(HiLowObject* obj, const char* key, HiLowObject* value);
 void hl_object_set_function(HiLowObject* obj, const char* key, HiLowFunction* value);
+void hl_object_set_array(HiLowObject* obj, const char* key, HiLowArray* value);   // Phase 2e
 
 int32_t hl_object_get_i32(HiLowObject* obj, const char* key);
 int64_t hl_object_get_i64(HiLowObject* obj, const char* key);
@@ -327,6 +332,7 @@ bool hl_object_get_bool(HiLowObject* obj, const char* key);
 HiLowArray* hl_object_get_str(HiLowObject* obj, const char* key);
 HiLowObject* hl_object_get_object(HiLowObject* obj, const char* key);
 HiLowFunction* hl_object_get_function(HiLowObject* obj, const char* key);
+HiLowArray* hl_object_get_array(HiLowObject* obj, const char* key);   // Phase 2e: borrow, proto-chain walk
 
 // Function value operations (Phase 7c-β)
 HiLowFunction* hl_function_new(void* fn_ptr);
@@ -396,8 +402,10 @@ typedef struct HiLowArray {
     hl_elem_fn release_fn;         // NULL for primitive arrays, hl_object_release for object arrays
 } HiLowArray;
 
-// Array watcher modifier constants (Phase B scaffolding; DEEP added in
-// Phase 2d, filling the long-documented gap at 4)
+// Cell event constants (Phase B scaffolding; DEEP added in Phase 2d, filling
+// the long-documented gap at 4). The HL_ARR_ prefix is historical — as of
+// Phase 2e the same constants serve every container cell: object property
+// stores fire CHANGED (existing key) or ADDED (new key) on the object's cell.
 #define HL_ARR_ADDED 1
 #define HL_ARR_REMOVED 2
 #define HL_ARR_CHANGED 3
@@ -427,12 +435,16 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element fr
 void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements and setting length to 0
 
 // Phase 2d: set the deep-watched bit on arr and (recursively) every nested
-// array under it. Invariant: marked implies the entire subtree is marked —
-// both setters (subscription, containment-add into a marked parent) mark
-// full subtrees, so the early-return on an already-set bit is sound and
-// terminates diamonds. Clearing is deliberately not implemented (stale bit
-// = one wasted walk, never a wrong fire).
+// array under it — and, as of Phase 2e, every object element too (deep
+// marking is mutually recursive across the two container kinds). Invariant:
+// marked implies the entire STRONG-reachable subtree is marked — all setters
+// (subscription, containment-add into a marked parent) mark full subtrees,
+// so the early-return on an already-set bit is sound and terminates
+// diamonds. Weak properties are skipped: deep does not cross weak
+// references. Clearing is deliberately not implemented (stale bit = one
+// wasted walk, never a wrong fire).
 void hl_array_mark_deep(HiLowArray* arr);
+void hl_object_mark_deep(HiLowObject* obj);   // Phase 2e
 
 // Array watcher registration/unregistration lives on the cell as of Phase 2a:
 // subscription happens only inside hl_watcher_new_subscribed; removal happens
@@ -468,6 +480,7 @@ HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t ind
 #define TYPE_STR 8
 #define TYPE_OBJECT 9
 #define TYPE_FUNCTION 10
+#define TYPE_ARRAY 11    // Phase 2e: array-valued properties
 
 // Debug allocator (Phase 8a)
 extern int hl_alloc_count;

@@ -1,0 +1,7 @@
+high program(args: [string]): i32 {
+  let holder = { data: [1, 2] }
+  let w = watcher((deep)holder) { print("deep") }
+  holder.data.push(3)
+  print("after")
+  return 0
+}

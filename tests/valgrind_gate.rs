@@ -39,7 +39,11 @@ const REJECTION_FIXTURES: &[&str] = &[
     "optional_bool_let_rejected.hl",                 // is_err test test_optional_bool_let_rejected — same adjudication
     "optional_return_mismatch_rejected.hl",          // is_err test test_optional_return_mismatch_rejected — narrow optional-return type check (Phase 2b step zero)
     "watcher_capture_escape_rejected.hl",            // is_err test test_watcher_capture_escape_rejected — capture-escape rejected until Phase 3 boxing (Phase 2b)
-    "watcher_deep_scalar_rejected.hl",               // is_err test test_watcher_deep_scalar_rejected — (deep) is arrays-only until other values gain the cell header (Phase 2d)
+    "watcher_deep_scalar_rejected.hl",               // is_err test test_watcher_deep_scalar_rejected — (deep) is containers-only until scalars box (Phase 2d; objects joined in 2e)
+    "object_watch_added_rejected.hl",                // is_err test test_object_watch_added_rejected — Phase 2e adjudication: ADDED has no reachable trigger until dynamic property addition lands (STATUS.md open question)
+    "object_watch_removed_rejected.hl",              // is_err test test_object_watch_removed_rejected — no REMOVED event: property removal unimplemented (tombstone ruling)
+    "object_watch_assigned_rejected.hl",             // is_err test test_object_watch_assigned_rejected — rebinding detection needs Phase 3 boxing
+    "watcher_mixed_array_object_rejected.hl",        // is_err test test_watcher_mixed_array_object_rejected — body prologue casts to one container type (Phase 2e single-container-kind watchers)
 ];
 
 /// Programs with a KNOWN, adjudicated memory bug: they compile and run, but

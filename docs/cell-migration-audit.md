@@ -540,6 +540,80 @@ point of deleting-with-confidence.
   byte-identical pre/post-2d (worktree diff); unwatched mutation cost is one
   bit+pointer check in `cell_has_audience`. Seven live deep fixtures + one
   rejection fixture; integration 269→277.)
+- **2e Objects join the cell model.** (Added 2026-07-17 by user ruling,
+  resolving the open question 2d surfaced: objects gain the cell header NOW,
+  before boxing — **containers complete before scalars box**. Phase 3a
+  follows 2e.) Cell header onto `HiLowObject` per the 2a playbook; containment
+  parent links per the 2d maintenance-table pattern for every strong
+  cross-container store (object property holding object or array, proto
+  links — proto is an ordinary property — and object-in-array, which
+  generalizes 2d's element helpers); minimal event mapping (existing-property
+  set → CHANGED, new property → ADDED, proto reassignment → CHANGED, no
+  REMOVED per the tombstone ruling); deep crosses objects both directions.
+  Adjudicated: weak properties create NO parent links and deep does not
+  cross weak — weak is observation without ownership (spec edit in the weak
+  subsection, same commit). *Gate: full ritual green, single commit.*
+  (Landed 2026-07-17 per the approved plan, with six plan-adjudicated items:
+  (A) the runtime ADDED mapping is implemented in full but `(added)obj` is
+  REJECTED with a diagnostic — dynamic property addition is not expressible
+  (typecheck rejects unknown-property assignment), so the event has no
+  reachable trigger and an admissible-but-inert subscription would be a trap;
+  new STATUS.md open question for scheduling dynamic property addition.
+  (B) True object cycles are UNREPRESENTABLE (self-property and proto-cycle
+  constructions both type-rejected — probed), mirroring 2d's arrays; the
+  object diamond fixture ({a: shared, b: shared}) pins single-fire through
+  the same epoch revisit-suppression. (C) Array-valued object properties
+  did not exist (codegen UnsupportedFeature; no HL_VALUE_ARRAY) — landed as
+  minimal enabling work for the mandated array-in-object tests: HL_VALUE_ARRAY
+  tag, hl_object_set_array/hl_object_get_array (borrow getter, proto-chain
+  walk), ownership arms in set_property/release/teardown, codegen arms for
+  member assign, object-literal property, member read, and let-binding
+  retain. (D) `(assigned)obj` rejected citing Phase 3 (rebinding detection is
+  boxing machinery). (E) String properties create no parent links — string
+  watching stays compile-time rejected (§5 item 2) and no surface mutates a
+  string in place. (F) Decl-form object watchers stay rejected — decl-form
+  wires through the legacy name-keyed map that dies in Phase 3; objects join
+  the expression-form cell path only. IMPLEMENTATION: all object stores
+  funnel through set_property and hl_object_set_object_weak — one choke
+  point each for firing (2d mutator guard shape; NULL deltas since object
+  subscriptions carry no aliases; a weak store still fires on the HOLDER —
+  weakness affects containment, not firing) and containment
+  (object_property_stored/removed mirror array_element_stored/removed;
+  remove-before-release ordering preserved; teardown unlinks per strong
+  container property). hl_cell_notify needed ZERO changes — the walk was
+  container-agnostic by construction. Deep marking became mutual recursion
+  (hl_object_mark_deep skips weak properties; hl_array_mark_deep gained the
+  object-element branch; marked ⇒ strong-reachable subtree marked).
+  2d's mutators already CALLED the containment helpers for every element
+  kind; the helpers just early-returned unless elems_are_arrays — 2e added
+  elems_are_objects (retain_fn identity). Codegen: WatcherExpr admits
+  objects (expression form); mixed array+object watchers rejected (the body
+  prologue casts the fired cell to the first subscription's container type);
+  multi-object watchers get multi-array semantics; object captures became
+  identity captures (the by-reference scalar branch produced a
+  void**/HiLowObject** mismatch — subscribed names are ALSO collected as
+  captures because find_variable_in_outer_scope ignores shadowing, which
+  arrays never exposed since their captures were already identity-stored).
+  DISCOVERED during the zero-cost check: generated C is NONDETERMINISTIC
+  across runs of the SAME compiler binary — scope-cleanup release order
+  comes from a HashMap iteration (pre-existing on HEAD, verified by
+  run-to-run diffs of the unmodified 2d binary; semantically harmless since
+  releases within a cleanup block are order-independent under symmetric
+  unlink; recorded in STATUS Known issues; byte-diff verification is
+  therefore flaky for multi-owner scopes). Zero-cost result: watcher-free
+  object program byte-identical pre/post-2e; array program identical as a
+  line multiset with the release-order permutation present on HEAD alone;
+  watcher_reentrant_deferred live stdout byte-identical pre/post-2e
+  (HEAD-worktree comparison, no stash). Unwatched property-set cost is the
+  cell_has_audience bit+pointer check. Twelve live fixtures (array-property
+  basics, changed, proto-reassign CHANGED, object-in-object dual deep,
+  array-in-object via direct member push, object-in-array, proto-chain deep,
+  diamond single-fire, sibling isolation, stealth suppression, weak
+  boundary with strong-holder positive control, new-child-marked with
+  old-child-silenced) — every output predicted from semantics before
+  running, all matched exactly, all valgrind 0 — plus four rejection
+  fixtures with pinned diagnostics. Integration 277→293, ignored stays 2,
+  KNOWN_MEMORY_BUGS stays EMPTY, REJECTION_FIXTURES +4.)
 
 ### Phase 3 — scalars
 

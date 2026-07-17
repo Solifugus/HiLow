@@ -653,11 +653,39 @@ impl TypeChecker {
     ) -> Option<Type> {
         use SubscriptionModifier::*;
         match modifier {
-            Changed | Assigned => {
-                // Compatible with any type; no alias-specific type
+            Changed => {
+                // Compatible with any type; no alias-specific type. For
+                // container cells (arrays Phase 2a, objects Phase 2e) this
+                // fires on every mutation.
                 Some(outer_type.clone())
             }
+            Assigned => {
+                // Phase 2e: rebinding detection on objects needs boxed
+                // variables — Phase 3 machinery, not a container-cell event
+                if matches!(outer_type, Type::Object(_)) {
+                    self.add_error(
+                        "(assigned) subscriptions on objects land with Phase 3 (boxing) — use (changed) to observe property mutations".to_string(),
+                        position.clone()
+                    );
+                    None
+                } else {
+                    Some(outer_type.clone())
+                }
+            }
             Added | Removed => {
+                // Phase 2e: the object event mapping has ADDED (new property)
+                // but no reachable trigger — dynamic property addition is not
+                // implemented — and no REMOVED at all (tombstone ruling).
+                // Both are rejected honestly rather than admitted-but-inert.
+                if matches!(outer_type, Type::Object(_)) {
+                    let msg = if matches!(modifier, Added) {
+                        "(added) on objects is unscheduled: properties cannot be added after construction yet (dynamic property addition is unimplemented — see STATUS.md)"
+                    } else {
+                        "(removed) on objects is unscheduled: property removal is unimplemented (tombstone ruling)"
+                    };
+                    self.add_error(msg.to_string(), position.clone());
+                    return None;
+                }
                 // Phase 10-ε-β: Require collection type, alias gets element type
                 if let Some(element_type) = self.collection_element_type(outer_type) {
                     Some(element_type)  // alias binds to the element, not the array
@@ -684,13 +712,14 @@ impl TypeChecker {
                 }
             }
             Deep => {
-                // Phase 2d: arrays only until other values gain the cell header.
-                // The parameter binds the subscribed variable's current full value.
-                if matches!(outer_type, Type::DynamicArray(_)) {
+                // Phase 2d arrays, Phase 2e objects — the two container
+                // cells. The parameter binds the subscribed variable's
+                // current full value.
+                if matches!(outer_type, Type::DynamicArray(_) | Type::Object(_)) {
                     Some(outer_type.clone())
                 } else {
                     self.add_error(
-                        format!("(deep) modifier requires an array type in this phase, got '{}' — deep watching of scalars lands with Phase 3 (boxing); objects are unscheduled (see STATUS.md)",
+                        format!("(deep) modifier requires an array or object type in this phase, got '{}' — deep watching of scalars lands with Phase 3 (boxing)",
                             self.type_name(outer_type)),
                         position.clone()
                     );

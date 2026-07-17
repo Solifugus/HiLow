@@ -1,0 +1,10 @@
+high program(args: [string]): i32 {
+  let p1 = { greet: "hi" }
+  let p2 = { greet: "yo" }
+  let d = { proto: p1 }
+  let w = watcher((changed)d) { print("changed") }
+  d.proto = p2
+  print(d.greet)
+  print("after")
+  return 0
+}
