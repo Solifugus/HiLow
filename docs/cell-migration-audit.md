@@ -475,7 +475,31 @@ point of deleting-with-confidence.
   move 2-arg bug (§3.4a); replace both static temp_buffers with caller-owned /
   heap-copied deltas; move `hl_array_remove`'s return off the static buffer.
   Un-`#[ignore]` the re-entrancy test. *Gate: full suite + re-entrancy test
-  live.*
+  live.* (Landed 2026-07-17. The un-ignore note here was SUPERSEDED before
+  this phase ran by the 1.5d ruling: the re-entrancy test asserts deferred
+  declaring-thread-queue semantics per the brief and flips live in Phase 5;
+  its program's live stdout is byte-identical pre/post-2c (verified by stash
+  round-trip) and stays valgrind-clean. As landed: `HiLowDelta {event,
+  payload (heap-owned byte copy), payload_size, payload_release, from, to}`
+  is self-contained and queueable — the mutator constructs it (retaining
+  object-array element refs via retain_fn), `hl_cell_notify(cell, event,
+  delta)` fires, the same mutator releases it via hl_delta_release; Phase 5
+  changes only when/where bodies run and who releases. hl_cell_notify is ONE
+  walk in list order firing nodes where modifier == event OR modifier ==
+  CHANGED (implicit-changed mirrors the old interleaved loops exactly,
+  preserving the 1.5d-pinned firing orders); it is the authoritative stealth
+  site, mutators check stealth+empty-list only to skip delta construction.
+  One body ABI `HiLowWatcherBody(void* env, HiLowCell*, const HiLowDelta*)`
+  — bodies rebind the watched name from the cell and bind aliases from
+  delta->payload / delta->from,to (still copied at entry); HiLowMovedDelta
+  survives only as the Tuple(Usize,Usize) alias-binding type. Both static
+  temp_buffers deleted (grep-verified the only two): hl_array_remove became
+  out-param `(arr, index, void* out)` (codegen hoists a caller-owned temp
+  via pending_statement_decls — no 1024 cap, re-entrant), hl_array_move's
+  shift scratch became a local malloc/free. §3.4(a) DEAD at both .move sites:
+  test_watcher_move_capture_env_integration LIVE and valgrind 0;
+  KNOWN_MEMORY_BUGS EMPTY. New fixture watcher_move_noop_capture_env pins
+  the from==to site with captures, which 1.5d never covered.)
 - **2d Parent lists + deep.** Container cells get parent lists; `(deep)`
   subscription sets the deep-watched bit down the chain; mutators walk parents
   only when the bit is set. New tests: nested-array deep watch (§4.4 gap —

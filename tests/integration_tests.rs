@@ -5102,11 +5102,10 @@ fn test_watcher_reentrant_deferred_integration() {
     let _ = fs::remove_file(&executable);
 }
 
-// audit §3.4(a): .move firing drops the env (2-arg cast) — a (moved) watcher
-// with captures reads the array pointer as its env. Expected behavior: the
-// captured variable prints correctly when move fires. Currently segfaults.
+// audit §3.4(a), fixed in Phase 2c: all mutators fire through hl_cell_notify
+// with the one (env, cell, delta) body ABI — the .move 2-arg env-dropping
+// casts are gone, so a (moved) watcher with captures reads its real env.
 #[test]
-#[ignore = "audit §3.4(a): .move fires bodies with a 2-arg cast dropping the env — segfaults with captures; adjudicated (§5 item 4) to stay broken until Phase 2c unifies the firing ABI. Program is on KNOWN_MEMORY_BUGS"]
 fn test_watcher_move_capture_env_integration() {
     let executable = compile_program("tests/programs/watcher_move_capture_env.hl")
         .expect("Failed to compile watcher_move_capture_env.hl");
@@ -5273,4 +5272,26 @@ fn test_watcher_capture_escape_rejected() {
         "diagnostic should name the watcher and captured variable, got: {}",
         msg
     );
+}
+
+// Phase 2c: the SECOND §3.4(a) firing site — the from==to no-op branch of
+// hl_array_move had its own 2-arg env-dropping cast, uncovered by the 1.5d
+// fixture (which exercises only the real-move branch). A capturing (moved)
+// watcher must read its env and the (from,to) delta correctly there too.
+#[test]
+fn test_watcher_move_noop_capture_env_integration() {
+    let executable = compile_program("tests/programs/watcher_move_noop_capture_env.hl")
+        .expect("Failed to compile watcher_move_noop_capture_env.hl");
+
+    let expected_output = fs::read_to_string("tests/expected/watcher_move_noop_capture_env.txt")
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .expect("Failed to run watcher_move_noop_capture_env");
+
+    assert_eq!(exit_code, 0, "Program should exit with code 0");
+    assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "stdout should match expected output");
+
+    let _ = fs::remove_file(&executable);
 }

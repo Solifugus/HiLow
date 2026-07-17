@@ -2888,11 +2888,12 @@ impl CodeGenerator {
                 self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
 
                 if has_arrays {
-                    // Array watcher: env-struct signature for closure capture (void* env first)
-                    // Array parameter is always the variable name; alias (if any) binds to delta element
-                    let first_subscription = &watcher_expr.subscriptions[0];
-                    let param_name = &first_subscription.variable_name;
-                    self.watcher_bodies.push_str(&format!("void* env, HiLowArray* {}, void* delta", param_name));
+                    // One firing ABI (Phase 2c): env-first, cell second, value
+                    // delta third. The watched variable name rebinds from the
+                    // cell (the container's first member), preserving the
+                    // pre-2c semantics — including the multi-array case where
+                    // the first subscription's name binds whichever fired.
+                    self.watcher_bodies.push_str("void* env, HiLowCell* hilow_cell, const HiLowDelta* delta");
                 } else {
                     // Scalar watcher: watched variables as value parameters
                     for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
@@ -2923,24 +2924,32 @@ impl CodeGenerator {
 
                 self.watcher_bodies.push_str(") {\n");
 
-                // Phase 10-ε-β/γ: For added/removed/moved with alias, emit delta cast+bind
+                // Phase 2c: rebind the watched array name from the cell, then
+                // for added/removed/moved with alias, bind from the value
+                // delta (copied at body entry, so aliases survive nested
+                // mutation exactly as before).
                 if has_arrays {
+                    let first_subscription = &watcher_expr.subscriptions[0];
+                    self.watcher_bodies.push_str(&format!(
+                        "    HiLowArray* {} = (HiLowArray*)hilow_cell;\n",
+                        first_subscription.variable_name
+                    ));
                     for subscription in &watcher_expr.subscriptions {
                         if matches!(subscription.modifier, SubscriptionModifier::Added | SubscriptionModifier::Removed) {
                             if let Some(ref alias_name) = subscription.alias {
                                 if let Some(alias_type) = subscription.resolved_alias_type.borrow().as_ref() {
                                     let c_elem_type = self.ast_type_to_c(alias_type);
                                     self.watcher_bodies.push_str(&format!(
-                                        "    {} {} = *({} *)delta;\n",
+                                        "    {} {} = *({} *)delta->payload;\n",
                                         c_elem_type, alias_name, c_elem_type
                                     ));
                                 }
                             }
                         } else if matches!(subscription.modifier, SubscriptionModifier::Moved) {
                             if let Some(ref alias_name) = subscription.alias {
-                                // Moved alias is typed as Tuple(Usize, Usize) but cast from HiLowMovedDelta
+                                // Moved alias is typed as Tuple(Usize, Usize); built from delta->from/to
                                 self.watcher_bodies.push_str(&format!(
-                                    "    HiLowMovedDelta {} = *(HiLowMovedDelta *)delta;\n",
+                                    "    HiLowMovedDelta {} = {{ ._0 = delta->from, ._1 = delta->to }};\n",
                                     alias_name
                                 ));
                             }
@@ -3853,7 +3862,9 @@ impl CodeGenerator {
                         return Ok(());
                     }
                     "remove" => {
-                        // arr.remove(index) -> (*(T*)hl_array_remove(arr, index))
+                        // arr.remove(index) -> (hl_array_remove(arr, index, &tmp), tmp)
+                        // Phase 2c: the removed element lands in a hoisted
+                        // caller-owned temp, not the old static buffer.
                         if call.args.len() != 1 {
                             return Err(CodegenError::UnsupportedFeature {
                                 feature: "array.remove() with wrong argument count".to_string(),
@@ -3862,11 +3873,14 @@ impl CodeGenerator {
                         }
 
                         let elem_c_type = self.hilow_type_to_c(&elem_type);
-                        self.output.push_str(&format!("(*({}*)hl_array_remove(", elem_c_type));
+                        let removed_tmp = format!("hilow_removed_{}", self.temp_counter);
+                        self.temp_counter += 1;
+                        self.pending_statement_decls.push(format!("{} {};", elem_c_type, removed_tmp));
+                        self.output.push_str("(hl_array_remove(");
                         self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(", ");
                         self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;
-                        self.output.push_str("))");
+                        self.output.push_str(&format!(", &{}), {})", removed_tmp, removed_tmp));
                         return Ok(());
                     }
                     "insert" => {

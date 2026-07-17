@@ -858,6 +858,65 @@ void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
     }
 }
 
+// Value deltas (Phase 2c). Internal allocations deliberately do not touch
+// hl_alloc_count/hl_free_count: a delta is always balanced inside one
+// mutator call today (like arr->data reallocs); valgrind still sees them.
+HiLowDelta* hl_delta_new_elem(int event, const void* elem_bytes, size_t elem_size,
+                              hl_elem_fn retain_fn, hl_elem_fn release_fn) {
+    HiLowDelta* d = malloc(sizeof(HiLowDelta));
+    d->event = event;
+    d->payload = malloc(elem_size);
+    memcpy(d->payload, elem_bytes, elem_size);
+    d->payload_size = elem_size;
+    d->payload_release = release_fn;
+    d->from = 0;
+    d->to = 0;
+    // Object arrays: the delta holds its own reference so it stays valid
+    // independent of the array and the caller (queueable).
+    if (retain_fn != NULL) {
+        retain_fn(*(void**)d->payload);
+    }
+    return d;
+}
+
+HiLowDelta* hl_delta_new_moved(size_t from, size_t to) {
+    HiLowDelta* d = malloc(sizeof(HiLowDelta));
+    d->event = HL_ARR_MOVED;
+    d->payload = NULL;
+    d->payload_size = 0;
+    d->payload_release = NULL;
+    d->from = from;
+    d->to = to;
+    return d;
+}
+
+void hl_delta_release(HiLowDelta* d) {
+    if (!d) return;
+    if (d->payload != NULL) {
+        if (d->payload_release != NULL) {
+            d->payload_release(*(void**)d->payload);
+        }
+        free(d->payload);
+    }
+    free(d);
+}
+
+// The ONE firing path (Phase 2c). Single walk in list order; implicit
+// CHANGED: every mutation event also fires (changed) watchers — this
+// mirrors the pre-2c per-mutator loops exactly (same nodes, same order).
+// The stealth check lives here, its single authoritative site (mutators
+// also consult it only to skip delta construction).
+void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
+    if (hl_stealth_depth != 0) return;
+    for (HiLowCellWatcher* node = c->watchers; node != NULL; node = node->next) {
+        HiLowWatcher* state = node->watcher;
+        if (state == NULL || !state->active || state->ended) continue;
+        if (node->modifier == event || node->modifier == HL_ARR_CHANGED) {
+            ((HiLowWatcherBody)node->body_fn)(node->env, c, delta);
+        }
+    }
+}
+
 // Watcher value operations (Phase 10-δ-α)
 HiLowWatcher* hl_watcher_new(void) {
     HiLowWatcher* w = malloc(sizeof(HiLowWatcher));
@@ -2096,22 +2155,14 @@ void hl_array_push(HiLowArray* arr, void* elem) {
 
     arr->length++;
 
-    // Phase 10-ε-β: fire watchers registered on this array with delta-passing
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = w->watcher;
-        if (state != NULL && state->active && !state->ended) {
-            void* delta = NULL;
-            int fires = 0;
-            if (w->modifier == HL_ARR_ADDED) {
-                delta = elem; fires = 1;
-            }
-            else if (w->modifier == HL_ARR_CHANGED) {
-                delta = NULL; fires = 1;
-            }
-            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
-        }
-        }
+    // Phase 2c: one firing path — construct a value delta, notify the cell.
+    // The guard only skips delta construction; stealth is authoritatively
+    // checked inside hl_cell_notify.
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        HiLowDelta* d = hl_delta_new_elem(HL_ARR_ADDED, dest, arr->elem_size,
+                                          arr->retain_fn, arr->release_fn);
+        hl_cell_notify(&arr->cell, HL_ARR_ADDED, d);
+        hl_delta_release(d);
     }
 }
 
@@ -2143,22 +2194,12 @@ void* hl_array_pop(HiLowArray* arr) {
     // Get pointer to the now-removed element slot
     void* removed_slot = (char*)arr->data + (arr->length * arr->elem_size);
 
-    // Phase 10-ε-β: fire watchers registered on this array with delta-passing
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = w->watcher;
-        if (state != NULL && state->active && !state->ended) {
-            void* delta = NULL;
-            int fires = 0;
-            if (w->modifier == HL_ARR_REMOVED) {
-                delta = removed_slot; fires = 1;
-            }
-            else if (w->modifier == HL_ARR_CHANGED) {
-                delta = NULL; fires = 1;
-            }
-            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
-        }
-        }
+    // Phase 2c: one firing path
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        HiLowDelta* d = hl_delta_new_elem(HL_ARR_REMOVED, removed_slot, arr->elem_size,
+                                          arr->retain_fn, arr->release_fn);
+        hl_cell_notify(&arr->cell, HL_ARR_REMOVED, d);
+        hl_delta_release(d);
     }
 
     // Return the removed element
@@ -2189,24 +2230,14 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
         arr->retain_fn(*(void**)dest);
     }
 
-    // Phase 10-ε-β: fire watchers registered on this array with delta-passing
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = w->watcher;
-        if (state != NULL && state->active && !state->ended) {
-            void* delta = NULL;
-            int fires = 0;
-            if (w->modifier == HL_ARR_CHANGED) {
-                delta = NULL; fires = 1;
-            }
-            // Note: set fires DEEP and CHANGED only (no size change)
-            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
-        }
-        }
+    // Phase 2c: one firing path. set fires CHANGED only (no size change);
+    // payload-less, so no delta is constructed.
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        hl_cell_notify(&arr->cell, HL_ARR_CHANGED, NULL);
     }
 }
 
-void* hl_array_remove(HiLowArray* arr, size_t index) {
+void hl_array_remove(HiLowArray* arr, size_t index, void* out) {
     // Bounds check
     if (index >= arr->length) {
         fprintf(stderr, "Runtime error: remove() index %zu out of bounds (length %zu)\n",
@@ -2214,10 +2245,11 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
         exit(1);
     }
 
-    // Capture the element before shifting (needed for delta stability during watcher firing)
+    // Copy the removed element into the caller-owned destination before
+    // shifting (Phase 2c: no static buffer — no size cap, re-entrant).
+    // Note: the caller now owns the object reference; no release here.
     void* removed_slot = (char*)arr->data + (index * arr->elem_size);
-    static char temp_buffer[1024]; // Static buffer for delta stability - assumes elem_size <= 1024
-    memcpy(temp_buffer, removed_slot, arr->elem_size);
+    memcpy(out, removed_slot, arr->elem_size);
 
     // Shift elements [index+1 .. length-1] down by one
     if (index < arr->length - 1) {
@@ -2230,27 +2262,13 @@ void* hl_array_remove(HiLowArray* arr, size_t index) {
     // Decrement length
     arr->length--;
 
-    // Fire watchers with captured element as delta
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = w->watcher;
-        if (state != NULL && state->active && !state->ended) {
-            void* delta = NULL;
-            int fires = 0;
-            if (w->modifier == HL_ARR_REMOVED) {
-                delta = temp_buffer; fires = 1;
-            }
-            else if (w->modifier == HL_ARR_CHANGED) {
-                delta = NULL; fires = 1;
-            }
-            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
-        }
-        }
+    // Phase 2c: one firing path
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        HiLowDelta* d = hl_delta_new_elem(HL_ARR_REMOVED, out, arr->elem_size,
+                                          arr->retain_fn, arr->release_fn);
+        hl_cell_notify(&arr->cell, HL_ARR_REMOVED, d);
+        hl_delta_release(d);
     }
-
-    // Return the removed element
-    // Note: The caller now owns the object reference; no release here
-    return temp_buffer;
 }
 
 void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
@@ -2287,22 +2305,12 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
     // Increment length
     arr->length++;
 
-    // Fire watchers with inserted element as delta
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = w->watcher;
-        if (state != NULL && state->active && !state->ended) {
-            void* delta = NULL;
-            int fires = 0;
-            if (w->modifier == HL_ARR_ADDED) {
-                delta = elem; fires = 1;
-            }
-            else if (w->modifier == HL_ARR_CHANGED) {
-                delta = NULL; fires = 1;
-            }
-            if (fires) ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, delta);
-        }
-        }
+    // Phase 2c: one firing path
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        HiLowDelta* d = hl_delta_new_elem(HL_ARR_ADDED, dest, arr->elem_size,
+                                          arr->retain_fn, arr->release_fn);
+        hl_cell_notify(&arr->cell, HL_ARR_ADDED, d);
+        hl_delta_release(d);
     }
 }
 
@@ -2322,31 +2330,22 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
 
     // No-op if from == to
     if (from == to) {
-        // Still fire watchers with delta (or skip - documented choice: still fire)
-        HiLowMovedDelta delta = { ._0 = from, ._1 = to };
-        if (hl_stealth_depth == 0) {
-            for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-                HiLowWatcher* state = w->watcher;
-            if (state != NULL && state->active && !state->ended) {
-                void* delta_ptr = NULL;
-                int fires = 0;
-                if (w->modifier == HL_ARR_MOVED) {
-                    delta_ptr = &delta; fires = 1;
-                }
-                else if (w->modifier == HL_ARR_CHANGED) {
-                    delta_ptr = NULL; fires = 1;
-                }
-                if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta_ptr);
-            }
-            }
+        // Still fire watchers with delta (documented choice: still fire).
+        // Phase 2c: one firing path — the 2-arg env-dropping cast (§3.4(a))
+        // is gone; bodies get the full (env, cell, delta) call.
+        if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+            HiLowDelta* d = hl_delta_new_moved(from, to);
+            hl_cell_notify(&arr->cell, HL_ARR_MOVED, d);
+            hl_delta_release(d);
         }
         return;
     }
 
-    // Capture the element at 'from' index
+    // Capture the element at 'from' index in a local heap scratch
+    // (Phase 2c: no static buffer — no size cap, re-entrant).
     void* from_slot = (char*)arr->data + (from * arr->elem_size);
-    static char temp_buffer[1024]; // Static buffer for element capture - assumes elem_size <= 1024
-    memcpy(temp_buffer, from_slot, arr->elem_size);
+    void* moved_elem = malloc(arr->elem_size);
+    memcpy(moved_elem, from_slot, arr->elem_size);
 
     // Shift elements depending on direction
     if (from < to) {
@@ -2365,27 +2364,16 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
 
     // Place captured element at 'to' index
     void* to_slot = (char*)arr->data + (to * arr->elem_size);
-    memcpy(to_slot, temp_buffer, arr->elem_size);
+    memcpy(to_slot, moved_elem, arr->elem_size);
+    free(moved_elem);
 
     // No retain/release - same element, refcount unchanged
 
-    // Fire watchers with (from,to) delta
-    HiLowMovedDelta delta = { ._0 = from, ._1 = to };
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-            HiLowWatcher* state = w->watcher;
-        if (state != NULL && state->active && !state->ended) {
-            void* delta_ptr = NULL;
-            int fires = 0;
-            if (w->modifier == HL_ARR_MOVED) {
-                delta_ptr = &delta; fires = 1;
-            }
-            else if (w->modifier == HL_ARR_CHANGED) {
-                delta_ptr = NULL; fires = 1;
-            }
-            if (fires) ((void(*)(HiLowArray*, void*))w->body_fn)(arr, delta_ptr);
-        }
-        }
+    // Phase 2c: one firing path (was the second §3.4(a) 2-arg cast site)
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        HiLowDelta* d = hl_delta_new_moved(from, to);
+        hl_cell_notify(&arr->cell, HL_ARR_MOVED, d);
+        hl_delta_release(d);
     }
 }
 
@@ -2404,16 +2392,11 @@ void hl_array_clear(HiLowArray* arr) {
     // Reset length to 0, but keep the buffer for reuse (don't free arr->data)
     arr->length = 0;
 
-    // Fire watchers: CHANGED and DEEP get NULL delta; ADDED/REMOVED/MOVED do NOT fire
-    if (hl_stealth_depth == 0) {
-        for (HiLowCellWatcher* w = arr->cell.watchers; w != NULL; w = w->next) {
-                HiLowWatcher* state = w->watcher;
-            if (state != NULL && state->active && !state->ended) {
-                if (w->modifier == HL_ARR_CHANGED) {
-                    ((void(*)(void*, HiLowArray*, void*))w->body_fn)(w->env, arr, NULL);
-                }
-            }
-        }
+    // Phase 2c: one firing path. clear fires CHANGED only —
+    // ADDED/REMOVED/MOVED stay deliberately silent, which the event-match
+    // rule in hl_cell_notify gives for free.
+    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        hl_cell_notify(&arr->cell, HL_ARR_CHANGED, NULL);
     }
 }
 

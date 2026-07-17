@@ -51,13 +51,10 @@ const REJECTION_FIXTURES: &[&str] = &[
 /// populated this list — 17 programs — was fixed in Phase 1.5c "object
 /// ownership discipline". The §3.4(b)/(c)/(d) env-keying bugs were fixed in
 /// Phase 2a: watcher values subscribe at construction and unsubscribe at
-/// release, so scope-shape registration/unregistration holes are gone.)
-///
-/// Remaining entry: the §3.4(a) firing-ABI bug, which lives in the mutator
-/// firing loops that Phase 2c's one-notify-path rewrite replaces.
-const KNOWN_MEMORY_BUGS: &[&str] = &[
-    "watcher_move_capture_env.hl", // audit §3.4(a): both .move firing sites cast the body to a 2-arg env-less shape, so a capturing watcher reads the array pointer as its env → segfault; fixed in Phase 2c (one firing ABI)
-];
+/// release. The last entry — §3.4(a), the .move 2-arg env-dropping casts —
+/// was fixed in Phase 2c: all mutators fire through hl_cell_notify with the
+/// one (env, cell, delta) body ABI. EMPTY as of Phase 2c.)
+const KNOWN_MEMORY_BUGS: &[&str] = &[];
 
 fn collect_entries(dir: &Path, entries: &mut Vec<PathBuf>) {
     let mut files: Vec<PathBuf> = Vec::new();

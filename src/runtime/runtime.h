@@ -163,8 +163,34 @@ typedef struct HiLowFunction {
 // operations.
 // ---------------------------------------------------------------------------
 
+// Element function pointer type (Phase C; used by arrays and deltas)
+typedef void (*hl_elem_fn)(void*);
+
+// One mutation notification (Phase 2c). Self-contained and heap-owned —
+// QUEUEABLE: owns a copy of its payload bytes and (for object arrays) a
+// retained element reference; no pointers into array storage, caller
+// stacks, or static buffers. It can be stored and released at any later
+// time from any site via hl_delta_release. Phase 5 (queues) changes only
+// WHEN and WHERE bodies run and who calls hl_delta_release — not this
+// shape.
+typedef struct HiLowDelta {
+    int event;                  // HL_ARR_ADDED / REMOVED / CHANGED / MOVED
+    void* payload;              // heap-owned copy of the element bytes, or NULL
+    size_t payload_size;        // elem_size for element payloads, else 0
+    hl_elem_fn payload_release; // element release fn (object arrays), else NULL
+    size_t from, to;            // MOVED only, else 0
+} HiLowDelta;
+
+// Heap-copies elem_bytes; when retain_fn != NULL (object arrays) retains the
+// element reference. release_fn is stored for hl_delta_release.
+HiLowDelta* hl_delta_new_elem(int event, const void* elem_bytes, size_t elem_size,
+                              hl_elem_fn retain_fn, hl_elem_fn release_fn);
+HiLowDelta* hl_delta_new_moved(size_t from, size_t to);
+// Releases the object payload (if any), frees the byte copy, frees the delta.
+void hl_delta_release(HiLowDelta* d);
+
 // One subscription: a watcher value attached to a cell for one modifier.
-// body_fn's signature is the subscriber's business (cast at the firing site).
+// body_fn is a HiLowWatcherBody (one firing ABI as of Phase 2c).
 typedef struct HiLowCellWatcher {
     int modifier;                    // HL_ARR_ADDED / REMOVED / CHANGED / MOVED
     void* body_fn;
@@ -307,8 +333,14 @@ void hl_watcher_resume(HiLowWatcher* w);
 void hl_watcher_end(HiLowWatcher* w);
 bool hl_watcher_is_active(HiLowWatcher* w);
 
+// The one watcher-body ABI (Phase 2c): env-first, for every modifier. Bodies
+// borrow cell, delta, and the payload for the duration of the call; anything
+// kept beyond it must be copied/retained by the body. `cell` is the cell of
+// the container that mutated (containers embed the cell as first member).
+typedef void (*HiLowWatcherBody)(void* env, HiLowCell* cell, const HiLowDelta* delta);
+
 // Cell operations (Phase 2a). All take HiLowCell* — never a container type.
-// hl_cell_notify (the one firing path) is Phase 2c; the parent walk is 2d.
+// hl_cell_notify (the one firing path) landed in Phase 2c; the parent walk is 2d.
 void hl_cell_retain(HiLowCell* c);
 // Returns true when the refcount hit zero: the CALLER (the typed container)
 // then does its type-specific teardown and free. On zero this tears down the
@@ -320,15 +352,19 @@ bool hl_cell_release(HiLowCell* c);
 void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w);
 // Remove ALL of w's nodes from c and w's backrefs to c. Idempotent.
 void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w);
+// The ONE firing path (Phase 2c). No-op under stealth. One walk of
+// c->watchers in list order; a node fires iff its watcher is active and not
+// ended AND (its modifier == event OR its modifier == HL_ARR_CHANGED) — the
+// implicit-CHANGED rule: every mutation event is also a change. The delta is
+// borrowed by the callee; the caller releases it after this returns. May be
+// NULL for payload-less CHANGED-only notifications.
+void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta);
 
 // Watcher construction that registers by construction (Phase 2a): creates the
 // watcher AND subscribes it to n (HiLowCell*, int modifier) varargs pairs.
 // The ONLY way generated code attaches an array watcher — there is no
 // separate register call for codegen to forget.
 HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, int n, ...);
-
-// Element function pointer type (Phase C)
-typedef void (*hl_elem_fn)(void*);
 
 typedef struct HiLowArray {
     HiLowCell cell;                // cell header — MUST be first member (Phase 2a)
@@ -354,10 +390,12 @@ void* hl_array_get(HiLowArray* arr, size_t index); // returns pointer to element
 size_t hl_array_len(HiLowArray* arr);
 void* hl_array_pop(HiLowArray* arr);                // removes and returns pointer to the last element slot; decrements length
 void hl_array_set(HiLowArray* arr, size_t index, void* elem); // overwrites element at index with firing loop
-void* hl_array_remove(HiLowArray* arr, size_t index); // removes and returns element at index, shifting trailing elements down
+void hl_array_remove(HiLowArray* arr, size_t index, void* out); // removes element at index into caller-owned out (elem_size bytes), shifting trailing elements down
 void hl_array_insert(HiLowArray* arr, size_t index, void* elem); // inserts element at index, shifting trailing elements up
 
-// Phase 10-ε-γ: Moved watcher delta type (fixed layout compatible with Tuple(Usize, Usize))
+// Phase 10-ε-γ: moved-alias binding type (fixed layout compatible with
+// Tuple(Usize, Usize)). As of Phase 2c no longer a firing payload — bodies
+// construct it from HiLowDelta.from/.to for the alias binding.
 typedef struct {
     size_t _0;  // from index
     size_t _1;  // to index
@@ -367,8 +405,9 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element fr
 void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements and setting length to 0
 
 // Array watcher registration/unregistration lives on the cell as of Phase 2a:
-// subscription happens only inside hl_watcher_new_subscribed; env-keyed
-// removal is hl_cell_unsubscribe_env (see cell operations above).
+// subscription happens only inside hl_watcher_new_subscribed; removal happens
+// only through watcher release (hl_cell_unsubscribe_watcher — see cell
+// operations above). The env-keyed safety net died in Phase 2b.
 
 // Phase 7b-extension: Object is check
 bool hl_object_is(HiLowObject* child, HiLowObject* parent);

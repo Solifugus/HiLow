@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 2c — one firing ABI + value deltas: unify all eight mutator firing loops on the `(env, cell, delta)` call through a single notify helper; fix the `.move` 2-arg env-drop (§3.4(a)); replace both static temp_buffers with caller-owned/heap-copied deltas; move `hl_array_remove`'s return off the static buffer; un-ignore test_watcher_move_capture_env_integration and empty KNOWN_MEMORY_BUGS. The re-entrancy test stays ignored until Phase 5 (1.5d ruling supersedes the audit 2c note).**
+**Current phase: 2d — parent lists + deep: container cells get parent lists; `(deep)` subscription sets the deep-watched bit down the chain; mutators walk parents only when the bit is set. `(deep)` array syntax re-enters the language surface at 2d only (audit §5 item 3), gated on nested-container tests written as part of 2d. Zero-cost check required: un-deep-watched benchmarks or at minimum codegen-diff inspection showing no parent walk.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 
