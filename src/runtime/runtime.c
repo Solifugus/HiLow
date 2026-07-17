@@ -47,6 +47,15 @@ void print_nothing(void) {
 // Becomes thread-local in Phase 10b when async is added.
 int hl_stealth_depth = 0;
 
+// Phase 2d: deep-walk epoch. Each parent walk takes a fresh epoch and stamps
+// visited cells' version fields — diamonds (and any future cycles) collapse
+// to one visit per cell per walk.
+static uint64_t hl_deep_epoch = 0;
+
+// Phase 2d containment-bookkeeping helpers (defined with the array mutators).
+static void array_element_stored(HiLowArray* arr, void* slot);
+static void array_element_removed(HiLowArray* arr, void* slot);
+
 // Unknown type support (Phase 9b)
 
 // Internal helper for C string literals
@@ -858,6 +867,29 @@ void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
     }
 }
 
+// Containment backrefs (Phase 2d). One NON-OWNING entry per containment;
+// duplicates are deliberate (same child twice in one parent → two entries),
+// remove drops exactly one.
+void hl_cell_add_parent(HiLowCell* child, HiLowCell* parent) {
+    HiLowCellParent* node = malloc(sizeof(HiLowCellParent));
+    node->parent = parent;
+    node->next = child->parents;
+    child->parents = node;
+}
+
+void hl_cell_remove_parent(HiLowCell* child, HiLowCell* parent) {
+    HiLowCellParent** cur = &child->parents;
+    while (*cur) {
+        if ((*cur)->parent == parent) {
+            HiLowCellParent* dead = *cur;
+            *cur = dead->next;
+            free(dead);
+            return;
+        }
+        cur = &(*cur)->next;
+    }
+}
+
 // Value deltas (Phase 2c). Internal allocations deliberately do not touch
 // hl_alloc_count/hl_free_count: a delta is always balanced inside one
 // mutator call today (like arr->data reallocs); valgrind still sees them.
@@ -901,19 +933,60 @@ void hl_delta_release(HiLowDelta* d) {
     free(d);
 }
 
-// The ONE firing path (Phase 2c). Single walk in list order; implicit
-// CHANGED: every mutation event also fires (changed) watchers — this
-// mirrors the pre-2c per-mutator loops exactly (same nodes, same order).
-// The stealth check lives here, its single authoritative site (mutators
-// also consult it only to skip delta construction).
+// Phase 2d: recursively collect the not-yet-visited ancestors of c into a
+// growable list, stamping each with the current epoch on first visit.
+static void deep_collect_ancestors(HiLowCell* c, HiLowCell*** list, size_t* len, size_t* cap) {
+    for (HiLowCellParent* p = c->parents; p != NULL; p = p->next) {
+        HiLowCell* a = p->parent;
+        if (a->version == hl_deep_epoch) continue;  // diamond/cycle: already visited
+        a->version = hl_deep_epoch;
+        if (*len == *cap) {
+            *cap = (*cap == 0) ? 8 : (*cap * 2);
+            *list = realloc(*list, *cap * sizeof(HiLowCell*));
+        }
+        (*list)[(*len)++] = a;
+        deep_collect_ancestors(a, list, len, cap);
+    }
+}
+
+// The ONE firing path (Phase 2c; deep walk added 2d). Single walk in list
+// order; implicit CHANGED: every mutation event also fires (changed)
+// watchers — mirroring the pre-2c per-mutator loops exactly — and, as of
+// 2d, (deep) watchers on the mutated cell itself fire for every event.
+// Then the parent walk fires ancestors' (deep) subscribers only, with the
+// same delta. Collect-then-fire keeps the traversal atomic with respect to
+// body execution: a nested mutation inside a deep body starts its own walk
+// under a fresh epoch and cannot corrupt this one. The stealth check lives
+// here, its single authoritative site (mutators also consult it only to
+// skip delta construction) — stealth therefore suppresses deep fires too.
 void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
     if (hl_stealth_depth != 0) return;
     for (HiLowCellWatcher* node = c->watchers; node != NULL; node = node->next) {
         HiLowWatcher* state = node->watcher;
         if (state == NULL || !state->active || state->ended) continue;
-        if (node->modifier == event || node->modifier == HL_ARR_CHANGED) {
+        if (node->modifier == event || node->modifier == HL_ARR_CHANGED
+            || node->modifier == HL_ARR_DEEP) {
             ((HiLowWatcherBody)node->body_fn)(node->env, c, delta);
         }
+    }
+
+    // Parent walk (Phase 2d): zero cost unless someone deep-watches above.
+    if (c->deep_watched && c->parents != NULL) {
+        hl_deep_epoch++;
+        c->version = hl_deep_epoch;  // own deep nodes already fired above
+        HiLowCell** ancestors = NULL;
+        size_t len = 0, cap = 0;
+        deep_collect_ancestors(c, &ancestors, &len, &cap);
+        for (size_t i = 0; i < len; i++) {
+            for (HiLowCellWatcher* node = ancestors[i]->watchers; node != NULL; node = node->next) {
+                HiLowWatcher* state = node->watcher;
+                if (state == NULL || !state->active || state->ended) continue;
+                if (node->modifier == HL_ARR_DEEP) {
+                    ((HiLowWatcherBody)node->body_fn)(node->env, ancestors[i], delta);
+                }
+            }
+        }
+        free(ancestors);
     }
 }
 
@@ -2128,6 +2201,9 @@ void hl_array_release(HiLowArray* arr) {
         if (arr->release_fn != NULL) {
             for (size_t i = 0; i < arr->length; i++) {
                 void* slot = (char*)arr->data + (i * arr->elem_size);
+                // Phase 2d: parent death drops its containments' backrefs
+                // (symmetric unlink), before releasing the element
+                array_element_removed(arr, slot);
                 arr->release_fn(*(void**)slot);
             }
         }
@@ -2135,6 +2211,51 @@ void hl_array_release(HiLowArray* arr) {
         free(arr);
         hl_free_count++;
     }
+}
+
+// Phase 2d helpers. Element kind detection: codegen passes exactly
+// hl_array_retain for nested-array elements (objects get hl_object_retain,
+// strings/primitives NULL), so retain_fn identity is the discriminator.
+static bool elems_are_arrays(const HiLowArray* arr) {
+    return arr->retain_fn == (hl_elem_fn)hl_array_retain;
+}
+
+// A mutation needs notification when the cell has direct subscribers OR a
+// deep-watched ancestor may exist above it. Mutators use this only to skip
+// delta construction; hl_cell_notify remains the authoritative gate.
+static bool cell_has_audience(const HiLowCell* c) {
+    return c->watchers != NULL || (c->deep_watched && c->parents != NULL);
+}
+
+void hl_array_mark_deep(HiLowArray* arr) {
+    if (arr->cell.deep_watched) return;  // marked implies subtree marked
+    arr->cell.deep_watched = true;
+    if (elems_are_arrays(arr)) {
+        for (size_t i = 0; i < arr->length; i++) {
+            void* slot = (char*)arr->data + (i * arr->elem_size);
+            hl_array_mark_deep(*(HiLowArray**)slot);
+        }
+    }
+}
+
+// Containment-add bookkeeping (push/insert/set store paths): link the child
+// back to this parent and pull it into an already-deep-watched subtree.
+static void array_element_stored(HiLowArray* arr, void* slot) {
+    if (!elems_are_arrays(arr)) return;
+    HiLowArray* child = *(HiLowArray**)slot;
+    hl_cell_add_parent(&child->cell, &arr->cell);
+    if (arr->cell.deep_watched) {
+        hl_array_mark_deep(child);
+    }
+}
+
+// Containment-remove bookkeeping (pop/remove/set-overwrite/clear/teardown):
+// drop exactly one backref. The deep_watched bit is deliberately left set
+// (stale bit = wasted walk, never a wrong fire).
+static void array_element_removed(HiLowArray* arr, void* slot) {
+    if (!elems_are_arrays(arr)) return;
+    HiLowArray* child = *(HiLowArray**)slot;
+    hl_cell_remove_parent(&child->cell, &arr->cell);
 }
 
 void hl_array_push(HiLowArray* arr, void* elem) {
@@ -2155,10 +2276,13 @@ void hl_array_push(HiLowArray* arr, void* elem) {
 
     arr->length++;
 
+    // Phase 2d: containment backref + deep-bit propagation for array elements
+    array_element_stored(arr, dest);
+
     // Phase 2c: one firing path — construct a value delta, notify the cell.
     // The guard only skips delta construction; stealth is authoritatively
     // checked inside hl_cell_notify.
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         HiLowDelta* d = hl_delta_new_elem(HL_ARR_ADDED, dest, arr->elem_size,
                                           arr->retain_fn, arr->release_fn);
         hl_cell_notify(&arr->cell, HL_ARR_ADDED, d);
@@ -2194,8 +2318,11 @@ void* hl_array_pop(HiLowArray* arr) {
     // Get pointer to the now-removed element slot
     void* removed_slot = (char*)arr->data + (arr->length * arr->elem_size);
 
+    // Phase 2d: the element left this container — drop one backref
+    array_element_removed(arr, removed_slot);
+
     // Phase 2c: one firing path
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         HiLowDelta* d = hl_delta_new_elem(HL_ARR_REMOVED, removed_slot, arr->elem_size,
                                           arr->retain_fn, arr->release_fn);
         hl_cell_notify(&arr->cell, HL_ARR_REMOVED, d);
@@ -2218,6 +2345,10 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
     // Overwrite element at index
     void* dest = (char*)arr->data + (index * arr->elem_size);
 
+    // Phase 2d: the old element leaves this container — drop one backref
+    // (before release, while the pointer is still guaranteed valid)
+    array_element_removed(arr, dest);
+
     // Release the old element if this is an object array
     if (arr->release_fn != NULL) {
         arr->release_fn(*(void**)dest);
@@ -2230,9 +2361,12 @@ void hl_array_set(HiLowArray* arr, size_t index, void* elem) {
         arr->retain_fn(*(void**)dest);
     }
 
+    // Phase 2d: containment backref + deep-bit propagation for the new element
+    array_element_stored(arr, dest);
+
     // Phase 2c: one firing path. set fires CHANGED only (no size change);
     // payload-less, so no delta is constructed.
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         hl_cell_notify(&arr->cell, HL_ARR_CHANGED, NULL);
     }
 }
@@ -2251,6 +2385,9 @@ void hl_array_remove(HiLowArray* arr, size_t index, void* out) {
     void* removed_slot = (char*)arr->data + (index * arr->elem_size);
     memcpy(out, removed_slot, arr->elem_size);
 
+    // Phase 2d: the element left this container — drop one backref
+    array_element_removed(arr, out);
+
     // Shift elements [index+1 .. length-1] down by one
     if (index < arr->length - 1) {
         void* dest = (char*)arr->data + (index * arr->elem_size);
@@ -2263,7 +2400,7 @@ void hl_array_remove(HiLowArray* arr, size_t index, void* out) {
     arr->length--;
 
     // Phase 2c: one firing path
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         HiLowDelta* d = hl_delta_new_elem(HL_ARR_REMOVED, out, arr->elem_size,
                                           arr->retain_fn, arr->release_fn);
         hl_cell_notify(&arr->cell, HL_ARR_REMOVED, d);
@@ -2305,8 +2442,11 @@ void hl_array_insert(HiLowArray* arr, size_t index, void* elem) {
     // Increment length
     arr->length++;
 
+    // Phase 2d: containment backref + deep-bit propagation for array elements
+    array_element_stored(arr, dest);
+
     // Phase 2c: one firing path
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         HiLowDelta* d = hl_delta_new_elem(HL_ARR_ADDED, dest, arr->elem_size,
                                           arr->retain_fn, arr->release_fn);
         hl_cell_notify(&arr->cell, HL_ARR_ADDED, d);
@@ -2333,7 +2473,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
         // Still fire watchers with delta (documented choice: still fire).
         // Phase 2c: one firing path — the 2-arg env-dropping cast (§3.4(a))
         // is gone; bodies get the full (env, cell, delta) call.
-        if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+        if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
             HiLowDelta* d = hl_delta_new_moved(from, to);
             hl_cell_notify(&arr->cell, HL_ARR_MOVED, d);
             hl_delta_release(d);
@@ -2370,7 +2510,7 @@ void hl_array_move(HiLowArray* arr, size_t from, size_t to) {
     // No retain/release - same element, refcount unchanged
 
     // Phase 2c: one firing path (was the second §3.4(a) 2-arg cast site)
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         HiLowDelta* d = hl_delta_new_moved(from, to);
         hl_cell_notify(&arr->cell, HL_ARR_MOVED, d);
         hl_delta_release(d);
@@ -2385,6 +2525,8 @@ void hl_array_clear(HiLowArray* arr) {
     if (arr->release_fn != NULL) {
         for (size_t i = 0; i < arr->length; i++) {
             void* slot = (char*)arr->data + (i * arr->elem_size);
+            // Phase 2d: drop one backref per containment, before release
+            array_element_removed(arr, slot);
             arr->release_fn(*(void**)slot);
         }
     }
@@ -2395,7 +2537,7 @@ void hl_array_clear(HiLowArray* arr) {
     // Phase 2c: one firing path. clear fires CHANGED only —
     // ADDED/REMOVED/MOVED stay deliberately silent, which the event-match
     // rule in hl_cell_notify gives for free.
-    if (hl_stealth_depth == 0 && arr->cell.watchers != NULL) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&arr->cell)) {
         hl_cell_notify(&arr->cell, HL_ARR_CHANGED, NULL);
     }
 }

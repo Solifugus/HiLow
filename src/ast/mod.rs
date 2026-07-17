@@ -239,6 +239,7 @@ pub enum SubscriptionModifier {
     Added,
     Removed,
     Moved,
+    Deep,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -199,18 +199,27 @@ typedef struct HiLowCellWatcher {
     struct HiLowCellWatcher* next;
 } HiLowCellWatcher;
 
-// Parent-list node (dead until Phase 2d — field exists per the brief's header shape).
+// Parent-list node (live as of Phase 2d): one NON-OWNING entry per
+// containment of this cell's value inside a parent container. The same child
+// stored twice in one parent gets two entries; each removal removes exactly
+// one. Whichever side dies first unlinks (containment implies the parent
+// holds a refcount, so a contained child cannot die; parent teardown drops
+// its containments' entries).
 typedef struct HiLowCellParent {
-    struct HiLowCell* parent;
+    struct HiLowCell* parent;        // NOT owned
     struct HiLowCellParent* next;
 } HiLowCellParent;
 
 typedef struct HiLowCell {
     int refcount;
     HiLowCellWatcher* watchers;      // subscription list (live as of Phase 2a)
-    HiLowCellParent* parents;        // dead until 2d
-    uint64_t version;                // dead until later phases
-    bool deep_watched;               // dead until 2d
+    HiLowCellParent* parents;        // containment backrefs (live as of Phase 2d)
+    uint64_t version;                // deep-walk epoch stamp (Phase 2d): visited
+                                     // marking for cycle/diamond termination
+    bool deep_watched;               // set when this cell or any ancestor has a
+                                     // (deep) subscriber (Phase 2d); stale-true
+                                     // after unsubscribe is allowed (wasted
+                                     // walk, never a wrong fire)
 } HiLowCell;
 
 // Watcher value support (Phase 10-δ-α; subscription backrefs added Phase 2a)
@@ -352,13 +361,24 @@ bool hl_cell_release(HiLowCell* c);
 void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w);
 // Remove ALL of w's nodes from c and w's backrefs to c. Idempotent.
 void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w);
-// The ONE firing path (Phase 2c). No-op under stealth. One walk of
-// c->watchers in list order; a node fires iff its watcher is active and not
-// ended AND (its modifier == event OR its modifier == HL_ARR_CHANGED) — the
-// implicit-CHANGED rule: every mutation event is also a change. The delta is
-// borrowed by the callee; the caller releases it after this returns. May be
-// NULL for payload-less CHANGED-only notifications.
+// The ONE firing path (Phase 2c; deep walk added 2d). No-op under stealth
+// (which therefore suppresses deep fires too). One walk of c->watchers in
+// list order; a node fires iff its watcher is active and not ended AND (its
+// modifier == event OR == HL_ARR_CHANGED OR == HL_ARR_DEEP) — every mutation
+// event is also a change, and a (deep) subscriber on the mutated cell itself
+// fires for every mutation. Then, only when c->deep_watched and c has
+// parents, the parent walk: collect the unique ancestor set (epoch-stamped
+// via cell->version — diamonds and any future cycles terminate), then fire
+// ONLY each ancestor's HL_ARR_DEEP nodes with the SAME delta (one delta per
+// mutation) and the ancestor's own cell (the body binds the subscribed
+// variable's current value). The delta is borrowed by the callee; the caller
+// releases it after this returns. May be NULL for payload-less
+// CHANGED-only notifications.
 void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta);
+// Containment backref maintenance (Phase 2d). remove_parent removes exactly
+// ONE matching entry (duplicate containments carry duplicate entries).
+void hl_cell_add_parent(HiLowCell* child, HiLowCell* parent);
+void hl_cell_remove_parent(HiLowCell* child, HiLowCell* parent);
 
 // Watcher construction that registers by construction (Phase 2a): creates the
 // watcher AND subscribes it to n (HiLowCell*, int modifier) varargs pairs.
@@ -376,10 +396,12 @@ typedef struct HiLowArray {
     hl_elem_fn release_fn;         // NULL for primitive arrays, hl_object_release for object arrays
 } HiLowArray;
 
-// Array watcher modifier constants (Phase B scaffolding)
+// Array watcher modifier constants (Phase B scaffolding; DEEP added in
+// Phase 2d, filling the long-documented gap at 4)
 #define HL_ARR_ADDED 1
 #define HL_ARR_REMOVED 2
 #define HL_ARR_CHANGED 3
+#define HL_ARR_DEEP 4
 #define HL_ARR_MOVED 5
 
 HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn);
@@ -403,6 +425,14 @@ typedef struct {
 
 void hl_array_move(HiLowArray* arr, size_t from, size_t to); // moves element from index 'from' to index 'to'
 void hl_array_clear(HiLowArray* arr); // empties array by releasing all elements and setting length to 0
+
+// Phase 2d: set the deep-watched bit on arr and (recursively) every nested
+// array under it. Invariant: marked implies the entire subtree is marked —
+// both setters (subscription, containment-add into a marked parent) mark
+// full subtrees, so the early-return on an already-set bit is sound and
+// terminates diamonds. Clearing is deliberately not implemented (stale bit
+// = one wasted walk, never a wrong fire).
+void hl_array_mark_deep(HiLowArray* arr);
 
 // Array watcher registration/unregistration lives on the cell as of Phase 2a:
 // subscription happens only inside hl_watcher_new_subscribed; removal happens

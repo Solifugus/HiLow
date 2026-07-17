@@ -1,0 +1,14 @@
+high program(): i32 {
+    let inner = [1]
+    let mid = [inner]
+    let outer = [mid]
+    let wo = watcher((deep)outer) {
+        print("outer deep")
+    }
+    let wm = watcher((deep)mid) {
+        print("mid deep")
+    }
+    inner.push(2)
+    print("after")
+    return 0
+}

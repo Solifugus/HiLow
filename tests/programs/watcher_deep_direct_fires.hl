@@ -1,0 +1,12 @@
+high program(): i32 {
+    let xs = [1, 2]
+    let w = watcher((deep)xs) {
+        print("deep")
+        print(xs.length)
+    }
+    xs.push(3)
+    xs[0] = 9
+    xs.pop()
+    print("after")
+    return 0
+}

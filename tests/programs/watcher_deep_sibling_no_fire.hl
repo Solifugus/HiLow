@@ -1,0 +1,15 @@
+high program(): i32 {
+    let a = [1]
+    let b = [2]
+    let outer = [a, b]
+    let wouter = watcher((deep)outer) {
+        print("outer fired")
+    }
+    let wb = watcher((deep)b) {
+        print("b fired")
+    }
+    a.push(3)
+    b.push(4)
+    print("after")
+    return 0
+}

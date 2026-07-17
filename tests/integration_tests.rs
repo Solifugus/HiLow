@@ -5295,3 +5295,95 @@ fn test_watcher_move_noop_capture_env_integration() {
 
     let _ = fs::remove_file(&executable);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2d: parent lists + (deep) propagation, arrays only. The (deep)
+// surface syntax re-entered the language this phase (audit §5 item 3),
+// gated on these nested-container tests.
+// ---------------------------------------------------------------------------
+
+fn run_deep_fixture(name: &str) {
+    let program = format!("tests/programs/{}.hl", name);
+    let expected_path = format!("tests/expected/{}.txt", name);
+    let executable = compile_program(&program)
+        .unwrap_or_else(|e| panic!("Failed to compile {}: {:?}", name, e));
+
+    let expected_output = fs::read_to_string(&expected_path)
+        .expect("Failed to read expected output file");
+
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .unwrap_or_else(|e| panic!("Failed to run {}: {:?}", name, e));
+
+    assert_eq!(exit_code, 0, "{} should exit with code 0", name);
+    assert!(stderr.is_empty(), "No stderr output expected from {}, got: {}", name, stderr);
+    assert_eq!(stdout.trim(), expected_output.trim(), "{} stdout should match expected output", name);
+
+    let _ = fs::remove_file(&executable);
+}
+
+// A (deep) watcher on the mutated array itself fires for every mutation
+// (spec: "fires when items.push(x), items[0] = y, etc.").
+#[test]
+fn test_watcher_deep_direct_fires_integration() {
+    run_deep_fixture("watcher_deep_direct_fires");
+}
+
+// Innermost mutation fires the middle and outermost deep watchers via the
+// multi-hop parent walk, inner-to-outer.
+#[test]
+fn test_watcher_deep_nested_fires_integration() {
+    run_deep_fixture("watcher_deep_nested_fires");
+}
+
+// The parent walk only goes UP: mutating a's content fires outer's deep
+// watcher but never the sibling b's.
+#[test]
+fn test_watcher_deep_sibling_no_fire_integration() {
+    run_deep_fixture("watcher_deep_sibling_no_fire");
+}
+
+// The same child stored twice in one parent (two parent-list entries by the
+// duplicate policy) fires the parent's deep watcher exactly ONCE per
+// mutation — the walk's epoch stamp collapses revisits. This is the
+// realizable stand-in for the self-containing-array cycle test: a truly
+// self-containing array is unrepresentable in the type system (no recursive
+// types), and this exercises the identical termination mechanism.
+#[test]
+fn test_watcher_deep_diamond_single_fire_integration() {
+    run_deep_fixture("watcher_deep_diamond_single_fire");
+}
+
+// w.end() stops deep fires; the deliberately-stale deep_watched bit costs a
+// silent walk, never a fire (clearing is deferred — STATUS.md).
+#[test]
+fn test_watcher_deep_unsubscribe_stops_integration() {
+    run_deep_fixture("watcher_deep_unsubscribe_stops");
+}
+
+// stealth {} suppresses deep fires via hl_cell_notify's single stealth gate.
+#[test]
+fn test_watcher_deep_stealth_suppressed_integration() {
+    run_deep_fixture("watcher_deep_stealth_suppressed");
+}
+
+// A child pushed into an already-deep-watched subtree is marked on entry;
+// its later mutations walk up and fire.
+#[test]
+fn test_watcher_deep_new_child_marked_integration() {
+    run_deep_fixture("watcher_deep_new_child_marked");
+}
+
+// Phase 2d boundary: (deep) on a non-array is rejected until other values
+// gain the cell header (scalars: Phase 3 boxing; objects: unscheduled).
+#[test]
+fn test_watcher_deep_scalar_rejected() {
+    let result = compile_program("tests/programs/watcher_deep_scalar_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for (deep) on a scalar");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("(deep) modifier requires an array type in this phase")
+            && msg.contains("Phase 3 (boxing)"),
+        "Expected the deep-on-scalar diagnostic citing Phase 3, got: {}",
+        msg
+    );
+}

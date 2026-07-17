@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 2d — parent lists + deep: container cells get parent lists; `(deep)` subscription sets the deep-watched bit down the chain; mutators walk parents only when the bit is set. `(deep)` array syntax re-enters the language surface at 2d only (audit §5 item 3), gated on nested-container tests written as part of 2d. Zero-cost check required: un-deep-watched benchmarks or at minimum codegen-diff inspection showing no parent walk.**
+**Current phase: 3a — boxing analysis: compile-time pass marking variables that are ever subscribed (decl-form, expression-form, or captured-into-watcher). No codegen change yet; expose as a queryable attribute + unit tests on the analysis. Gate: full suite, no behavior change.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

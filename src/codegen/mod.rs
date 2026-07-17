@@ -2852,6 +2852,15 @@ impl CodeGenerator {
                                 });
                             }
                         }
+                        SubscriptionModifier::Deep => {
+                            // Phase 2d: deep supported for arrays only
+                            if !is_array {
+                                return Err(CodegenError::UnsupportedFeature {
+                                    feature: format!("watcher modifier {:?} on non-array type", subscription.modifier),
+                                    phase: "deep watching applies to arrays until other values gain the cell header".to_string(),
+                                });
+                            }
+                        }
                     }
                 }
 
@@ -3121,9 +3130,15 @@ impl CodeGenerator {
                             SubscriptionModifier::Added => "HL_ARR_ADDED",
                             SubscriptionModifier::Removed => "HL_ARR_REMOVED",
                             SubscriptionModifier::Moved => "HL_ARR_MOVED",
+                            SubscriptionModifier::Deep => "HL_ARR_DEEP",
                             _ => continue, // rejected by validation above
                         };
                         let arr_var = self.mangle_variable_name(&subscription.variable_name);
+                        if matches!(subscription.modifier, SubscriptionModifier::Deep) {
+                            // Phase 2d: a (deep) subscription marks the whole
+                            // subtree deep-watched so nested mutations walk up.
+                            self.pending_statement_decls.push(format!("hl_array_mark_deep({});", arr_var));
+                        }
                         sub_args.push_str(&format!(", &{}->cell, {}", arr_var, c_modifier));
                         n_subs += 1;
                     }
@@ -7481,7 +7496,8 @@ impl CodeGenerator {
                     // These are supported
                 }
                 SubscriptionModifier::Added |
-                SubscriptionModifier::Removed | SubscriptionModifier::Moved => {
+                SubscriptionModifier::Removed | SubscriptionModifier::Moved |
+                SubscriptionModifier::Deep => {
                     return Err(CodegenError::UnsupportedFeature {
                         feature: format!("watcher modifier {:?}", subscription.modifier),
                         phase: "future phase: mutation-modifier semantics".to_string(),

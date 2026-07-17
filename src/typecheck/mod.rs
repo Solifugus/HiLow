@@ -683,6 +683,20 @@ impl TypeChecker {
                     None
                 }
             }
+            Deep => {
+                // Phase 2d: arrays only until other values gain the cell header.
+                // The parameter binds the subscribed variable's current full value.
+                if matches!(outer_type, Type::DynamicArray(_)) {
+                    Some(outer_type.clone())
+                } else {
+                    self.add_error(
+                        format!("(deep) modifier requires an array type in this phase, got '{}' — deep watching of scalars lands with Phase 3 (boxing); objects are unscheduled (see STATUS.md)",
+                            self.type_name(outer_type)),
+                        position.clone()
+                    );
+                    None
+                }
+            }
         }
     }
 

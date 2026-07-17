@@ -1,0 +1,7 @@
+high program(): i32 {
+    let x = 5
+    let w = watcher((deep)x) {
+        print("nope")
+    }
+    return 0
+}

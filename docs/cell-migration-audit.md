@@ -505,7 +505,41 @@ point of deleting-with-confidence.
   only when the bit is set. New tests: nested-array deep watch (§4.4 gap —
   currently untestable because deep on nested arrays doesn't exist). *Gate:
   full suite + new deep tests; zero-cost check = un-deep-watched benchmarks
-  or at minimum codegen-diff inspection showing no walk.*
+  or at minimum codegen-diff inspection showing no walk.* (Landed 2026-07-17,
+  arrays only, per the approved plan. Parent links live on the CHILD:
+  non-owning `HiLowCellParent` entries, one per containment, duplicates
+  deliberate (same child twice in one parent → two entries; removal drops
+  exactly one; the walk's epoch stamp, not entry uniqueness, prevents
+  double-fire). Maintained at every containment change — push/insert/set
+  add, pop/remove/set-overwrite/clear/parent-teardown remove one each,
+  before any release; move is reorder-only. Element kind detected by
+  retain_fn identity (codegen passes hl_array_retain for `[[T]]`). Cycle/
+  diamond termination: the dead `version` field became the walk epoch stamp;
+  the walk is collect-then-fire, so nested mutation inside a deep body runs
+  its own walk under a fresh epoch without corrupting the outer traversal.
+  A TRULY self-containing array is unrepresentable (no recursive types) —
+  adjudicated via the plan: the diamond fixture pins single-fire through the
+  identical revisit-suppression path. deep_watched set at subscription
+  (codegen hoists `hl_array_mark_deep`, which recurses the subtree and
+  early-returns on a set bit) and on containment-add into a marked parent;
+  CLEARING IS DEFERRED — a stale bit is one wasted silent walk, never a
+  wrong fire (STATUS.md Known issues). `hl_cell_notify` gained the deep
+  semantics: own-list nodes also fire on modifier == HL_ARR_DEEP (a deep
+  subscriber on the mutated cell fires for every event, per spec), then
+  ancestors fire ONLY their deep nodes with the SAME delta (one delta per
+  mutation) and their own cell (body binds the subscribed variable). Stealth
+  suppresses deep fires via notify's existing single gate (pinned).
+  `HL_ARR_DEEP 4` fills the documented constant gap. Surface re-admitted per
+  §5 item 3: parser word, typecheck arm (arrays-only diagnostic; alias-on-
+  deep rejected by the existing added/removed/moved-only rule — precise deep
+  deltas deferred per the brief's "optional alias data"). SCOPE ADJUDICATION
+  (via the plan): the audit is silent on which phase OBJECTS embed the cell
+  header — deep crosses array-in-array only; object-held arrays do not
+  propagate; recorded as a STATUS.md open question needing a user scheduling
+  decision. Zero-cost check: generated C for a non-deep array program is
+  byte-identical pre/post-2d (worktree diff); unwatched mutation cost is one
+  bit+pointer check in `cell_has_audience`. Seven live deep fixtures + one
+  rejection fixture; integration 269→277.)
 
 ### Phase 3 — scalars
 

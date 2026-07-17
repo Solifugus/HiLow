@@ -39,6 +39,7 @@ const REJECTION_FIXTURES: &[&str] = &[
     "optional_bool_let_rejected.hl",                 // is_err test test_optional_bool_let_rejected — same adjudication
     "optional_return_mismatch_rejected.hl",          // is_err test test_optional_return_mismatch_rejected — narrow optional-return type check (Phase 2b step zero)
     "watcher_capture_escape_rejected.hl",            // is_err test test_watcher_capture_escape_rejected — capture-escape rejected until Phase 3 boxing (Phase 2b)
+    "watcher_deep_scalar_rejected.hl",               // is_err test test_watcher_deep_scalar_rejected — (deep) is arrays-only until other values gain the cell header (Phase 2d)
 ];
 
 /// Programs with a KNOWN, adjudicated memory bug: they compile and run, but
