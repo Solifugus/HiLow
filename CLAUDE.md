@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 3a — boxing analysis: compile-time pass marking variables that are ever subscribed (decl-form, expression-form, or captured-into-watcher). No codegen change yet; expose as a queryable attribute + unit tests on the analysis. Gate: full suite, no behavior change.**
+**Current phase: 3b — hl_cell_set: boxed scalars (per the 3a analysis) lower to cells; assignment to them becomes hl_cell_set (equality check + notify); delete the scalar firing block; unwatched variables stay raw C locals (zero-cost check on generated C, now byte-diffable). Per audit §5 item 1 the escape-rejection tests drop in this commit with a sound-escape demonstration. Gate: full suite; changed/assigned and stealth scalar tests are the sentinels.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

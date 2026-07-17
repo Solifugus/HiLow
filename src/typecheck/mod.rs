@@ -4,6 +4,8 @@ use crate::lexer::Position;
 use crate::qualifiers::{QualifierRegistry, QualifierContext, CodegenStatus};
 use std::collections::{HashMap, HashSet};
 
+pub mod boxing;   // Phase 3a: boxing analysis (queryable attribute; consumed by 3b)
+
 /// Symbol table entry for a variable
 #[derive(Debug, Clone)]
 struct Symbol {

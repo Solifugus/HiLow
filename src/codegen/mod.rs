@@ -7130,6 +7130,9 @@ impl CodeGenerator {
             }
         }
 
+        // Phase 3a: sort for byte-stable generated C (see emit_early_return_cleanup)
+        vars_to_release.sort();
+
         // Emit release calls in reverse order (LIFO scope cleanup)
         for var_name in vars_to_release.iter().rev() {
             if let Some((heap_type, _)) = self.heap_owners.get(var_name) {
@@ -7237,6 +7240,9 @@ impl CodeGenerator {
             temps_to_release.push((temp_name.clone(), heap_type.clone()));
         }
 
+        // Phase 3a: sort for byte-stable generated C (temp_owners is a HashMap)
+        temps_to_release.sort_by(|a, b| a.0.cmp(&b.0));
+
         // Emit release calls in reverse order (LIFO cleanup)
         for (temp_name, heap_type) in temps_to_release.iter().rev() {
             self.emit_temp_release(temp_name, heap_type);
@@ -7253,11 +7259,19 @@ impl CodeGenerator {
     /// a LoopFrame's temp_frame_base for break/continue.
     fn emit_enclosing_temp_releases(&mut self, from_frame: usize) {
         let from_frame = from_frame.min(self.enclosing_temp_frames.len());
+        // Phase 3a: frames are ordered (a Vec), but each frame is a saved
+        // temp_owners HashMap — sort within each frame for byte-stable
+        // generated C.
         let releases: Vec<(String, HeapType)> = self.enclosing_temp_frames[from_frame..]
             .iter()
             .rev()
             .flat_map(|frame| {
-                frame.iter().map(|(name, (heap_type, _))| (name.clone(), heap_type.clone()))
+                let mut entries: Vec<(String, HeapType)> = frame
+                    .iter()
+                    .map(|(name, (heap_type, _))| (name.clone(), heap_type.clone()))
+                    .collect();
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                entries
             })
             .collect();
         for (temp_name, heap_type) in &releases {
@@ -7276,6 +7290,12 @@ impl CodeGenerator {
                 vars_to_release.push(var_name.clone());
             }
         }
+
+        // Phase 3a: heap_owners is a HashMap, so collection order is
+        // nondeterministic per process — sort by name so generated C is
+        // byte-stable across compiler runs. Release order within one cleanup
+        // block is semantically order-independent (2a symmetric unlink).
+        vars_to_release.sort();
 
         // Emit release calls in reverse order (LIFO scope cleanup)
         for var_name in vars_to_release.iter().rev() {

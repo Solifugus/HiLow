@@ -621,6 +621,51 @@ point of deleting-with-confidence.
   subscribed (decl-form, expression-form, or captured-into-watcher). No
   codegen change yet; expose as a queryable attribute + unit tests on the
   analysis. *Gate: full suite (no behavior change).*
+  (Landed 2026-07-17 per the approved plan. CRITERION, as an invariant: a
+  declaration D boxes iff (a) some subscription — either form — resolves to
+  D, or (b) some watcher body references D (read OR write) across the
+  watcher boundary. Conservative-correct: failing to box is a soundness
+  bug, boxing unnecessarily only a performance bug — when uncertain, box.
+  (b) covers §5 item 1's escape soundness with no dataflow: expression-form
+  watcher values are first-class (incl. the 2b laundering hole), and
+  decl-form watcher NAMES are also declared as first-class Watcher-typed
+  variables today, so both forms' captures box; narrow decl-form in 3c if
+  its runtime lifecycle pins scope-boundness. Function-expression closures
+  are NOT watchers and don't box captures — unless nested inside a watcher
+  body, where the boundary check still fires. Type-agnostic: marks
+  DECLARATIONS; the mark is subsumed for containers (already cells); 3b
+  applies it to scalars only. REPRESENTATION (design statement for 3b —
+  nothing built in 3a): boxed scalar = HiLowCell header + {kind, payload
+  union}, cell first member so notify/subscribe/parent machinery apply
+  unchanged; ONE payload representation serves both boxed scalars and the
+  §5 item 7 optional payload matrix — HiLowOptional's HL_OPT_* kinds
+  converge onto it, and the 2b allow-list rejection lifts as kinds land.
+  THE 2E CAPTURE FINDING: 3a provably does NOT inherit it — the analysis
+  never reads WatcherExpr.captures; it re-derives references with its own
+  shadow-correct resolver (subscription bindings, aliases, params, and
+  body-local lets shadow outer names), pinned by three shadowing tests
+  including the body-local-let case the legacy scan gets wrong. Not fixed
+  either: the buggy scan feeds live codegen env packing (behavior-change
+  out of gate) and is deleted/rewritten with its machinery in 3b–3d.
+  IMPLEMENTATION: src/typecheck/boxing.rs — standalone AST walker, own
+  scope stack, watcher-boundary indices; queryable BoxingAnalysis
+  {is_boxed(name, decl_pos), decisions_for(name) in declaration order,
+  boxed_count}; not wired into the compile pipeline (nothing consumes it
+  until 3b). 14 tests in tests/boxing_analysis_tests.rs, every one
+  asserting concrete decisions: unboxed (plain, closure-capture),
+  subscription both forms, capture read + capture WRITE (assignment
+  targets are references), the laundering escape, three shadowing pins,
+  container subsumption, alias non-boxing, nested-watcher crossing — all
+  passed on first run against invariant-derived expectations.
+  DETERMINISTIC EMISSION (the 2e-discovered nondeterminism, fixed here):
+  FOUR emitting iteration sites over HashMaps, not the planned three —
+  emit_scope_cleanup and emit_early_return_cleanup (heap_owners),
+  emit_temp_cleanup (temp_owners), and emit_enclosing_temp_releases
+  (per-frame saved temp_owners maps, found during implementation) — all
+  now collect-sort-by-name-emit. Generated C verified byte-identical
+  across 5 runs each on 4 multi-owner programs incl. the one that
+  permuted in 2e; byte-diff verifiability restored for 3b's zero-cost
+  checks. Full ritual green, integration 293/0/2 unchanged, gate green.)
 - **3b hl_cell_set.** Boxed scalars lower to cells; assignment to them becomes
   `hl_cell_set`; delete the scalar firing block (1999–2136). Unwatched
   variables stay raw locals — verify by inspecting generated C for an
@@ -746,3 +791,12 @@ named and are not to be re-litigated.
    were previously unconstructible from user functions) with a hard error
    default; the refined-access raw-variable fallback became a hard error,
    with a money arm added.
+8. **Dynamic property addition (adjudicated 2026-07-17, recorded as step zero
+   of Phase 3a): design direction is OPEN-SHAPE OBJECT TYPES.** An object
+   type may declare an open tail; dynamic property reads on an open object
+   type as `T?`, yielding `unknown` with a reason when the property is
+   absent; `(added)` subscriptions become legal only on open objects. Phase
+   UNSCHEDULED: post-migration, alongside the string-literal revision. Until
+   it lands, the Phase 2e rejections stand — `(added)obj` stays a
+   compile-time diagnostic, and the runtime's new-key → ADDED mapping
+   (already implemented in 2e) stays surface-unreachable.

@@ -1,0 +1,449 @@
+//! Phase 3a: boxing analysis.
+//!
+//! Compile-time pass computing which variable declarations must box into
+//! cells when scalar lowering lands (Phase 3b). The criterion, stated as an
+//! invariant:
+//!
+//! > A variable declaration D is marked boxed iff (a) some subscription —
+//! > decl-form or expression-form — resolves to D, or (b) some watcher body
+//! > contains a reference (read or write) that resolves to D from outside
+//! > that watcher's own scope.
+//!
+//! Conservative-correct direction: failing to box is a soundness bug; boxing
+//! unnecessarily is only a performance bug — when uncertain, box. (b) covers
+//! the escape-soundness requirement (audit §5 item 1) with no dataflow
+//! analysis: expression-form watcher values are first-class and can escape
+//! (including through the known 2b laundering hole), and decl-form watcher
+//! names are also declared as first-class Watcher-typed variables today, so
+//! scope-boundness is not provable for either form — captures from both
+//! forms box. Function-expression closures are NOT watchers and do not box
+//! their captures — unless the closure itself sits inside a watcher body, in
+//! which case its outer references still cross the watcher boundary and box.
+//!
+//! The analysis is type-agnostic: it marks DECLARATIONS, not types. For
+//! containers (arrays, objects, strings) the mark is subsumed — they already
+//! ARE cells — and Phase 3b applies the attribute to scalars only.
+//!
+//! This walker deliberately does NOT read `WatcherExpr.captures`: that list
+//! is produced by the legacy scan (`find_variable_in_outer_scope`), which
+//! ignores shadowing and therefore records subscribed names as captures (the
+//! Phase 2e finding). The resolver here maintains its own scope stack in
+//! which subscription bindings, aliases, params, and body-local lets shadow
+//! outer names correctly — pinned by the shadowing tests in
+//! tests/boxing_analysis_tests.rs.
+
+use crate::ast::*;
+use crate::lexer::Position;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxReason {
+    /// A subscription (decl-form or expression-form) targets this declaration.
+    Subscribed,
+    /// A watcher body references this declaration across the watcher boundary.
+    WatcherCaptured,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoxDecision {
+    pub name: String,
+    pub position: Position,
+    pub boxed: bool,
+    pub reason: Option<BoxReason>,
+}
+
+/// Result of the analysis: one decision per variable declaration, in
+/// encounter (declaration) order.
+#[derive(Debug, Default)]
+pub struct BoxingAnalysis {
+    decisions: Vec<BoxDecision>,
+}
+
+impl BoxingAnalysis {
+    /// Query by declaration identity (name + declaration position).
+    pub fn is_boxed(&self, name: &str, decl_pos: &Position) -> bool {
+        self.decisions
+            .iter()
+            .any(|d| d.boxed && d.name == name && d.position == *decl_pos)
+    }
+
+    /// All decisions for declarations of `name`, in declaration order —
+    /// shadowing tests assert by index instead of hardcoding positions.
+    pub fn decisions_for(&self, name: &str) -> Vec<&BoxDecision> {
+        self.decisions.iter().filter(|d| d.name == name).collect()
+    }
+
+    pub fn boxed_count(&self) -> usize {
+        self.decisions.iter().filter(|d| d.boxed).count()
+    }
+
+    pub fn decisions(&self) -> &[BoxDecision] {
+        &self.decisions
+    }
+}
+
+/// Run the analysis over a type-checked program. The walker resolves names
+/// itself, so it has no dependency on the checker's transient scope state;
+/// callers run it after `TypeChecker::check` succeeds (the analysis is
+/// meaningless for programs that don't typecheck).
+pub fn analyze(top_level: &TopLevel) -> BoxingAnalysis {
+    let mut a = Analyzer {
+        result: BoxingAnalysis::default(),
+        scopes: Vec::new(),
+        watcher_boundaries: Vec::new(),
+    };
+    a.push_scope();
+    match top_level {
+        TopLevel::Program(p) => a.walk_program(p),
+        TopLevel::Module(m) => a.walk_module(m),
+    }
+    a.pop_scope();
+    a.result
+}
+
+struct Analyzer {
+    result: BoxingAnalysis,
+    /// name -> decision index, innermost scope last. Keyed lookups only —
+    /// no iteration, so map order can't leak into results.
+    scopes: Vec<HashMap<String, usize>>,
+    /// Scope-stack index of each enclosing watcher's own scope. A reference
+    /// resolving to a scope BELOW the innermost boundary crosses out of that
+    /// watcher and boxes its target. (Resolutions inside the innermost
+    /// watcher are also inside every outer one, so one check suffices.)
+    watcher_boundaries: Vec<usize>,
+}
+
+impl Analyzer {
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn declare(&mut self, name: &str, position: &Position) {
+        let idx = self.result.decisions.len();
+        self.result.decisions.push(BoxDecision {
+            name: name.to_string(),
+            position: position.clone(),
+            boxed: false,
+            reason: None,
+        });
+        self.scopes
+            .last_mut()
+            .expect("analyzer scope stack is never empty")
+            .insert(name.to_string(), idx);
+    }
+
+    /// Innermost declaration of `name`, with the scope index it lives in.
+    fn resolve(&self, name: &str) -> Option<(usize, usize)> {
+        for (scope_idx, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(&decl_idx) = scope.get(name) {
+                return Some((decl_idx, scope_idx));
+            }
+        }
+        None
+    }
+
+    fn mark(&mut self, decl_idx: usize, reason: BoxReason) {
+        let d = &mut self.result.decisions[decl_idx];
+        d.boxed = true;
+        if d.reason.is_none() {
+            d.reason = Some(reason);
+        }
+    }
+
+    /// A subscription targets the declaration visible in the scope OUTSIDE
+    /// the watcher (call before pushing the watcher scope).
+    fn mark_subscription(&mut self, sub: &Subscription) {
+        if let Some((decl_idx, _)) = self.resolve(&sub.variable_name) {
+            self.mark(decl_idx, BoxReason::Subscribed);
+        }
+        // Unresolved: typecheck already errored; nothing to mark.
+    }
+
+    /// An identifier use. Boxes its declaration iff the reference crosses
+    /// the innermost enclosing watcher boundary.
+    fn reference(&mut self, name: &str) {
+        if let Some((decl_idx, scope_idx)) = self.resolve(name) {
+            if let Some(&boundary) = self.watcher_boundaries.last() {
+                if scope_idx < boundary {
+                    self.mark(decl_idx, BoxReason::WatcherCaptured);
+                }
+            }
+        }
+    }
+
+    // --- top-level -------------------------------------------------------
+
+    fn walk_program(&mut self, p: &Program) {
+        for param in &p.params {
+            self.declare(&param.name, &param.position);
+        }
+        if let Some(body) = &p.body {
+            self.walk_items(&body.items);
+        }
+    }
+
+    fn walk_module(&mut self, m: &Module) {
+        for l in &m.lets {
+            self.walk_let(l);
+        }
+        for f in &m.items {
+            self.walk_function(f);
+        }
+        for w in &m.watchers {
+            self.walk_decl_watcher(w);
+        }
+    }
+
+    // --- declarations and blocks ----------------------------------------
+
+    fn walk_items(&mut self, items: &[BlockItem]) {
+        for item in items {
+            match item {
+                BlockItem::Statement(s) => self.walk_statement(s),
+                BlockItem::Function(f) => self.walk_function(f),
+                BlockItem::Watcher(w) => self.walk_decl_watcher(w),
+            }
+        }
+    }
+
+    fn walk_block(&mut self, block: &Block) {
+        self.push_scope();
+        self.walk_items(&block.items);
+        self.pop_scope();
+    }
+
+    fn walk_let(&mut self, l: &LetDecl) {
+        // Initializer first: it sees the OUTER binding of a shadowed name.
+        if let Some(init) = &l.initializer {
+            self.walk_expression(init);
+        }
+        match &l.pattern {
+            LetPattern::Identifier(name, _) => self.declare(name, &l.position),
+            LetPattern::Tuple(names) => {
+                for name in names {
+                    self.declare(name, &l.position);
+                }
+            }
+        }
+    }
+
+    fn walk_function(&mut self, f: &Function) {
+        self.push_scope();
+        for param in &f.params {
+            self.declare(&param.name, &param.position);
+        }
+        if let Some(body) = &f.body {
+            self.walk_items(&body.items);
+        }
+        self.pop_scope();
+    }
+
+    /// Decl-form watcher: subscriptions resolve outside; the name itself is
+    /// a Watcher-typed variable in the enclosing scope; body references
+    /// crossing the boundary box (scope-boundness is not provable — the
+    /// name is first-class today; narrow in 3c if its lifecycle pins it).
+    fn walk_decl_watcher(&mut self, w: &Watcher) {
+        self.declare(&w.name, &w.position);
+        for sub in &w.subscriptions {
+            self.mark_subscription(sub);
+        }
+        self.push_scope();
+        self.watcher_boundaries.push(self.scopes.len() - 1);
+        for sub in &w.subscriptions {
+            self.declare(&sub.variable_name, &sub.position);
+            if let Some(alias) = &sub.alias {
+                self.declare(alias, &sub.position);
+            }
+        }
+        self.walk_items(&w.body.items);
+        self.watcher_boundaries.pop();
+        self.pop_scope();
+    }
+
+    fn walk_watcher_expr(&mut self, w: &WatcherExpr) {
+        for sub in &w.subscriptions {
+            self.mark_subscription(sub);
+        }
+        self.push_scope();
+        self.watcher_boundaries.push(self.scopes.len() - 1);
+        for sub in &w.subscriptions {
+            self.declare(&sub.variable_name, &sub.position);
+            if let Some(alias) = &sub.alias {
+                self.declare(alias, &sub.position);
+            }
+        }
+        self.walk_items(&w.body.items);
+        self.watcher_boundaries.pop();
+        self.pop_scope();
+    }
+
+    // --- statements ------------------------------------------------------
+
+    fn walk_statement(&mut self, s: &Statement) {
+        match s {
+            Statement::Let(l) => self.walk_let(l),
+            Statement::Return(r) => {
+                if let Some(v) = &r.value {
+                    self.walk_expression(v);
+                }
+            }
+            Statement::If(i) => {
+                self.walk_expression(&i.condition);
+                self.walk_block(&i.then_block);
+                if let Some(e) = &i.else_block {
+                    self.walk_block(e);
+                }
+            }
+            Statement::While(w) => {
+                self.walk_expression(&w.condition);
+                self.walk_block(&w.body);
+            }
+            Statement::Loop(l) => self.walk_block(&l.body),
+            Statement::ForIn(f) => {
+                self.walk_expression(&f.iterable);
+                self.push_scope();
+                self.declare(&f.key_name, &f.position);
+                self.declare(&f.value_name, &f.position);
+                self.walk_items(&f.body.items);
+                self.pop_scope();
+            }
+            Statement::Switch(sw) => {
+                self.walk_expression(&sw.value);
+                for case in &sw.cases {
+                    self.push_scope();
+                    for st in &case.body {
+                        self.walk_statement(st);
+                    }
+                    self.pop_scope();
+                }
+                if let Some(default) = &sw.default {
+                    self.push_scope();
+                    for st in default {
+                        self.walk_statement(st);
+                    }
+                    self.pop_scope();
+                }
+            }
+            Statement::Break(_) | Statement::Continue(_) => {}
+            Statement::Assign(a) => {
+                // Assignment targets count as references: a watcher body
+                // writing an outer variable needs it boxed just as a read does.
+                self.walk_expression(&a.target);
+                self.walk_expression(&a.value);
+            }
+            Statement::QualifiedOp(q) => {
+                self.walk_expression(&q.lhs);
+                self.walk_expression(&q.rhs);
+                for spec in &q.qualifiers {
+                    if let Some(arg) = &spec.arg {
+                        self.walk_expression(arg);
+                    }
+                }
+            }
+            Statement::StealthBlock(b, _) => self.walk_block(b),
+            Statement::ExprStatement(e) => self.walk_expression(e),
+        }
+    }
+
+    // --- expressions -----------------------------------------------------
+
+    fn walk_expression(&mut self, e: &Expression) {
+        match e {
+            Expression::Ident { name, .. } => self.reference(name),
+            Expression::This(_) => {}
+            Expression::IntLit(..)
+            | Expression::FloatLit(..)
+            | Expression::StringLit(..)
+            | Expression::DurationLit(..)
+            | Expression::MoneyLit(..)
+            | Expression::BoolLit(..)
+            | Expression::Nothing(_) => {}
+            Expression::FString(f) => {
+                for part in &f.parts {
+                    if let FStringPart::Expression(expr, _) = part {
+                        self.walk_expression(expr);
+                    }
+                }
+            }
+            Expression::BinaryOp(b) => {
+                self.walk_expression(&b.lhs);
+                self.walk_expression(&b.rhs);
+            }
+            Expression::UnaryOp(u) => self.walk_expression(&u.operand),
+            Expression::Call(c) => {
+                self.walk_expression(&c.callee);
+                for arg in &c.args {
+                    self.walk_expression(arg);
+                }
+            }
+            Expression::MemberAccess(m) => self.walk_expression(&m.object),
+            Expression::IndexAccess(i) => {
+                self.walk_expression(&i.object);
+                self.walk_expression(&i.index);
+            }
+            Expression::IsCheck(i) => self.walk_expression(&i.expression),
+            Expression::ObjectIsCheck(o) => {
+                self.walk_expression(&o.lhs);
+                self.walk_expression(&o.rhs);
+            }
+            Expression::QualifiedOp(q) => {
+                self.walk_expression(&q.lhs);
+                self.walk_expression(&q.rhs);
+                for spec in &q.qualifiers {
+                    if let Some(arg) = &spec.arg {
+                        self.walk_expression(arg);
+                    }
+                }
+            }
+            Expression::ObjectLiteral(o) => {
+                for (_, prop) in &o.properties {
+                    self.walk_expression(prop);
+                }
+            }
+            Expression::FunctionExpr(f) => {
+                // Closures are not watchers: no boundary is pushed. But a
+                // closure INSIDE a watcher body leaves the boundary in
+                // place, so its outer references still box — conservative.
+                self.push_scope();
+                for param in &f.params {
+                    self.declare(&param.name, &param.position);
+                }
+                self.walk_items(&f.body.items);
+                self.pop_scope();
+            }
+            Expression::Match(m) => {
+                self.walk_expression(&m.value);
+                for arm in &m.arms {
+                    match &arm.body {
+                        MatchBody::Expression(expr) => self.walk_expression(expr),
+                        MatchBody::Block(b) => self.walk_block(b),
+                    }
+                }
+            }
+            Expression::WeakRef(inner, _) => self.walk_expression(inner),
+            Expression::Unknown(u) => {
+                self.walk_expression(&u.reason);
+                if let Some(options) = &u.options {
+                    self.walk_expression(options);
+                }
+            }
+            Expression::TupleLit(elems, _) => {
+                for elem in elems {
+                    self.walk_expression(elem);
+                }
+            }
+            Expression::TupleAccess(inner, _, _) => self.walk_expression(inner),
+            Expression::ArrayLit(elems, _) => {
+                for elem in elems {
+                    self.walk_expression(elem);
+                }
+            }
+            Expression::TypeAscription(inner, _, _) => self.walk_expression(inner),
+            Expression::WatcherExpr(w) => self.walk_watcher_expr(w),
+        }
+    }
+}
