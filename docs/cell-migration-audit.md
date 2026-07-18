@@ -735,6 +735,76 @@ point of deleting-with-confidence.
   reaches early returns for free; §4.4 item 4 test flips from pinning the
   hole to pinning the fix. *Gate: full suite; pause/resume/end/isActive,
   scope-bounding, factory tests are the sentinels.*
+  (Landed 2026-07-18 per the approved plan; no STOP conditions hit. ZERO
+  runtime changes: HiLowWatcher already carried the full lifecycle
+  (active/ended bools, hl_watcher_pause/resume/end/is_active, the
+  hl_cell_notify per-node gate), verified semantically identical to the four
+  static helpers before deletion. DELETED, each with its replacement on the
+  watcher object: static bool emission → HiLowWatcher.active/.ended; four
+  helpers → hl_watcher_* functions; body static gate → hl_cell_notify's
+  node->watcher gate (already ran on every fire — decl-form was
+  double-gated); activation lines at the construction site + the
+  emit_main_function pre-activation loop → hl_watcher_new constructs
+  active; Phase 5 deactivation loops in both block walkers
+  (`hilow_watcher_N_end();`) → the scope-exit hl_watcher_release already
+  emitted since 3b, which also reaches early returns (the deactivation
+  emission never did — that hole closes); static-dispatch method arm → the
+  existing heap arm, reached by constructing the decl-form watcher under
+  the USER'S OWN name as a `HiLowWatcher*` variable (Type::Watcher in
+  variable_types, heap_owners under that name). LATENT 3B BUG fixed by the
+  renaming, found by probing during planning: a decl-form watcher named
+  `w` segfaulted — the hidden variable `hilow_watcher_{id}_w` collided
+  with the body function name `hilow_watcher_{id}_{name}` when name=="w",
+  so the uninitialized C local (shadowing the function) was passed as
+  body_fn; jump-to-garbage on first fire. Pinned by new fixture
+  watcher_decl_named_w_fires (valgrind 0). MODULE-LEVEL WATCHERS: probed
+  broken, not inert — parser accepted them, the multi-file typecheck path
+  never checked them, and codegen died with an internal error on any real
+  one ("subscription with no resolved type"); the spec's module section
+  admits only export function/let and specifies no construction timing.
+  Wiring one would have invented initialization semantics → REJECTED per
+  the phase instruction's sanctioned alternative, on both typecheck paths,
+  with the diagnostic citing the gap; the generate_graph bodies-only loop
+  deleted (a debug_assert guards the invariant); rejection fixture
+  modules/watcher_in_module + gate entry; STATUS open question records
+  module initialization semantics as unscheduled. ADJUDICATION A (plan
+  approval): a declaration-form watcher name is not a first-class value —
+  any use outside method-call-receiver position is a compile diagnostic
+  (previously those shapes emitted non-compiling C or died in codegen;
+  corpus-clean, grep-verified). Two rejection fixtures (return, let-alias)
+  + one spec paragraph landed deliberately in the same commit. DECL-FORM
+  SCOPE-BOUNDNESS is thereby PROVEN (sole scope-owned reference, name
+  unaliasable), resolving 3a's open narrowing question. FUTURE PERFORMANCE
+  REFINEMENT (recorded, deliberately NOT implemented): the 3a analysis
+  boxes captures of both watcher forms; variables boxed ONLY because
+  decl-form watchers capture them could stay raw locals with raw-pointer
+  envs, since the watcher provably dies before its frame. Revisit if
+  profiling ever shows boxing overhead mattering; env packing is uniformly
+  cell-based today and the narrowing is not a trivial consequence of 3c.
+  §4.4 ITEM 4 FLIP: watcher_early_return_scalar.hl rewritten from the
+  expression-form/function-local shape (which could not observe post-exit
+  firing) to the observable decl-form shape — program-scope x, decl watcher
+  in f, early return; mutations after BOTH the early-return call and a
+  normal-exit call must not fire ("fired\ndone"); probed green + valgrind
+  0 before the deletion and green after (standing rule); the array variant
+  already pinned post-exit silence and is unchanged. STATUS known issues
+  closed: unreachable-scope-exit-deactivation-on-early-return (mechanism
+  deleted, fix pinned) and duplicated-activation-logic-in-block-walkers
+  (loops deleted). ZERO-COST: 212 unwatched corpus entries — 17 rejection
+  fixtures never reach codegen under either binary; 194 byte-identical
+  3b-binary vs 3c-binary; the 1 remaining (modules/diamond) permutes
+  run-to-run on the UNMODIFIED 3b binary alone (module emission order,
+  3/3 split over 6 runs; both binaries emit the identical two-variant
+  md5 pair) — a pre-existing module-graph nondeterminism OUTSIDE the 3a
+  determinism fix's scope (which covered cleanup-map iteration), recorded
+  in STATUS Known issues. Stays per the flip map: watcher_name_to_id,
+  pass-3 subscription registration, shadow masking, the
+  WatcherSubscription/HeapWatcherSubscription structs, and the inference
+  mirror keyed on watcher_name_to_id — all die in 3d. TESTS: integration
+  297→301 (+4: decl-named-w pin, 2 escape rejections, module rejection;
+  early-return-scalar rewritten in place); REJECTION_FIXTURES +3;
+  KNOWN_MEMORY_BUGS stays EMPTY; ignored stays 2. Full ritual green, gate
+  green.)
 - **3d Delete name-keyed subscription.** Delete `watcher_subscribers`,
   `heap_watcher_subscribers`, `watcher_name_to_id`,
   `scalar_watcher_captures`, shadow-masking (672–705, 6946–7015), the

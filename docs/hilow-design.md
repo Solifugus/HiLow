@@ -1579,6 +1579,8 @@ The expression form is useful when the watcher needs to be stored, passed, or re
 
 A watcher's value is first-class — it can be stored, passed as a parameter, or returned from a function — but its **subscriptions** are part of its identity. The subscription list is fixed at declaration; it determines which variables the watcher observes for the rest of its life.
 
+Only the **expression form** produces a first-class value. A **declaration-form** watcher name is not a value: it supports only the four method calls (`.pause()`, `.resume()`, `.end()`, `.isActive()`) and cannot be aliased, passed, or returned — declaration-form watchers are therefore always bound to their declaring scope. To hand a watcher around, use the expression form.
+
 **Within a scope.** A watcher declared in a scope lives for the duration of that scope. When the scope exits, the watcher ends automatically:
 
 ```hilow

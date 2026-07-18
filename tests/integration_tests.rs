@@ -4917,9 +4917,12 @@ fn test_object_string_prop_overwrite_integration() {
 // REJECTION_FIXTURES in tests/valgrind_gate.rs).
 // ============================================================
 
-// §4.4 item 4 (scalar variant): a function that declares a watcher and can
-// return early. Early return must not cause spurious fires or crashes on
-// later calls; the post-declaration mutation on the non-early path fires once.
+// §4.4 item 4 (scalar variant) — FLIPPED in Phase 3c from pinning the hole
+// to pinning the fix: a decl-form watcher on a program-scope variable inside
+// a function with an early-return path. Scope exit RELEASES the watcher
+// (heap_owners cleanup, which reaches early returns), so mutations after
+// BOTH the early-return call and the normal-exit call must not fire; the
+// in-scope mutation on the normal path fires once.
 #[test]
 fn test_watcher_early_return_scalar_integration() {
     let executable = compile_program("tests/programs/watcher_early_return_scalar.hl")
@@ -5582,6 +5585,67 @@ fn test_watcher_destructured_binding_rejected() {
     assert!(
         msg.contains("tuple-destructured binding"),
         "Expected the destructured-binding diagnostic, got: {}",
+        msg
+    );
+}
+
+// ============================================================
+// Phase 3c: runtime watcher lifecycle
+// ============================================================
+
+// Phase 3c collision pin: a decl-form watcher literally named `w` fires and
+// pause/resume work. Under the 3b hidden-variable scheme this segfaulted —
+// `hilow_watcher_{id}_w` (hidden var) collided with the body function name
+// `hilow_watcher_{id}_{name}` when name == "w", so the uninitialized local
+// was passed as the body pointer. Construction under the user's own name
+// (Phase 3c) removes the collision class.
+#[test]
+fn test_watcher_decl_named_w_fires() {
+    run_3b_fixture("watcher_decl_named_w_fires");
+}
+
+// Phase 3c adjudication A: a declaration-form watcher name is not a
+// first-class value — returning it is rejected at compile time.
+#[test]
+fn test_watcher_decl_name_return_rejected() {
+    let result = compile_program("tests/programs/watcher_decl_name_return_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for returning a decl-form watcher name");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("declaration-form watcher 'w' supports method calls only"),
+        "Expected the decl-form-name diagnostic, got: {}",
+        msg
+    );
+}
+
+// Phase 3c adjudication A: aliasing a declaration-form watcher name via let
+// is rejected at compile time.
+#[test]
+fn test_watcher_decl_name_alias_rejected() {
+    let result = compile_program("tests/programs/watcher_decl_name_alias_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for let-aliasing a decl-form watcher name");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("declaration-form watcher 'w' supports method calls only"),
+        "Expected the decl-form-name diagnostic, got: {}",
+        msg
+    );
+}
+
+// Phase 3c: module-level watcher declarations are rejected — module
+// initialization semantics (when they would construct and start observing)
+// are not yet specified. Before this rejection they were parser-accepted,
+// skipped by the module-graph typecheck path, and died in codegen with an
+// internal error.
+#[test]
+fn test_module_level_watcher_rejected() {
+    let result = compile_program("tests/programs/modules/watcher_in_module/app.hl");
+    assert!(result.is_err(), "Expected compilation to fail for a module-level watcher");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("watcher declarations are not supported at module level")
+            && msg.contains("module initialization semantics are not yet specified"),
+        "Expected the module-level-watcher diagnostic, got: {}",
         msg
     );
 }

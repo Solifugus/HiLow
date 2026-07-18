@@ -465,16 +465,10 @@ impl CodeGenerator {
 
             match parsed_file {
                 TopLevel::Module(module) => {
-                    // Phase 10-γ: Generate module watchers (Phase 3b: bodies
-                    // only — module-level watchers have no execution site to
-                    // construct at, so they remain inert until modules gain
-                    // an initialization phase)
-                    for watcher in &module.watchers {
-                        let watcher_id = self.watcher_counter;
-                        self.watcher_counter += 1;
-                        let (func_name, _env_fields, _env_dtor) = self.generate_watcher(watcher, watcher_id, type_checker)?;
-                        self.register_watcher_subscriptions(watcher, func_name);
-                    }
+                    // Phase 3c: module-level watchers are rejected by
+                    // typecheck (initialization semantics unspecified), so
+                    // none can reach codegen.
+                    debug_assert!(module.watchers.is_empty());
 
                     // Generate forward declarations and exported functions with mangled names
                     for func in &module.items {
@@ -965,13 +959,9 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 5: emit scope-exit deactivations for all nested watchers in this block
-        for item in &block.items {
-            if let BlockItem::Watcher(w) = item {
-                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
-                self.output.push_str(&format!("  hilow_watcher_{}_end();\n", id));
-            }
-        }
+        // Phase 3c: no scope-exit deactivation emission — the scope-owned
+        // watcher reference is released by the heap_owners cleanup (which
+        // also reaches early returns).
 
         // Phase 8a: Exit scope and emit cleanup
         self.exit_scope();
@@ -1033,13 +1023,9 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 5: emit scope-exit deactivations for all nested watchers in this block
-        for item in &block.items {
-            if let BlockItem::Watcher(w) = item {
-                let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
-                self.output.push_str(&format!("  hilow_watcher_{}_end();\n", id));
-            }
-        }
+        // Phase 3c: no scope-exit deactivation emission — the scope-owned
+        // watcher reference is released by the heap_owners cleanup (which
+        // also reaches early returns).
 
         // Phase 8a: Exit scope and emit cleanup
         self.exit_scope();
@@ -4158,30 +4144,8 @@ impl CodeGenerator {
                     return self.generate_member_function_call(call, member_access, type_checker, context);
                 }
 
-                // Phase 10-γ-fixup: Declaration-form watcher method calls
-                if let Some(watcher_id) = self.watcher_name_to_id.get(name).copied() {
-                    match member_access.member.as_str() {
-                        "pause" => {
-                            self.output.push_str(&format!("hilow_watcher_{}_pause()", watcher_id));
-                            return Ok(());
-                        }
-                        "resume" => {
-                            self.output.push_str(&format!("hilow_watcher_{}_resume()", watcher_id));
-                            return Ok(());
-                        }
-                        "end" => {
-                            self.output.push_str(&format!("hilow_watcher_{}_end()", watcher_id));
-                            return Ok(());
-                        }
-                        "isActive" => {
-                            self.output.push_str(&format!("hilow_watcher_{}_isActive()", watcher_id));
-                            return Ok(());
-                        }
-                        _ => unreachable!("type checker should have caught invalid watcher method"),
-                    }
-                }
-
-                // Phase 10-δ-α: Expression-form heap watcher method calls
+                // Phase 3c: watcher method calls — both forms dispatch through
+                // the runtime object (decl-form names are HiLowWatcher* vars).
                 if let Some(Type::Watcher) = self.variable_types.get(name) {
                     match member_access.member.as_str() {
                         "pause" => {
@@ -7529,15 +7493,8 @@ impl CodeGenerator {
             self.in_main_program = true;
             self.scope_depth = 1; // Main program starts at scope 1
 
-            // Phase 10-θ: Activate all program-body watchers at program start
-            for item in &body.items {
-                if let BlockItem::Watcher(w) = item {
-                    if let Some(&id) = self.watcher_name_to_id.get(&w.name) {
-                        self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
-                        self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
-                    }
-                }
-            }
+            // Phase 3c: no pre-activation — watchers are constructed active
+            // at their declaration sites in statement order.
 
             // Generate program body statements
             self.generate_program_body_statements(body, type_checker)?;
@@ -7800,38 +7757,12 @@ impl CodeGenerator {
         // Phase 10-γ-fixup: Add watcher name to ID mapping for method dispatch
         self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
 
-        // Statics BEFORE the body (the body's gate reads them), then helpers.
-        self.watcher_bodies.push_str(&format!(
-            "static bool hilow_watcher_{}_active = false;\n", watcher_id
-        ));
-        self.watcher_bodies.push_str(&format!(
-            "static bool hilow_watcher_{}_ended = false;\n\n", watcher_id
-        ));
-        self.watcher_bodies.push_str(&format!(
-            "static void hilow_watcher_{}_pause(void) {{ hilow_watcher_{}_active = false; }}\n",
-            watcher_id, watcher_id
-        ));
-        self.watcher_bodies.push_str(&format!(
-            "static void hilow_watcher_{}_resume(void) {{ \n  if (!hilow_watcher_{}_ended) hilow_watcher_{}_active = true; \n}}\n",
-            watcher_id, watcher_id, watcher_id
-        ));
-        self.watcher_bodies.push_str(&format!(
-            "static void hilow_watcher_{}_end(void) {{ \n  hilow_watcher_{}_ended = true; \n  hilow_watcher_{}_active = false; \n}}\n",
-            watcher_id, watcher_id, watcher_id
-        ));
-        self.watcher_bodies.push_str(&format!(
-            "static bool hilow_watcher_{}_isActive(void) {{ return hilow_watcher_{}_active; }}\n\n",
-            watcher_id, watcher_id
-        ));
-
-        // Body: one firing ABI (env, cell, delta), statics-gated.
+        // Body: one firing ABI (env, cell, delta). Active/ended gating lives
+        // on the runtime watcher object — hl_cell_notify checks it per node
+        // (Phase 3c; the per-watcher statics are gone).
         self.watcher_bodies.push_str(&format!(
             "void {}(void* env, HiLowCell* hilow_cell, const HiLowDelta* delta) {{\n",
             func_name
-        ));
-        self.watcher_bodies.push_str(&format!(
-            "  if (!hilow_watcher_{}_active || hilow_watcher_{}_ended) return;\n",
-            watcher_id, watcher_id
         ));
 
         // Generate the watcher body
@@ -7890,9 +7821,11 @@ impl CodeGenerator {
         Ok((func_name, env_fields, env_dtor_name))
     }
 
-    /// Phase 3b: emit a decl-form watcher's activation + construction at its
-    /// declaration site. Pre-declaration assignments cannot fire — the cell
-    /// has no subscriber until this runs.
+    /// Phase 3b/3c: emit a decl-form watcher's construction at its
+    /// declaration site, bound to the user's own name so the four methods
+    /// dispatch through the runtime object (hl_watcher_pause etc.).
+    /// Pre-declaration assignments cannot fire — the cell has no subscriber
+    /// until this runs. The watcher is born active (hl_watcher_new).
     fn emit_decl_watcher_construction(
         &mut self,
         watcher: &Watcher,
@@ -7900,13 +7833,9 @@ impl CodeGenerator {
         env_fields: &[(String, EnvSlot)],
         env_dtor_name: Option<&str>,
     ) {
-        self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", watcher_id));
-        self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", watcher_id));
-
         let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_id);
         let env_var = format!("__watcher_env_{}", watcher_id);
         let func_name = format!("hilow_watcher_{}_{}", watcher_id, watcher.name);
-        let hidden_var = format!("hilow_watcher_{}_w", watcher_id);
 
         let env_arg = if env_fields.is_empty() {
             "NULL".to_string()
@@ -7933,8 +7862,9 @@ impl CodeGenerator {
         }
         call.push_str(&format!(", {}{})", n_subs, sub_args));
 
-        self.output.push_str(&format!("  HiLowWatcher* {} = {};\n", hidden_var, call));
-        self.track_heap_owner(&hidden_var, HeapType::Watcher);
+        self.output.push_str(&format!("  HiLowWatcher* {} = {};\n", watcher.name, call));
+        self.variable_types.insert(watcher.name.clone(), Type::Watcher);
+        self.track_heap_owner(&watcher.name, HeapType::Watcher);
     }
 
     /// Phase 10-γ: Register a watcher as a subscriber to its variables

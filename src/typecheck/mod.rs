@@ -17,17 +17,30 @@ struct Symbol {
 #[derive(Debug)]
 struct Scope {
     symbols: HashMap<String, Symbol>,
+    // Phase 3c: names declared by declaration-form watchers in this scope.
+    // Such a name supports method calls only — it is not a first-class
+    // value (the expression form is), which keeps decl-form watchers
+    // provably scope-bound.
+    decl_watchers: HashSet<String>,
 }
 
 impl Scope {
     fn new() -> Self {
         Self {
             symbols: HashMap::new(),
+            decl_watchers: HashSet::new(),
         }
     }
 
     fn declare(&mut self, name: String, ty: Type, position: Position) {
+        // A let re-binding shadows any decl-form watcher mark for the name.
+        self.decl_watchers.remove(&name);
         self.symbols.insert(name, Symbol { ty, position });
+    }
+
+    fn declare_decl_watcher(&mut self, name: String, position: Position) {
+        self.symbols.insert(name.clone(), Symbol { ty: Type::Watcher, position });
+        self.decl_watchers.insert(name);
     }
 
     fn lookup(&self, name: &str) -> Option<&Symbol> {
@@ -87,6 +100,9 @@ pub struct TypeChecker {
     /// Cross-module export tables, keyed by module path. Populated during pass 1 of check_graph.
     /// Empty during single-file `check`.
     module_exports: HashMap<String, ExportTable>,
+    /// Phase 3c: true while checking the bare-identifier receiver of a
+    /// method call, where a declaration-form watcher name is legal.
+    watcher_receiver_exempt: bool,
 }
 
 impl TypeChecker {
@@ -103,6 +119,7 @@ impl TypeChecker {
             method_context: None,
             current_function_return_type: None,
             module_exports: HashMap::new(),
+            watcher_receiver_exempt: false,
         }
     }
 
@@ -452,11 +469,29 @@ impl TypeChecker {
                 for let_decl in &module.lets {
                     self.check_let_statement(let_decl);
                 }
+
+                // Phase 3c: module-level watchers are rejected — module
+                // initialization semantics (when they would construct and
+                // start observing) are not yet specified.
+                for watcher in &module.watchers {
+                    self.reject_module_level_watcher(watcher);
+                }
             }
         }
 
         // Exit the module's scope
         self.exit_function_scope();
+    }
+
+    /// Phase 3c: diagnostic for a watcher declaration at module top level.
+    fn reject_module_level_watcher(&mut self, watcher: &Watcher) {
+        self.errors.push(crate::types::TypeError::new(
+            format!(
+                "watcher declarations are not supported at module level (watcher '{}') — module initialization semantics are not yet specified; declare watchers inside functions or the program body",
+                watcher.name
+            ),
+            watcher.position.clone(),
+        ));
     }
 
     fn check_program(&mut self, program: &Program) {
@@ -480,9 +515,10 @@ impl TypeChecker {
             self.check_function(function);
         }
 
-        // Check module-level watchers
+        // Phase 3c: module-level watchers are rejected (see
+        // reject_module_level_watcher).
         for watcher in &module.watchers {
-            self.check_watcher(watcher);
+            self.reject_module_level_watcher(watcher);
         }
     }
 
@@ -536,7 +572,8 @@ impl TypeChecker {
                 }
                 BlockItem::Watcher(watcher) => {
                     // Register the watcher's name in scope for method calls
-                    self.declare_variable(&watcher.name, Type::Watcher, watcher.position.clone());
+                    // (Phase 3c: method calls are its ONLY legal use).
+                    self.declare_decl_watcher_name(&watcher.name, watcher.position.clone());
                 }
                 BlockItem::Statement(_) => { /* skip */ }
             }
@@ -556,8 +593,9 @@ impl TypeChecker {
     }
 
     fn check_watcher(&mut self, watcher: &Watcher) {
-        // Phase 10-γ-fixup: Register the watcher's name in the outer scope for method calls
-        self.declare_variable(&watcher.name, Type::Watcher, watcher.position.clone());
+        // Phase 10-γ-fixup: Register the watcher's name in the outer scope for
+        // method calls (Phase 3c: its only legal use).
+        self.declare_decl_watcher_name(&watcher.name, watcher.position.clone());
 
         self.enter_scope();
 
@@ -1358,6 +1396,19 @@ impl TypeChecker {
                     return Type::Object(vec![]); // Empty object type for namespace access
                 }
 
+                // Phase 3c: a declaration-form watcher name is not a
+                // first-class value — only method calls may use it.
+                if !self.watcher_receiver_exempt && self.is_decl_watcher_name(name) {
+                    self.add_error(
+                        format!(
+                            "declaration-form watcher '{}' supports method calls only (.pause/.resume/.end/.isActive); use the expression form `let {} = watcher(...)` for a first-class watcher value",
+                            name, name
+                        ),
+                        position.clone(),
+                    );
+                    return Type::Watcher;
+                }
+
                 // Look up variable in symbol table with refinement support
                 let declared_type = self.lookup_variable(name, position.clone());
 
@@ -2055,7 +2106,17 @@ impl TypeChecker {
 
         // Phase 10-γ-fixup: Check for watcher method calls
         if let Expression::MemberAccess(member_access) = call.callee.as_ref() {
-            let object_type = self.check_expression(&member_access.object);
+            // Phase 3c: a bare-identifier receiver is the one position where
+            // a declaration-form watcher name is legal. The exemption covers
+            // only the identifier itself (it has no subexpressions).
+            let object_type = if matches!(member_access.object.as_ref(), Expression::Ident { .. }) {
+                self.watcher_receiver_exempt = true;
+                let t = self.check_expression(&member_access.object);
+                self.watcher_receiver_exempt = false;
+                t
+            } else {
+                self.check_expression(&member_access.object)
+            };
             if matches!(object_type, Type::Watcher) {
                 return self.check_watcher_method_call(call, member_access);
             }
@@ -2472,6 +2533,24 @@ impl TypeChecker {
         if let Some(current_scope) = self.scopes.last_mut() {
             current_scope.declare(name.to_string(), ty, position);
         }
+    }
+
+    /// Phase 3c: declare a declaration-form watcher's name (method calls only).
+    fn declare_decl_watcher_name(&mut self, name: &str, position: Position) {
+        if let Some(current_scope) = self.scopes.last_mut() {
+            current_scope.declare_decl_watcher(name.to_string(), position);
+        }
+    }
+
+    /// Phase 3c: does `name` resolve to a declaration-form watcher? The
+    /// innermost scope that declares the name decides (shadowing-correct).
+    fn is_decl_watcher_name(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if scope.lookup(name).is_some() {
+                return scope.decl_watchers.contains(name);
+            }
+        }
+        false
     }
 
     fn lookup_variable(&mut self, name: &str, position: Position) -> Type {

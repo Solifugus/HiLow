@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 3c — runtime watcher lifecycle: watcher declarations construct runtime watcher values (both forms share the heap path); delete static _active/_ended bools, the four static helpers, activation/deactivation emission (Phase 4/5 loops in both block walkers + emit_main_function), and the static-dispatch method arm. Scope exit releases the watcher — reaches early returns for free; §4.4 item 4 test flips from pinning the hole to pinning the fix. Gate: full suite; pause/resume/end/isActive, scope-bounding, factory tests are the sentinels.**
+**Current phase: 3d — delete name-keyed subscription: `watcher_subscribers`, `heap_watcher_subscribers`, `watcher_name_to_id` (and the inference mirror keyed on it), `scalar_watcher_captures` remnants, shadow masking, the `WatcherSubscription`/`HeapWatcherSubscription` structs. Shadowing tests must pass unchanged. (The step's recorded "user decision" on the two escape-rejection tests was already resolved by §5 item 1 in 3b — escape is sound, those tests are gone.) Gate: full suite.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

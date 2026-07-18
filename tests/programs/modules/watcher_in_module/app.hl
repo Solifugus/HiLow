@@ -1,0 +1,7 @@
+import { count } from "./counter"
+
+high program(): i32 {
+  count = 5
+  print("done")
+  return 0
+}

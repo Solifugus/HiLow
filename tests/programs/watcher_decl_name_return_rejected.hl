@@ -1,0 +1,9 @@
+high program(): i32 {
+    let x = 0
+    function f(): watcher {
+        watcher w((changed)x) { print("fired") }
+        return w
+    }
+    f()
+    return 0
+}

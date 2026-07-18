@@ -1,7 +1,7 @@
 high program(): i32 {
+    let x = 0
     function f(flag: i32): i32 {
-        let x = 0
-        let w = watcher((changed)x) { print("scalar watcher fired") }
+        watcher onX((changed)x) { print("fired") }
         if (flag ?= 1) {
             return 1
         }
@@ -9,7 +9,9 @@ high program(): i32 {
         return 0
     }
     f(1)
+    x = 7
     f(0)
+    x = 9
     print("done")
     return 0
 }

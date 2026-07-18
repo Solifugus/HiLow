@@ -1,0 +1,7 @@
+high module {
+  export let count: i32 = 0
+
+  watcher onCount((changed)count) {
+    print("module watcher fired")
+  }
+}

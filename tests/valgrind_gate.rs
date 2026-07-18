@@ -43,6 +43,9 @@ const REJECTION_FIXTURES: &[&str] = &[
     "watcher_destructured_binding_rejected.hl",       // is_err test test_watcher_destructured_binding_rejected — Phase 3b adjudication E: destructured bindings do not box yet
     "object_watch_assigned_rejected.hl",             // is_err test test_object_watch_assigned_rejected — rebinding detection needs Phase 3 boxing
     "watcher_mixed_array_object_rejected.hl",        // is_err test test_watcher_mixed_array_object_rejected — body prologue casts to one container type (Phase 2e single-container-kind watchers)
+    "watcher_decl_name_return_rejected.hl",          // is_err test test_watcher_decl_name_return_rejected — Phase 3c adjudication A: decl-form watcher names are not first-class values
+    "watcher_decl_name_alias_rejected.hl",           // is_err test test_watcher_decl_name_alias_rejected — same adjudication
+    "modules/watcher_in_module/app.hl",              // is_err test test_module_level_watcher_rejected — Phase 3c: module initialization semantics unspecified (STATUS.md open question)
 ];
 
 /// Programs with a KNOWN, adjudicated memory bug: they compile and run, but
