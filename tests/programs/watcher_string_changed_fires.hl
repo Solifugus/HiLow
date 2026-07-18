@@ -1,0 +1,9 @@
+high program(): i32 {
+    let s = "hello"
+    let w = watcher((changed)s) { print("changed") }
+    s = "world"
+    s = "world"
+    s = "hello"
+    print("done")
+    return 0
+}

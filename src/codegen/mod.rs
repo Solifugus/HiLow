@@ -255,6 +255,25 @@ impl CodeGenerator {
         self.boxing.as_ref().map_or(false, |b| b.is_boxed(name, pos))
     }
 
+    /// Phase 3e-α: does this declaration need a SLOT cell (a subscription
+    /// requires the variable itself be a HiLowScalar — (assigned) anywhere,
+    /// or any subscription on a string)?
+    fn needs_slot_decl(&self, name: &str, pos: &crate::lexer::Position) -> bool {
+        self.boxing.as_ref().map_or(false, |b| b.needs_slot(name, pos))
+    }
+
+    /// Phase 3e-α: the slot payload accessor names for a slot-boxed
+    /// variable of the given HiLow type: (constructor, getter, setter).
+    fn slot_fns_for(ty: &Type) -> Option<(&'static str, &'static str, &'static str)> {
+        match ty {
+            Type::I32 => Some(("hl_scalar_new_i32", "hl_scalar_get_i32", "hl_cell_set_i32")),
+            Type::String => Some(("hl_scalar_new_str", "hl_scalar_get_str", "hl_cell_set_str")),
+            Type::DynamicArray(_) => Some(("hl_scalar_new_array_ref", "hl_scalar_get_array_ref", "hl_cell_set_array_ref")),
+            Type::Object(_) => Some(("hl_scalar_new_object_ref", "hl_scalar_get_object_ref", "hl_cell_set_object_ref")),
+            _ => None,
+        }
+    }
+
     /// Phase 3b: is the CURRENT binding of `name` a boxed HiLowScalar* cell?
     fn current_binding_boxed(&self, name: &str) -> bool {
         self.boxed_bindings
@@ -739,6 +758,21 @@ impl CodeGenerator {
                 self.output.push_str(", ");
             }
             let param_type = Type::from_ast_type(&param.ty);
+            // Phase 3e-α: a parameter that needs a SLOT cell (a reference-
+            // typed (assigned)/string subscription targets it) has no
+            // boxing prologue yet — reject cleanly rather than silently
+            // subscribing an event the value cell never emits.
+            if self.needs_slot_decl(&param.name, &param.position)
+                && !matches!(param_type, Type::I32)
+            {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!(
+                        "subscribing parameter '{}' of type {:?} through a variable slot",
+                        param.name, param_type
+                    ),
+                    phase: "a future phase — reference-typed parameter slots (Phase 3e-α boxes locals and program-scope lets only)".to_string(),
+                });
+            }
             let boxed = self.is_boxed_decl(&param.name, &param.position)
                 && matches!(param_type, Type::I32);
             let c_type = self.hilow_type_to_c(&param_type);
@@ -1328,6 +1362,49 @@ impl CodeGenerator {
                     }
                     self.output.push_str(");\n");
                     self.variable_types.insert(name.to_string(), Type::I32);
+                    self.track_heap_owner(name, HeapType::Scalar);
+                    self.push_boxed_binding(name, true);
+                    return Ok(());
+                }
+                Type::String | Type::DynamicArray(_) | Type::Object(_)
+                    if self.needs_slot_decl(name, position) =>
+                {
+                    // Phase 3e-α: a subscription requires this variable be a
+                    // SLOT cell — a HiLowScalar with a retained reference
+                    // payload. The constructor ADOPTS a +1; borrowed
+                    // initializers retain first via hl_array_ref/hl_object_ref.
+                    if self.hoisted_variables.contains_key(name) {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("'{}' is both watched and captured by a function closure", name),
+                            phase: "a future phase — closure envs do not hold scalar cells yet (Phase 3b)".to_string(),
+                        });
+                    }
+                    let (ctor, _, _) = Self::slot_fns_for(&var_type).unwrap();
+                    let ref_fn = if matches!(var_type, Type::Object(_)) { "hl_object_ref" } else { "hl_array_ref" };
+                    let c_var_name = self.mangle_variable_name(name);
+                    if self.in_main_program {
+                        self.boxed_scalar_statics.push_str(&format!("static HiLowScalar* {} = NULL;\n", c_var_name));
+                        self.output.push_str(&format!("  {} = {}(", c_var_name, ctor));
+                    } else {
+                        self.output.push_str(&format!("  HiLowScalar* {} = {}(", c_var_name, ctor));
+                    }
+                    let initializer = initializer.as_ref().ok_or_else(|| CodegenError::UnsupportedFeature {
+                        feature: format!("uninitialized slot-watched variable '{}'", name),
+                        phase: "Phase 3e-α — slot payloads are never NULL by construction".to_string(),
+                    })?;
+                    let borrowed = Self::expr_is_borrowed_ref(initializer);
+                    if borrowed {
+                        self.output.push_str(&format!("{}(", ref_fn));
+                    }
+                    let old_context = self.function_expr_context.clone();
+                    self.function_expr_context = FunctionExprContext::LetInitializer;
+                    self.generate_expression(initializer, type_checker, ExprContext::Owned)?;
+                    self.function_expr_context = old_context;
+                    if borrowed {
+                        self.output.push_str(")");
+                    }
+                    self.output.push_str(");\n");
+                    self.variable_types.insert(name.to_string(), var_type.clone());
                     self.track_heap_owner(name, HeapType::Scalar);
                     self.push_boxed_binding(name, true);
                     return Ok(());
@@ -2394,6 +2471,36 @@ impl CodeGenerator {
                 let boxed_capture = self.boxed_hoisted.contains(var_name);
                 if boxed_capture || self.current_binding_boxed(var_name) {
                     let cell = self.env_slot_rvalue(var_name);
+                    let var_ty = self.variable_types.get(var_name).cloned().unwrap_or(Type::I32);
+                    // Phase 3e-α: reference-payload slots. The set ADOPTS a
+                    // +1 rhs; borrowed rhs values retain first (self-
+                    // assignment safe: old arrives at +2).
+                    if !matches!(var_ty, Type::I32) {
+                        let (_, _, setter) = Self::slot_fns_for(&var_ty).ok_or_else(|| {
+                            CodegenError::UnsupportedFeature {
+                                feature: format!("slot assignment to '{}' of type {:?}", var_name, var_ty),
+                                phase: "Phase 3e — slot payload kinds land as programs need them".to_string(),
+                            }
+                        })?;
+                        if assign_stmt.op != AssignOpKind::Assign {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("compound assignment to slot-watched variable '{}' of type {:?}", var_name, var_ty),
+                                phase: "Phase 3e — plain assignment only on reference slots".to_string(),
+                            });
+                        }
+                        let ref_fn = if matches!(var_ty, Type::Object(_)) { "hl_object_ref" } else { "hl_array_ref" };
+                        let borrowed = Self::expr_is_borrowed_ref(&assign_stmt.value);
+                        self.output.push_str(&format!("  {}({}, ", setter, cell));
+                        if borrowed {
+                            self.output.push_str(&format!("{}(", ref_fn));
+                        }
+                        self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
+                        if borrowed {
+                            self.output.push_str(")");
+                        }
+                        self.output.push_str(");\n");
+                        return Ok(());
+                    }
                     let compound_op = match assign_stmt.op {
                         AssignOpKind::Assign => None,
                         AssignOpKind::AddAssign => Some("+"),
@@ -2643,11 +2750,14 @@ impl CodeGenerator {
                     return Ok(());
                 }
 
-                // Phase 3b: a boxed scalar capture in a watcher env — read
-                // the current payload through the retained cell.
+                // Phase 3b/3e: a boxed cell capture in a watcher env — read
+                // the current payload through the retained cell (getter
+                // keyed by the variable's type; refs BORROW).
                 if self.boxed_hoisted.contains(name) {
                     if let Some((env_var, _)) = self.hoisted_variables.get(name) {
-                        self.output.push_str(&format!("hl_scalar_get_i32({}->{})", env_var, name));
+                        let ty = self.variable_types.get(name).cloned().unwrap_or(Type::I32);
+                        let getter = Self::slot_fns_for(&ty).map(|(_, g, _)| g).unwrap_or("hl_scalar_get_i32");
+                        self.output.push_str(&format!("{}({}->{})", getter, env_var, name));
                         return Ok(());
                     }
                 }
@@ -2691,9 +2801,12 @@ impl CodeGenerator {
                         self.output.push_str(")");
                     }
                 } else if self.current_binding_boxed(name) {
-                    // Phase 3b: boxed scalar local (or static-hoisted program
-                    // cell) — deref the payload
-                    self.output.push_str(&format!("hl_scalar_get_i32({})", self.mangle_variable_name(name)));
+                    // Phase 3b/3e: boxed cell local (or static-hoisted
+                    // program cell) — deref the payload (getter keyed by
+                    // type; refs BORROW)
+                    let ty = self.variable_types.get(name).cloned().unwrap_or(Type::I32);
+                    let getter = Self::slot_fns_for(&ty).map(|(_, g, _)| g).unwrap_or("hl_scalar_get_i32");
+                    self.output.push_str(&format!("{}({})", getter, self.mangle_variable_name(name)));
                 } else {
                     // Normal variable reference
                     if let Some(ref refined) = refined_type {
@@ -2839,17 +2952,11 @@ impl CodeGenerator {
                 for subscription in &watcher_expr.subscriptions {
                     let var_name = &subscription.variable_name;
                     if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                        if matches!(var_type, crate::ast::Type::Primitive(crate::ast::PrimitiveType::String)) {
-                            // Audit §5 item 2 rider: watching a string
-                            // VARIABLE is rebinding-watch — the variable-slot
-                            // cell bucket, unscheduled (Phase 3b).
-                            return Err(CodegenError::UnsupportedFeature {
-                                feature: format!("watching value of type {:?}", var_type),
-                                phase: "a future phase (string and composite watching): watching a string variable means rebinding-watch, which needs a variable-slot cell".to_string(),
-                            });
-                        }
+                        // Phase 3e-α: strings are watchable — the variable
+                        // lowers to a slot cell (rebinding-watch).
                         if !self.is_ast_type_watchable_in_phase_10g(var_type)
                             && !matches!(var_type, crate::ast::Type::Object(_))
+                            && !matches!(var_type, crate::ast::Type::Primitive(crate::ast::PrimitiveType::String))
                         {
                             return Err(CodegenError::UnsupportedFeature {
                                 feature: format!("watching a scalar of type {:?}", var_type),
@@ -2913,14 +3020,22 @@ impl CodeGenerator {
                     }
                 }
 
-                // Classify subscriptions: container cells (arrays Phase 2a,
-                // objects Phase 2e) vs scalars (legacy path until Phase 3)
+                // Classify subscriptions: container VALUE cells (arrays
+                // Phase 2a, objects Phase 2e) vs slot/scalar cells. Phase
+                // 3e-α: a SLOT-KIND subscription — (assigned) on anything,
+                // or any subscription on a string — routes down the
+                // scalar/slot path regardless of the variable's type
+                // (audit §5 item 10b: (assigned) subscribes the slot).
                 let mut has_arrays = false;
                 let mut has_objects = false;
                 let mut has_scalars = false;
                 for subscription in &watcher_expr.subscriptions {
                     if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                        if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
+                        let slot_kind = matches!(subscription.modifier, SubscriptionModifier::Assigned)
+                            || matches!(ast_var_type, crate::ast::Type::Primitive(crate::ast::PrimitiveType::String));
+                        if slot_kind {
+                            has_scalars = true;
+                        } else if matches!(ast_var_type, crate::ast::Type::DynamicArray(_)) {
                             has_arrays = true;
                         } else if matches!(ast_var_type, crate::ast::Type::Object(_)) {
                             has_objects = true;
@@ -3014,6 +3129,9 @@ impl CodeGenerator {
                 if has_cells {
                     for (var_name, ast_type, _pos) in watcher_expr.captures.borrow().iter() {
                         let slot = match ast_type {
+                            // Phase 3e-α: slot-boxed variables are
+                            // HiLowScalar* whatever their HiLow type.
+                            _ if self.current_binding_boxed(var_name) => Some(EnvSlot::Scalar),
                             crate::ast::Type::DynamicArray(_) => Some(EnvSlot::Array),
                             crate::ast::Type::Object(_) => Some(EnvSlot::Object),
                             _ => {
@@ -3052,18 +3170,25 @@ impl CodeGenerator {
                             continue;
                         }
                         let var_type = self.variable_types.get(var_name).cloned();
-                        let slot = match var_type {
-                            Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
-                            Some(Type::Object(_)) => EnvSlot::Object,
-                            Some(Type::I32) => EnvSlot::Scalar,
-                            other => {
-                                return Err(CodegenError::UnsupportedFeature {
-                                    feature: format!(
-                                        "watcher capture of '{}' with type {:?}",
-                                        var_name, other
-                                    ),
-                                    phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today)".to_string(),
-                                });
+                        // Phase 3e-α: a slot-boxed variable is a HiLowScalar*
+                        // whatever its HiLow type — the representation decides
+                        // the env slot kind.
+                        let slot = if self.current_binding_boxed(var_name) {
+                            EnvSlot::Scalar
+                        } else {
+                            match var_type {
+                                Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
+                                Some(Type::Object(_)) => EnvSlot::Object,
+                                Some(Type::I32) => EnvSlot::Scalar,
+                                other => {
+                                    return Err(CodegenError::UnsupportedFeature {
+                                        feature: format!(
+                                            "watcher capture of '{}' with type {:?}",
+                                            var_name, other
+                                        ),
+                                        phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today)".to_string(),
+                                    });
+                                }
                             }
                         };
                         env_fields.push((var_name.clone(), slot));
@@ -3126,7 +3251,12 @@ impl CodeGenerator {
                             match slot {
                                 EnvSlot::Scalar => {
                                     self.boxed_hoisted.insert(var_name.clone());
-                                    self.variable_types.insert(var_name.clone(), Type::I32);
+                                    // Phase 3e-α: keep the variable's real
+                                    // type (getter keyed on it); i32 only as
+                                    // the untyped fallback.
+                                    if !self.variable_types.contains_key(var_name) {
+                                        self.variable_types.insert(var_name.clone(), Type::I32);
+                                    }
                                 }
                                 _ => {
                                     // Container types were recorded by the
@@ -3156,11 +3286,26 @@ impl CodeGenerator {
                     for subscription in &watcher_expr.subscriptions {
                         let var_name = &subscription.variable_name;
                         let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+                        // Phase 3e-α: snapshot type follows the subscribed
+                        // variable's type (refs bind a BORROW of the payload
+                        // at fire time).
+                        let sub_ty = subscription
+                            .resolved_var_type
+                            .borrow()
+                            .as_ref()
+                            .map(Type::from_ast_type)
+                            .unwrap_or(Type::I32);
+                        let (c_ty, getter) = match &sub_ty {
+                            Type::String => ("HiLowArray*", "hl_scalar_get_str"),
+                            Type::DynamicArray(_) => ("HiLowArray*", "hl_scalar_get_array_ref"),
+                            Type::Object(_) => ("HiLowObject*", "hl_scalar_get_object_ref"),
+                            _ => ("int32_t", "hl_scalar_get_i32"),
+                        };
                         self.output.push_str(&format!(
-                            "  int32_t {} = hl_scalar_get_i32(env_cast->{});\n",
-                            param_name, var_name
+                            "  {} {} = {}(env_cast->{});\n",
+                            c_ty, param_name, getter, var_name
                         ));
-                        self.variable_types.insert(param_name.clone(), Type::I32);
+                        self.variable_types.insert(param_name.clone(), sub_ty);
                         // Mask any outer boxed binding of this name: inside
                         // the body it is a raw snapshot local.
                         self.push_boxed_binding(param_name, false);
@@ -3176,7 +3321,12 @@ impl CodeGenerator {
                         match slot {
                             EnvSlot::Scalar => {
                                 self.boxed_hoisted.insert(var_name.clone());
-                                self.variable_types.insert(var_name.clone(), Type::I32);
+                                // Phase 3e-α: keep the variable's real type —
+                                // the env read keys its getter on it. i32
+                                // only as the fallback for untyped names.
+                                if !self.variable_types.contains_key(var_name) {
+                                    self.variable_types.insert(var_name.clone(), Type::I32);
+                                }
                             }
                             EnvSlot::Array => {
                                 if !self.variable_types.contains_key(var_name) {
@@ -3234,7 +3384,29 @@ impl CodeGenerator {
                         SubscriptionModifier::Moved => "HL_ARR_MOVED",
                         SubscriptionModifier::Deep => "HL_ARR_DEEP",
                     };
-                    let cell_var = self.env_slot_rvalue(&subscription.variable_name);
+                    let mut cell_var = self.env_slot_rvalue(&subscription.variable_name);
+                    // Phase 3e-α: a VALUE-kind subscription on a slot-boxed
+                    // variable subscribes the CURRENT value's cell (identity
+                    // at construction, per audit §5 item 10b) — deref the
+                    // slot payload. Slot-kind subscriptions ((assigned),
+                    // strings) subscribe the slot itself.
+                    let sub_is_slot_kind = matches!(subscription.modifier, SubscriptionModifier::Assigned)
+                        || matches!(
+                            subscription.resolved_var_type.borrow().as_ref(),
+                            Some(crate::ast::Type::Primitive(crate::ast::PrimitiveType::String))
+                        );
+                    if !sub_is_slot_kind && self.current_binding_boxed(&subscription.variable_name) {
+                        // Only CONTAINER value subscriptions deref — a boxed
+                        // scalar's slot IS its value cell.
+                        let getter = match subscription.resolved_var_type.borrow().as_ref() {
+                            Some(crate::ast::Type::Object(_)) => Some("hl_scalar_get_object_ref"),
+                            Some(crate::ast::Type::DynamicArray(_)) => Some("hl_scalar_get_array_ref"),
+                            _ => None,
+                        };
+                        if let Some(getter) = getter {
+                            cell_var = format!("{}({})", getter, cell_var);
+                        }
+                    }
                     if matches!(subscription.modifier, SubscriptionModifier::Deep) {
                         // Phase 2d/2e: a (deep) subscription marks the
                         // whole subtree deep-watched so nested mutations
@@ -7603,17 +7775,19 @@ impl CodeGenerator {
             if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
                 match var_type {
                     crate::ast::Type::Primitive(crate::ast::PrimitiveType::I32) => {}
-                    crate::ast::Type::Primitive(crate::ast::PrimitiveType::String) => {
-                        return Err(CodegenError::UnsupportedFeature {
-                            feature: format!("watching value of type {:?}", var_type),
-                            phase: "a future phase (string and composite watching): watching a string variable means rebinding-watch, which needs a variable-slot cell".to_string(),
-                        });
-                    }
+                    // Phase 3e-α: strings watch via the variable-slot cell —
+                    // rebinding-watch, both modifiers.
+                    crate::ast::Type::Primitive(crate::ast::PrimitiveType::String) => {}
                     crate::ast::Type::DynamicArray(_) | crate::ast::Type::Object(_) => {
-                        return Err(CodegenError::UnsupportedFeature {
-                            feature: format!("decl-form watcher on container-typed variable '{}'", var_name),
-                            phase: "a future phase — watching a container VARIABLE means rebinding-watch, which needs a variable-slot cell (unscheduled); use an expression-form watcher to observe content mutations".to_string(),
-                        });
+                        // Phase 3e-α: (assigned) subscribes the SLOT — works.
+                        // Content-following ((changed) etc. retargeting on
+                        // rebinding) is Phase 3e-β.
+                        if !matches!(subscription.modifier, SubscriptionModifier::Assigned) {
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("decl-form watcher on container-typed variable '{}'", var_name),
+                                phase: "a future phase — watching a container VARIABLE means rebinding-watch, which needs a variable-slot cell (lands in Phase 3e-β); use an expression-form watcher to observe content mutations".to_string(),
+                            });
+                        }
                     }
                     other => {
                         return Err(CodegenError::UnsupportedFeature {
@@ -7669,15 +7843,21 @@ impl CodeGenerator {
                 continue;
             }
             let var_type = self.variable_types.get(var_name).cloned();
-            let slot = match var_type {
-                Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
-                Some(Type::Object(_)) => EnvSlot::Object,
-                Some(Type::I32) => EnvSlot::Scalar,
-                other => {
-                    return Err(CodegenError::UnsupportedFeature {
-                        feature: format!("watcher capture of '{}' with type {:?}", var_name, other),
-                        phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today)".to_string(),
-                    });
+            // Phase 3e-α: slot-boxed variables are HiLowScalar* whatever
+            // their HiLow type.
+            let slot = if self.current_binding_boxed(var_name) {
+                EnvSlot::Scalar
+            } else {
+                match var_type {
+                    Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
+                    Some(Type::Object(_)) => EnvSlot::Object,
+                    Some(Type::I32) => EnvSlot::Scalar,
+                    other => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("watcher capture of '{}' with type {:?}", var_name, other),
+                            phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today)".to_string(),
+                        });
+                    }
                 }
             };
             env_fields.push((var_name.clone(), slot));
@@ -7706,15 +7886,28 @@ impl CodeGenerator {
         self.output.push_str(&format!("  {}* env_cast = ({}*)env;\n", env_struct_name, env_struct_name));
         self.output.push_str("  (void)hilow_cell; (void)delta;\n");
 
-        // Subscribed names bind snapshot locals read at fire time.
+        // Subscribed names bind snapshot locals read at fire time (Phase
+        // 3e-α: snapshot type follows the variable's type; refs BORROW).
         for subscription in &watcher.subscriptions {
             let var_name = &subscription.variable_name;
             let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+            let sub_ty = subscription
+                .resolved_var_type
+                .borrow()
+                .as_ref()
+                .map(Type::from_ast_type)
+                .unwrap_or(Type::I32);
+            let (c_ty, getter) = match &sub_ty {
+                Type::String => ("HiLowArray*", "hl_scalar_get_str"),
+                Type::DynamicArray(_) => ("HiLowArray*", "hl_scalar_get_array_ref"),
+                Type::Object(_) => ("HiLowObject*", "hl_scalar_get_object_ref"),
+                _ => ("int32_t", "hl_scalar_get_i32"),
+            };
             self.output.push_str(&format!(
-                "  int32_t {} = hl_scalar_get_i32(env_cast->{});\n",
-                param_name, var_name
+                "  {} {} = {}(env_cast->{});\n",
+                c_ty, param_name, getter, var_name
             ));
-            self.variable_types.insert(param_name.clone(), Type::I32);
+            self.variable_types.insert(param_name.clone(), sub_ty);
             self.push_boxed_binding(param_name, false);
         }
 
@@ -7728,7 +7921,10 @@ impl CodeGenerator {
             self.hoisted_variables.insert(var_name.clone(), ("env_cast".to_string(), env_struct_name.clone()));
             if matches!(slot, EnvSlot::Scalar) {
                 self.boxed_hoisted.insert(var_name.clone());
-                self.variable_types.insert(var_name.clone(), Type::I32);
+                // Phase 3e-α: keep the real type (getter keyed on it).
+                if !self.variable_types.contains_key(var_name) {
+                    self.variable_types.insert(var_name.clone(), Type::I32);
+                }
             }
         }
 

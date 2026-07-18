@@ -1207,9 +1207,23 @@ void hl_scalar_retain(HiLowScalar* s) {
 
 void hl_scalar_release(HiLowScalar* s) {
     if (s == NULL) return;
-    // hl_cell_release tears down the subscription and parent lists at zero;
-    // the payload is POD (no heap kinds landed), so teardown is just the free.
+    // hl_cell_release tears down the subscription and parent lists at zero.
+    // Phase 3e: reference payloads own one retained reference — release it
+    // before the free. Scalar payloads are POD (no teardown).
     if (hl_cell_release(&s->cell)) {
+        switch (s->value.type) {
+            case HL_VALUE_STR:
+                hl_array_release(s->value.value.str_val);
+                break;
+            case HL_VALUE_ARRAY:
+                hl_array_release(s->value.value.arr_val);
+                break;
+            case HL_VALUE_OBJECT:
+                hl_object_release(s->value.value.obj_val);
+                break;
+            default:
+                break;
+        }
         free(s);
         hl_free_count++;
     }
@@ -1217,6 +1231,51 @@ void hl_scalar_release(HiLowScalar* s) {
 
 int32_t hl_scalar_get_i32(HiLowScalar* s) {
     return s->value.value.i32_val;
+}
+
+// Reference-payload slots (Phase 3e-α). The slot ADOPTS a +1 reference at
+// construction and on every set (callers retain first when they hold a
+// borrow); getters BORROW. The slot's release tears the payload down.
+static HiLowScalar* hl_scalar_new_ref(HiLowValueType kind) {
+    HiLowScalar* s = malloc(sizeof(HiLowScalar));
+    hl_alloc_count++;
+    s->cell.refcount = 1;
+    s->cell.watchers = NULL;
+    s->cell.parents = NULL;
+    s->cell.version = 0;
+    s->cell.deep_watched = false;
+    s->value.type = kind;
+    return s;
+}
+
+HiLowScalar* hl_scalar_new_str(HiLowArray* v) {
+    HiLowScalar* s = hl_scalar_new_ref(HL_VALUE_STR);
+    s->value.value.str_val = v;
+    return s;
+}
+
+HiLowScalar* hl_scalar_new_array_ref(HiLowArray* v) {
+    HiLowScalar* s = hl_scalar_new_ref(HL_VALUE_ARRAY);
+    s->value.value.arr_val = v;
+    return s;
+}
+
+HiLowScalar* hl_scalar_new_object_ref(HiLowObject* v) {
+    HiLowScalar* s = hl_scalar_new_ref(HL_VALUE_OBJECT);
+    s->value.value.obj_val = v;
+    return s;
+}
+
+HiLowArray* hl_scalar_get_str(HiLowScalar* s) {
+    return s->value.value.str_val;
+}
+
+HiLowArray* hl_scalar_get_array_ref(HiLowScalar* s) {
+    return s->value.value.arr_val;
+}
+
+HiLowObject* hl_scalar_get_object_ref(HiLowScalar* s) {
+    return s->value.value.obj_val;
 }
 
 // The hl_cell_set family: store + equality check + notify. The store happens
@@ -1234,6 +1293,46 @@ void hl_cell_set_i32(HiLowScalar* s, int32_t v) {
         }
         hl_cell_notify(&s->cell, HL_SCALAR_ASSIGNED, NULL);
     }
+}
+
+// Reference-payload sets (Phase 3e-α). `v` arrives +1 (ADOPTED — callers
+// retain a borrowed rhs first, so self-assignment reaches here at +2 and
+// survives the old-release). (changed) fires iff unequal under the type's
+// OWN equality — value equality for strings, identity for containers
+// (audit §5 item 10a); (assigned) fires on every set. Store always; the
+// old reference is released AFTER the store; stealth suppresses only the
+// notifications.
+static void hl_cell_set_ref_common(HiLowScalar* s, bool changed) {
+    if (hl_stealth_depth == 0 && cell_has_audience(&s->cell)) {
+        if (changed) {
+            hl_cell_notify(&s->cell, HL_ARR_CHANGED, NULL);
+        }
+        hl_cell_notify(&s->cell, HL_SCALAR_ASSIGNED, NULL);
+    }
+}
+
+void hl_cell_set_str(HiLowScalar* s, HiLowArray* v) {
+    HiLowArray* old = s->value.value.str_val;
+    bool changed = (old != v) && !hl_string_eq(old, v);
+    s->value.value.str_val = v;
+    hl_array_release(old);
+    hl_cell_set_ref_common(s, changed);
+}
+
+void hl_cell_set_array_ref(HiLowScalar* s, HiLowArray* v) {
+    HiLowArray* old = s->value.value.arr_val;
+    bool changed = old != v;
+    s->value.value.arr_val = v;
+    hl_array_release(old);
+    hl_cell_set_ref_common(s, changed);
+}
+
+void hl_cell_set_object_ref(HiLowScalar* s, HiLowObject* v) {
+    HiLowObject* old = s->value.value.obj_val;
+    bool changed = old != v;
+    s->value.value.obj_val = v;
+    hl_object_release(old);
+    hl_cell_set_ref_common(s, changed);
 }
 
 // Helper function to get the proto property as an object (Phase 7b)

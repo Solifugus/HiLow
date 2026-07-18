@@ -1484,9 +1484,12 @@ temperature = 21                    // No fire — value unchanged
 temperature = 20                    // Fires
 ```
 
-**Equality semantics.** For primitive types (integers, booleans, floats, strings, etc.), value equality determines whether a change occurred. For non-primitive types (objects, arrays, tuples), reference equality is used by default: reassigning the variable to a structurally-equal-but-distinct value fires the watcher; mutating the value in place (e.g., `list.push(x)`) does not.
+**What a subscription targets.** A subscription watches either the **variable** (its binding slot) or the **value** it holds:
 
-This default keeps the firing rule cheap. To watch for mutations or for specific kinds of changes (additions, removals, etc.), use a subscription modifier — see below.
+- A **declaration-form** watcher, and any **`(assigned)`** subscription in either form, watches the *variable*. It observes assignment: `(assigned)` fires on every assignment, and `(changed)` fires only when the newly-assigned value differs from the previous one under the type's own equality — value equality for primitives (strings compare by contents), identity for objects and arrays. Mutating a value in place (e.g., `list.push(x)`) is not an assignment and never fires a variable subscription. On one assignment that satisfies both modifiers, `(changed)` subscribers fire before `(assigned)` subscribers.
+- An **expression-form** watcher's content modifiers (`(changed)`, `(deep)`, `(added)`, `(removed)`, `(moved)`) subscribe the *value* the variable holds when the watcher is constructed. For containers these fire on content mutation. The subscription belongs to the value itself: if the variable is later rebound, the watcher stays with the original value.
+
+This split keeps the default firing rule cheap while making both rebinding-watch and content-watch expressible.
 
 For watchers with multiple subscriptions, each individual variable's change is evaluated independently. The watcher fires once per detected change to any subscribed variable.
 
@@ -1496,8 +1499,8 @@ Each entry in a subscription list can carry a **modifier** that controls what ki
 
 | Modifier | Fires when |
 |---|---|
-| `(changed)` | Default. Value differs from previous (primitives: value equality; non-primitives: reference equality). |
-| `(assigned)` | Every assignment, regardless of whether the value differs. |
+| `(changed)` | Default. On a variable subscription: the assigned value differs from the previous one (type's own equality — strings by contents, containers by identity). On a container value subscription: any content mutation. |
+| `(assigned)` | Every assignment to the variable, regardless of whether the value differs. |
 | `(deep)` | Any mutation to the value, including in-place changes to nested structure. |
 | `(added)` | One or more items added to a collection. |
 | `(removed)` | One or more items removed from a collection. |

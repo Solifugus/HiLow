@@ -681,17 +681,9 @@ impl TypeChecker {
                 Some(outer_type.clone())
             }
             Assigned => {
-                // Phase 2e: rebinding detection on objects needs boxed
-                // variables — Phase 3 machinery, not a container-cell event
-                if matches!(outer_type, Type::Object(_)) {
-                    self.add_error(
-                        "(assigned) subscriptions on objects land with Phase 3 (boxing) — use (changed) to observe property mutations".to_string(),
-                        position.clone()
-                    );
-                    None
-                } else {
-                    Some(outer_type.clone())
-                }
+                // Phase 3e-α: (assigned) subscribes the variable's SLOT cell
+                // — legal on every watchable type, objects included.
+                Some(outer_type.clone())
             }
             Added | Removed => {
                 // Phase 2e: the object event mapping has ADDED (new property)

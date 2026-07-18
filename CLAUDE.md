@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 3e — variable-slot cells (rebinding watch), adjudicated as one bucket: string watching, decl-form watchers on container-typed variables, and `(assigned)obj` all mean watching the VARIABLE (rebinding), implemented via the boxing machinery extended to reference-typed payloads — a boxed variable slot whose cell fires on rebinding, distinct from the value's own cell. The three standing rejections are the entry sentinels; the spec's `(changed)`-on-non-primitives reference-equality wording vs the cell model's content-mutation firing is resolved in this phase, deliberately. Gate: full suite.**
+**Current phase: 3e-β — decl-form content-following on containers: on rebinding, the watcher's container-subscription nodes retarget from the old value's cell to the new value's cell (old-container unsubscribe, new-container subscribe in §5 item 9 order), with deep-watched propagation into the new subtree; slot (changed)/(assigned) fire after retargeting completes (audit §5 item 10b; the step table is in the 3e-α plan). Flips watcher_decl_container_rejected to the follow-proof fixtures: mutation fires before AND after rebinding; old-container mutation after rebinding fires nothing; a body that rebinds the watched variable is sound. Gate: full suite.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

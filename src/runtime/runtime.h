@@ -416,6 +416,20 @@ int32_t hl_scalar_get_i32(HiLowScalar* s);
 // subscribers, matching the legacy firing block's order. Store happens under
 // stealth too; stealth suppresses only the notifications.
 void hl_cell_set_i32(HiLowScalar* s, int32_t v);
+// Reference-payload slots (Phase 3e-α): the slot ADOPTS a +1 reference at
+// construction and on every set (retain a borrow first); getters BORROW;
+// hl_scalar_release tears the payload down. (changed) fires iff unequal
+// under the type's OWN equality — value equality for strings, identity for
+// containers (audit §5 item 10a); (assigned) fires on every set.
+HiLowScalar* hl_scalar_new_str(HiLowArray* v);
+HiLowScalar* hl_scalar_new_array_ref(HiLowArray* v);
+HiLowScalar* hl_scalar_new_object_ref(struct HiLowObject* v);
+HiLowArray* hl_scalar_get_str(HiLowScalar* s);
+HiLowArray* hl_scalar_get_array_ref(HiLowScalar* s);
+struct HiLowObject* hl_scalar_get_object_ref(HiLowScalar* s);
+void hl_cell_set_str(HiLowScalar* s, HiLowArray* v);
+void hl_cell_set_array_ref(HiLowScalar* s, HiLowArray* v);
+void hl_cell_set_object_ref(HiLowScalar* s, struct HiLowObject* v);
 
 typedef struct HiLowArray {
     HiLowCell cell;                // cell header — MUST be first member (Phase 2a)

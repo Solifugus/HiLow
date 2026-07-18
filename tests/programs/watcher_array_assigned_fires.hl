@@ -1,0 +1,10 @@
+high program(): i32 {
+    let xs = [1, 2]
+    let a = watcher((added)xs) { print("added") }
+    let b = watcher((assigned)xs) { print("assigned") }
+    xs.push(3)
+    xs = [9]
+    xs.push(10)
+    print("done")
+    return 0
+}

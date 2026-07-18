@@ -5038,20 +5038,9 @@ fn test_stealth_return_rejected() {
             "Error should mention return inside stealth block, got: {}", error_message);
 }
 
-// §4.4 item 8 / audit §5 item 2 adjudication: registering a watcher on a
-// string is a clean compile-time diagnostic until strings inherit cell
-// semantics (Phase 2). Pins the current diagnostic text.
-#[test]
-fn test_string_watcher_rejected() {
-    let result = compile_program("tests/programs/string_watcher_rejected.hl");
-
-    assert!(result.is_err(), "Expected compilation to fail for watcher on a string");
-
-    let error_message = result.unwrap_err();
-    assert!(error_message.contains("watching value of type Primitive(String)")
-            && error_message.contains("string and composite watching"),
-            "Error should be the string-watching diagnostic, got: {}", error_message);
-}
+// (test_string_watcher_rejected flipped LIVE in Phase 3e-α: string watching
+// works via the variable-slot cell — see test_watcher_string_changed_fires
+// and companions at the end of this file.)
 
 // §4.4 item 1, adjudicated: asserts DEFERRED (declaring-thread queue) firing
 // per docs/cell-redesign-brief.md — a mutation made inside a watcher body is
@@ -5471,18 +5460,19 @@ fn test_object_watch_removed_rejected() {
     );
 }
 
-// (assigned) means rebinding-fires — scalar boxing machinery (Phase 3), not
-// a container-cell event.
+// (assigned) means rebinding-fires — landed in Phase 3e-α via the
+// variable-slot cell.
 #[test]
 fn test_object_watch_assigned_rejected() {
-    let result = compile_program("tests/programs/object_watch_assigned_rejected.hl");
-    assert!(result.is_err(), "Expected compilation to fail for (assigned) on an object");
-    let msg = result.unwrap_err();
-    assert!(
-        msg.contains("(assigned) subscriptions on objects land with Phase 3 (boxing)"),
-        "Expected the assigned-on-object diagnostic, got: {}",
-        msg
-    );
+    // Flipped LIVE in Phase 3e-α: (assigned)obj subscribes the variable's
+    // slot cell. Real coverage: test_watcher_object_assigned_fires. This
+    // test now asserts the OPPOSITE of its old self — the fixture shape
+    // compiles — using the live fixture program.
+    let result = compile_program("tests/programs/watcher_object_assigned_fires.hl");
+    assert!(result.is_ok(), "(assigned)obj should compile as of Phase 3e-α: {:?}", result.err());
+    if let Ok(exe) = result {
+        let _ = fs::remove_file(&exe);
+    }
 }
 
 // The body prologue casts the fired cell to the first subscription's
@@ -5663,4 +5653,65 @@ fn test_module_level_watcher_rejected() {
 #[test]
 fn test_watcher_expression_isactive_print() {
     run_3b_fixture("watcher_expression_isactive_print");
+}
+
+// ============================================================
+// Phase 3e-α: variable-slot cells — (assigned) + string watching
+// (adjudications: audit §5 item 10; retargeting lands in 3e-β)
+// ============================================================
+
+// Slot (changed) on a string fires iff the new value is UNEQUAL under
+// string value equality (adjudication 10a): rebinding to an equal value
+// (distinct allocation, same bytes) does not fire.
+#[test]
+fn test_watcher_string_changed_fires() {
+    run_3b_fixture("watcher_string_changed_fires");
+}
+
+// (assigned)s fires on every assignment including equal-value; with both
+// modifiers subscribed, changed fires before assigned on an unequal
+// assignment (the strings analogue of watcher_changed_assigned_order).
+#[test]
+fn test_watcher_string_assigned_fires() {
+    run_3b_fixture("watcher_string_assigned_fires");
+}
+
+// Decl-form watcher on a string: slot subscription; pause/resume work
+// through the shared heap path.
+#[test]
+fn test_watcher_string_decl_form_fires() {
+    run_3b_fixture("watcher_string_decl_form_fires");
+}
+
+// (assigned)obj fires on rebinding and NOT on content mutation (the slot
+// never sees property sets).
+#[test]
+fn test_watcher_object_assigned_fires() {
+    run_3b_fixture("watcher_object_assigned_fires");
+}
+
+// (assigned)xs coexists with a value subscription on the same variable:
+// push fires the (added) value watcher; rebinding fires (assigned) only —
+// the value subscription stays on the ORIGINAL container by identity
+// (adjudication 10b; content-following retargeting is 3e-β). Also kills
+// the 3b-era hole where expression-form (assigned)xs compiled and silently
+// never fired.
+#[test]
+fn test_watcher_array_assigned_fires() {
+    run_3b_fixture("watcher_array_assigned_fires");
+}
+
+// Mixing a slot-kind subscription ((assigned)) with a container value
+// subscription in ONE watcher hits the existing mixed-scalar-container
+// gate (slot subscriptions route down the scalar/slot body path).
+#[test]
+fn test_watcher_mixed_assigned_content_rejected() {
+    let result = compile_program("tests/programs/watcher_mixed_assigned_content_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for mixed slot/value subscriptions");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("mixed scalar and container subscriptions in one watcher"),
+        "Expected the mixed-subscriptions diagnostic, got: {}",
+        msg
+    );
 }

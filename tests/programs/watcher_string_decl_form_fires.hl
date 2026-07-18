@@ -1,0 +1,10 @@
+high program(): i32 {
+    let s = "a"
+    watcher onS((changed)s) { print(s) }
+    s = "b"
+    onS.pause()
+    s = "c"
+    onS.resume()
+    s = "d"
+    return 0
+}

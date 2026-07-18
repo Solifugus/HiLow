@@ -29,7 +29,6 @@ const REJECTION_FIXTURES: &[&str] = &[
     "array_moved_alias_rejected_on_changed.hl",      // is_err test
     "wrong_context.hl",                              // rejection fixture; test commented out
     "stealth_return_rejected.hl",                    // is_err test test_stealth_return_rejected (wired in 1.5d, audit §4.4 item 9)
-    "string_watcher_rejected.hl",                    // is_err test test_string_watcher_rejected — adjudicated audit §5 item 2: compile-time diagnostic until strings inherit cell semantics (Phase 2)
     "phase3/types2.hl",                              // verify_phase3.rs test_types2_fails_type_check
     "phase3/types3.hl",                              // verify_phase3.rs test_types3_fails_type_check
     "unknown_with_options.hl",                       // Phase 9b deferral: unknown constructor with options is UnsupportedFeature in codegen (generate_unknown_constructor)
@@ -41,8 +40,8 @@ const REJECTION_FIXTURES: &[&str] = &[
     "object_watch_removed_rejected.hl",              // is_err test test_object_watch_removed_rejected — no REMOVED event: property removal unimplemented (tombstone ruling)
     "watcher_decl_container_rejected.hl",            // is_err test test_watcher_decl_container_rejected — Phase 3b adjudication A: decl-form on a container variable is rebinding-watch (variable-slot cell, unscheduled)
     "watcher_destructured_binding_rejected.hl",       // is_err test test_watcher_destructured_binding_rejected — Phase 3b adjudication E: destructured bindings do not box yet
-    "object_watch_assigned_rejected.hl",             // is_err test test_object_watch_assigned_rejected — rebinding detection needs Phase 3 boxing
     "watcher_mixed_array_object_rejected.hl",        // is_err test test_watcher_mixed_array_object_rejected — body prologue casts to one container type (Phase 2e single-container-kind watchers)
+    "watcher_mixed_assigned_content_rejected.hl",    // is_err test test_watcher_mixed_assigned_content_rejected — Phase 3e-α: slot-kind + value-kind subscriptions in one watcher hit the mixed-scalar-container gate
     "watcher_decl_name_return_rejected.hl",          // is_err test test_watcher_decl_name_return_rejected — Phase 3c adjudication A: decl-form watcher names are not first-class values
     "watcher_decl_name_alias_rejected.hl",           // is_err test test_watcher_decl_name_alias_rejected — same adjudication
     "modules/watcher_in_module/app.hl",              // is_err test test_module_level_watcher_rejected — Phase 3c: module initialization semantics unspecified (STATUS.md open question)

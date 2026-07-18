@@ -868,6 +868,65 @@ point of deleting-with-confidence.
   standing rejections (string_watcher_rejected, watcher_decl_container_rejected,
   object_watch_assigned_rejected) flip live or re-scope in this phase.
   *Gate: full suite; the three rejection fixtures are the entry sentinels.*
+  SPLIT (approved with the 3e-α plan, at the follow-subscription boundary
+  the phase instruction named): **3e-α** = slot cells + `(assigned)` on all
+  types (both forms) + string watching (both modifiers, both forms) — no
+  retargeting (strings' only mutation IS rebinding; (assigned) never
+  follows content); **3e-β** = decl-form content-following on containers
+  (subscription-node retargeting on rebinding, old-container unsubscribe,
+  new-subtree deep propagation, the follow-proof fixtures) — flips the
+  third sentinel.
+  (3e-α landed 2026-07-18 per the approved plan; no STOP conditions hit.
+  RUNTIME: HiLowValue's existing STR/ARRAY/OBJECT kinds became slot
+  payloads — hl_scalar_new_str/new_array_ref/new_object_ref ADOPT a +1,
+  getters BORROW, hl_scalar_release tears the payload down by kind;
+  hl_cell_set_str/set_array_ref/set_object_ref adopt the new +1, compute
+  changed per item 10(a) (strings: identity fast path then hl_string_eq;
+  containers: identity), store, release old AFTER the store
+  (self-assignment safe: borrowed rhs is retained by codegen first), and
+  fire through the identical stealth/audience/notify shape as
+  hl_cell_set_i32. BOXING: BoxDecision gained slot_required +
+  needs_slot(name, pos) — set by mark_subscription reading the
+  subscription's modifier and resolved_var_type refcell ((assigned)
+  anything, or any string subscription); expression-form container content
+  subscriptions deliberately do NOT set it. CODEGEN: slot lets mirror the
+  boxed-i32 rows (local + file-scope-static program lets, HeapType::Scalar
+  release, adopting constructors with hl_array_ref/hl_object_ref retains
+  for borrowed initializers); slot assignment emits the set family
+  (compound on ref slots rejected); reads emit type-keyed getters
+  (borrows); watcher classification routes SLOT-KIND subscriptions
+  ((assigned) anything, strings) down the scalar/slot body path with
+  type-keyed snapshot bindings, while VALUE-kind subscriptions on
+  slot-boxed variables subscribe the CURRENT value's cell via a payload
+  deref (identity at construction, item 10(b)) — a bug caught mid-session
+  by the sentinel battery: the first deref condition also fired for boxed
+  i32 (changed) subscriptions, segfaulting 23 tests; fixed to
+  container-types-only and the suite came back fully green. Env slots for
+  slot-boxed variables are EnvSlot::Scalar regardless of HiLow type (the
+  representation decides); capture classification gained the boxed-first
+  override in all three loops. GATES LIFTED: the typecheck (assigned)obj
+  rejection (validate_subscription_modifier), and both codegen string
+  arms; decl-form containers now allow (assigned)-only subscription lists
+  (content modifiers still reject, message updated to cite 3e-β — pinned
+  substrings preserved, test unedited); slot-needing reference-typed
+  PARAMS get a bounded diagnostic (no boxing prologue for them yet; zero
+  corpus coverage). DISCLOSED behavior fix: expression-form (assigned)xs
+  compiled since 3b and silently never fired (subscribed the array's own
+  cell with HL_SCALAR_ASSIGNED); it now fires on rebinding — pinned.
+  TESTS: string_watcher_rejected + object_watch_assigned_rejected fixtures
+  deleted (flipped); 5 live fixtures (string changed/assigned-order/
+  decl-form, object assigned, array assigned+value-coexistence) + 1
+  rejection pin (mixed slot/value subscriptions → the existing
+  mixed-scalar-container gate) + the old (assigned)obj test rewritten as a
+  compiles-now assertion → integration 302→307 (plan said 306; the +1 is
+  that rewrite, kept instead of deleted). REJECTION_FIXTURES −2+1.
+  Zero-cost vs the 3d binary: ALL 287 pre-existing corpus programs
+  byte-identical (modules/diamond verified as the recorded two-variant
+  permutation); 4 new fixtures compile only under α (flipped surface);
+  every new fixture's output predicted from the adjudications before
+  running, all matched, all valgrind 0. Spec gained the
+  subscription-target passage + amended (changed)/(assigned) table rows.
+  KNOWN_MEMORY_BUGS EMPTY; ignored stays 2.)
 
 ### Phase 4 — temporaries
 
@@ -997,3 +1056,20 @@ named and are not to be re-litigated.
    watcher-lifecycle section gained the fire-order sentence. The
    changed-before-assigned ordering on one changing scalar assignment is a
    separate, compatible property (two notify calls in hl_cell_set).
+10. **Variable-slot semantics (adjudicated 2026-07-18, Phase 3e step zero).**
+   (a) A slot's `(changed)` fires iff the newly-assigned value is unequal to
+   the previous one under the type's OWN equality: value equality for
+   strings (hl_string_eq), identity for containers, value for scalars
+   (existing). `(assigned)` fires on every assignment regardless; on one
+   assignment satisfying both, changed subscribers fire before assigned
+   subscribers (the established two-notify order). (b) Expression-form
+   watchers subscribe the VALUE by identity — unchanged (container
+   content-mutation firing stays exactly as pinned since 2c/2e; a value
+   subscription stays with the original value if the variable is rebound).
+   Decl-form watchers on a variable follow REBINDING via the slot cell: on
+   assignment the watcher's container-subscription nodes retarget from the
+   old value's cell to the new value's cell, with deep-watched propagation
+   into the new subtree (implemented in 3e-β). `(assigned)` — in either
+   form — subscribes the slot: it is inherently about the variable. Spec
+   edits land with each surface (the slot-vs-value subscription-target
+   passage landed with 3e-α).

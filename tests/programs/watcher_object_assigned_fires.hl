@@ -1,0 +1,9 @@
+high program(): i32 {
+    let o = { x: 1 }
+    let w = watcher((assigned)o) { print("assigned") }
+    o = { x: 2 }
+    o.x = 5
+    o = { x: 3 }
+    print("done")
+    return 0
+}

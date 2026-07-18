@@ -50,6 +50,13 @@ pub struct BoxDecision {
     pub position: Position,
     pub boxed: bool,
     pub reason: Option<BoxReason>,
+    /// Phase 3e-α: a subscription REQUIRES the variable be lowered to a
+    /// slot cell (HiLowScalar): any `(assigned)` subscription (either form —
+    /// (assigned) is inherently about the variable), or any subscription on
+    /// a string-typed variable (strings have no value cell to subscribe).
+    /// Expression-form content subscriptions on containers deliberately do
+    /// NOT set this (value-identity subscription, audit §5 item 10b).
+    pub slot_required: bool,
 }
 
 /// Result of the analysis: one decision per variable declaration, in
@@ -85,6 +92,14 @@ impl BoxingAnalysis {
 
     pub fn decisions(&self) -> &[BoxDecision] {
         &self.decisions
+    }
+
+    /// Phase 3e-α: does this declaration need a SLOT cell (see
+    /// BoxDecision::slot_required)? Query by declaration identity.
+    pub fn needs_slot(&self, name: &str, decl_pos: &Position) -> bool {
+        self.decisions
+            .iter()
+            .any(|d| d.slot_required && d.name == name && d.position == *decl_pos)
     }
 
     /// Names a watcher's body references from outside the watcher's own
@@ -152,6 +167,7 @@ impl Analyzer {
             position: position.clone(),
             boxed: false,
             reason: None,
+            slot_required: false,
         });
         self.scopes
             .last_mut()
@@ -182,6 +198,18 @@ impl Analyzer {
     fn mark_subscription(&mut self, sub: &Subscription) {
         if let Some((decl_idx, _)) = self.resolve(&sub.variable_name) {
             self.mark(decl_idx, BoxReason::Subscribed);
+            // Phase 3e-α: does this subscription require a SLOT cell?
+            // (assigned) always does — it watches the variable, not the
+            // value. Any subscription on a string does — strings have no
+            // subscribable value cell. The analysis runs post-typecheck, so
+            // the resolved type refcell is populated.
+            let is_string = matches!(
+                *sub.resolved_var_type.borrow(),
+                Some(Type::Primitive(PrimitiveType::String))
+            );
+            if matches!(sub.modifier, SubscriptionModifier::Assigned) || is_string {
+                self.result.decisions[decl_idx].slot_required = true;
+            }
         }
         // Unresolved: typecheck already errored; nothing to mark.
     }

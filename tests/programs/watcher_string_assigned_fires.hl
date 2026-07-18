@@ -1,0 +1,10 @@
+high program(): i32 {
+    let s = "a"
+    let c = watcher((changed)s) { print("changed") }
+    let a = watcher((assigned)s) { print("assigned") }
+    s = "b"
+    print("after diff")
+    s = "b"
+    print("after same")
+    return 0
+}
