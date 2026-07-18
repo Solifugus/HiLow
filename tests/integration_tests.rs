@@ -5649,3 +5649,18 @@ fn test_module_level_watcher_rejected() {
         msg
     );
 }
+
+// ============================================================
+// Phase 3d: delete name-keyed subscription
+// ============================================================
+
+// Phase 3d: watcher method-call inference keys on the variable's TYPE, not
+// the deleted watcher_name_to_id map — so BOTH forms infer isActive as
+// bool. Before 3d, expression-form `print(w.isActive())` fell through to
+// i32 inference and printed 1/0 while decl-form printed true/false (probed;
+// no fixture pinned the split). This pins the unified behavior — a forced
+// consequence of the map deletion, disclosed in the approved plan.
+#[test]
+fn test_watcher_expression_isactive_print() {
+    run_3b_fixture("watcher_expression_isactive_print");
+}

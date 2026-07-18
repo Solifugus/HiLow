@@ -4,37 +4,6 @@ use crate::typecheck::TypeChecker;
 use crate::lexer::Position;
 use std::collections::{HashMap, HashSet};
 
-/// Phase 10-γ: Subscription information for watcher tracking
-#[derive(Debug, Clone)]
-struct WatcherSubscription {
-    /// Mangled C function name for the watcher body
-    fn_name: String,
-    /// The modifier type that determines firing semantics
-    modifier: SubscriptionModifier,
-    /// All other variables this watcher subscribes to (for passing snapshot
-    /// values to the body when this variable triggers it).
-    /// Variable name → C identifier the body expects.
-    all_subscriptions: Vec<(String, String)>,
-    /// Phase 10a: Captured variables for scalar watchers (passed as &var arguments)
-    captured_vars: Vec<String>,
-}
-
-/// Phase 10-δ-β: Subscription information for heap-allocated watchers
-#[derive(Debug, Clone)]
-struct HeapWatcherSubscription {
-    /// The C variable name holding the HiLowWatcher* pointer
-    watcher_var: String,
-    /// The body function name (emitted as a top-level C function)
-    body_fn_name: String,
-    /// The modifier (Changed or Assigned for this phase)
-    modifier: SubscriptionModifier,
-    /// All subscribed variable names for this watcher, in declaration order
-    /// (used to build the arg list for the body call)
-    all_subscriptions: Vec<String>,
-    /// Phase 10a: Captured variables for expression watchers (passed as &var for scalar, env for array)
-    captured_vars: Vec<String>,
-}
-
 /// Types of heap allocations for ownership tracking (Phase 8a)
 #[derive(Debug, Clone, PartialEq)]
 pub enum HeapType {
@@ -211,20 +180,15 @@ pub struct CodeGenerator {
     forward_declarations: String,
     /// Phase 11b-fixup: Track whether main() has explicitly returned (to avoid duplicated epilogue)
     main_explicitly_returned: bool,
-    /// Phase 10-γ: tracking which variables have watchers subscribed to them,
-    /// so assignments to those variables can emit notification calls.
-    watcher_subscribers: HashMap<String, Vec<WatcherSubscription>>,
     /// Phase 10-γ: emitted C function bodies for watchers, concatenated into
     /// final output between function definitions and main().
     watcher_bodies: String,
     /// Phase 10-γ: Counter for generating unique watcher IDs
     watcher_counter: usize,
-    /// Phase 10-γ-fixup: maps watcher names to their codegen IDs for method dispatch.
-    watcher_name_to_id: HashMap<String, usize>,
-    /// Phase 10-δ-β: maps subscribed variable names to lists of heap watcher
-    /// C-variable-names that captured the variable. Parallel to watcher_subscribers
-    /// (which tracks declaration-form watchers).
-    heap_watcher_subscribers: HashMap<String, Vec<HeapWatcherSubscription>>,
+    /// Phase 3d: program-body watcher ids, allocated in body-item order by
+    /// generate_program_body_functions and consumed by position in
+    /// generate_program_body_statements (the two run as separate passes).
+    program_watcher_ids: Vec<usize>,
     /// Phase 3b: boxing analysis for the TopLevel currently being generated
     /// (set at the top of generate/generate_graph; per-module for graphs).
     boxing: Option<crate::typecheck::boxing::BoxingAnalysis>,
@@ -276,11 +240,9 @@ impl CodeGenerator {
             current_name_map: None,
             forward_declarations: String::new(),
             main_explicitly_returned: false,
-            watcher_subscribers: HashMap::new(),
             watcher_bodies: String::new(),
             watcher_counter: 0,
-            watcher_name_to_id: HashMap::new(),
-            heap_watcher_subscribers: HashMap::new(),
+            program_watcher_ids: Vec::new(),
             boxing: None,
             boxed_bindings: Vec::new(),
             boxed_hoisted: HashSet::new(),
@@ -836,33 +798,9 @@ impl CodeGenerator {
         self.in_c_switch = false;
         self.in_string_switch = false;
 
-        // Watcher subscribers: use surgical masking to prevent cross-scope leaks while allowing
-        // in-function watchers to fire. Collect names declared locally in this function (params + locals),
-        // then save and remove only those shadowed names from inherited subscriber maps.
-        let mut local_names = std::collections::HashSet::new();
-
-        // Function parameters are local names
-        for param in &function.params {
-            local_names.insert(param.name.clone());
-        }
-
-        // Variables declared in function body are also local names
-        if let Some(body) = &function.body {
-            let body_locals = self.collect_local_variable_names(&body.items);
-            local_names.extend(body_locals);
-        }
-
-        // Save and remove entries for shadowed names only
-        let mut saved_shadowed_subscribers = HashMap::new();
-        let mut saved_shadowed_heap_subscribers = HashMap::new();
-        for name in &local_names {
-            if let Some(entry) = self.watcher_subscribers.remove(name) {
-                saved_shadowed_subscribers.insert(name.clone(), entry);
-            }
-            if let Some(entry) = self.heap_watcher_subscribers.remove(name) {
-                saved_shadowed_heap_subscribers.insert(name.clone(), entry);
-            }
-        }
+        // Phase 3d: the watcher-subscriber shadow masking that lived here is
+        // gone — subscription is by cell identity, so shadowing is trivially
+        // correct with no name bookkeeping.
 
         // Generate function body
         if let Some(body) = &function.body {
@@ -879,20 +817,6 @@ impl CodeGenerator {
         self.pending_statement_decls = saved_pending_decls;
         self.in_c_switch = saved_in_c_switch;
         self.in_string_switch = saved_in_string_switch;
-        // Restore caller's watcher-subscriber state: put back shadowed entries and remove
-        // any local entries to prevent outward leakage
-        for name in &local_names {
-            // Remove any local entries added during function execution
-            self.watcher_subscribers.remove(name);
-            self.heap_watcher_subscribers.remove(name);
-        }
-        // Restore the shadowed entries we saved earlier
-        for (name, entry) in saved_shadowed_subscribers {
-            self.watcher_subscribers.insert(name, entry);
-        }
-        for (name, entry) in saved_shadowed_heap_subscribers {
-            self.heap_watcher_subscribers.insert(name, entry);
-        }
 
         // Phase 3b: drop this function's parameter binding records
         self.boxed_bindings.truncate(boxed_param_base);
@@ -927,29 +851,29 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 3: register watcher ids and name-keyed subscriptions (the
-        // map feeds shadow masking until Phase 3d; body generation moved to
-        // the declaration site in Phase 4 so captures see earlier lets)
+        // Phase 3: allocate watcher ids up front, in item order (Phase 3d:
+        // ids are carried by position, not by name — pass 4 consumes them in
+        // the same order this loop allocates them)
+        let mut block_watcher_ids: Vec<usize> = Vec::new();
         for item in &block.items {
-            if let BlockItem::Watcher(w) = item {
-                let watcher_id = self.watcher_counter;
+            if let BlockItem::Watcher(_) = item {
+                block_watcher_ids.push(self.watcher_counter);
                 self.watcher_counter += 1;
-                let func_name = format!("hilow_watcher_{}_{}", watcher_id, w.name);
-                self.register_watcher_subscriptions(w, func_name);
-                self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
             }
         }
 
         // Phase 4: emit statements and watcher constructions in source order
+        let mut next_watcher_idx = 0;
         for item in &block.items {
             match item {
                 BlockItem::Statement(s) => {
                     self.generate_statement(s, type_checker)?;
                 }
                 BlockItem::Watcher(w) => {
-                    // Phase 3b: body + statics into watcher_bodies, then
-                    // activation + cell subscription at the declaration site
-                    let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                    // Phase 3b: body into watcher_bodies, then cell
+                    // subscription at the declaration site
+                    let id = block_watcher_ids[next_watcher_idx];
+                    next_watcher_idx += 1;
                     let (_func_name, env_fields, env_dtor) = self.generate_watcher(w, id, type_checker)?;
                     self.emit_decl_watcher_construction(w, id, &env_fields, env_dtor.as_deref());
                 }
@@ -991,29 +915,29 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 3: register watcher ids and name-keyed subscriptions (the
-        // map feeds shadow masking until Phase 3d; body generation moved to
-        // the declaration site in Phase 4 so captures see earlier lets)
+        // Phase 3: allocate watcher ids up front, in item order (Phase 3d:
+        // ids are carried by position, not by name — pass 4 consumes them in
+        // the same order this loop allocates them)
+        let mut block_watcher_ids: Vec<usize> = Vec::new();
         for item in &block.items {
-            if let BlockItem::Watcher(w) = item {
-                let watcher_id = self.watcher_counter;
+            if let BlockItem::Watcher(_) = item {
+                block_watcher_ids.push(self.watcher_counter);
                 self.watcher_counter += 1;
-                let func_name = format!("hilow_watcher_{}_{}", watcher_id, w.name);
-                self.register_watcher_subscriptions(w, func_name);
-                self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
             }
         }
 
         // Phase 4: emit statements and watcher constructions in source order
+        let mut next_watcher_idx = 0;
         for item in &block.items {
             match item {
                 BlockItem::Statement(s) => {
                     self.generate_statement(s, type_checker)?;
                 }
                 BlockItem::Watcher(w) => {
-                    // Phase 3b: body + statics into watcher_bodies, then
-                    // activation + cell subscription at the declaration site
-                    let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                    // Phase 3b: body into watcher_bodies, then cell
+                    // subscription at the declaration site
+                    let id = block_watcher_ids[next_watcher_idx];
+                    next_watcher_idx += 1;
                     let (_func_name, env_fields, env_dtor) = self.generate_watcher(w, id, type_checker)?;
                     self.emit_decl_watcher_construction(w, id, &env_fields, env_dtor.as_deref());
                 }
@@ -1076,17 +1000,17 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 3b: register ids + name-keyed subscriptions here (the map
-        // feeds shadow masking until 3d); bodies and constructions are
-        // emitted at the declaration site in generate_program_body_statements
-        // so captures see earlier lets and pre-declaration assignments
-        // cannot fire (no subscriber on the cell yet).
-        for watcher in deferred_watchers {
-            let watcher_id = self.watcher_counter;
+        // Phase 3d: allocate program-body watcher ids here, BEFORE nested
+        // functions generate (so program watchers keep lower ids than
+        // nested-function watchers, as before). Ids are carried by position
+        // in program_watcher_ids; generate_program_body_statements consumes
+        // them in the same body-item order. Bodies and constructions are
+        // emitted at the declaration site so captures see earlier lets and
+        // pre-declaration assignments cannot fire.
+        self.program_watcher_ids.clear();
+        for _watcher in deferred_watchers {
+            self.program_watcher_ids.push(self.watcher_counter);
             self.watcher_counter += 1;
-            let func_name = format!("hilow_watcher_{}_{}", watcher_id, watcher.name);
-            self.register_watcher_subscriptions(watcher, func_name);
-            self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
         }
 
         // Generate nested functions as top-level C functions
@@ -1120,13 +1044,17 @@ impl CodeGenerator {
 
         // Generate statements and watcher constructions in source order
         // (Phase 3b: decl-form watchers subscribe at their declaration site)
+        let mut next_watcher_idx = 0;
         for item in &body.items {
             match item {
                 BlockItem::Statement(statement) => {
                     self.generate_statement(statement, type_checker)?;
                 }
                 BlockItem::Watcher(w) => {
-                    let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                    // Phase 3d: ids carried by position from the
+                    // generate_program_body_functions pre-pass.
+                    let id = self.program_watcher_ids[next_watcher_idx];
+                    next_watcher_idx += 1;
                     let (_func_name, env_fields, env_dtor) = self.generate_watcher(w, id, type_checker)?;
                     self.emit_decl_watcher_construction(w, id, &env_fields, env_dtor.as_deref());
                 }
@@ -5208,8 +5136,10 @@ impl CodeGenerator {
                                 "now" => Type::Time,
                                 _ => Type::I32
                             }
-                        } else if self.watcher_name_to_id.contains_key(name) {
-                            // Phase 10-γ-fixup: Handle watcher method calls
+                        } else if matches!(self.variable_types.get(name), Some(Type::Watcher)) {
+                            // Phase 3d: watcher method calls infer by the
+                            // variable's TYPE (both forms), matching the
+                            // dispatch arm in generate_function_call.
                             match member_access.member.as_str() {
                                 "pause" | "resume" | "end" => Type::Nothing,
                                 "isActive" => Type::Bool,
@@ -7754,8 +7684,6 @@ impl CodeGenerator {
         }
         let env_dtor_name = Some(self.emit_watcher_env_struct(&env_struct_name, &env_fields));
 
-        // Phase 10-γ-fixup: Add watcher name to ID mapping for method dispatch
-        self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
 
         // Body: one firing ABI (env, cell, delta). Active/ended gating lives
         // on the runtime watcher object — hl_cell_notify checks it per node
@@ -7867,113 +7795,4 @@ impl CodeGenerator {
         self.track_heap_owner(&watcher.name, HeapType::Watcher);
     }
 
-    /// Phase 10-γ: Register a watcher as a subscriber to its variables
-    fn register_watcher_subscriptions(&mut self, watcher: &Watcher, func_name: String) {
-        let mut all_subscriptions = Vec::new();
-
-        // Build the list of all subscriptions for snapshot passing
-        for subscription in &watcher.subscriptions {
-            let var_name = subscription.variable_name.clone();
-            let param_name = subscription.alias.as_ref().unwrap_or(&var_name).clone();
-            all_subscriptions.push((var_name, param_name));
-        }
-
-        // Register each variable as having this watcher as a subscriber
-        for subscription in &watcher.subscriptions {
-            let var_name = &subscription.variable_name;
-            let watcher_subscription = WatcherSubscription {
-                fn_name: func_name.clone(),
-                modifier: subscription.modifier.clone(),
-                all_subscriptions: all_subscriptions.clone(),
-                captured_vars: Vec::new(), // Phase 10a: Declared watchers don't have captures yet
-            };
-
-            self.watcher_subscribers
-                .entry(var_name.clone())
-                .or_insert_with(Vec::new)
-                .push(watcher_subscription);
-        }
-    }
-
-    /// Collect names of variables declared locally within the given block items
-    fn collect_local_variable_names(&self, items: &[BlockItem]) -> std::collections::HashSet<String> {
-        let mut local_vars = std::collections::HashSet::new();
-
-        for item in items {
-            self.collect_local_vars_from_block_item(item, &mut local_vars);
-        }
-
-        local_vars
-    }
-
-    /// Recursively collect local variable declarations from a block item
-    fn collect_local_vars_from_block_item(&self, item: &BlockItem, local_vars: &mut std::collections::HashSet<String>) {
-        use crate::ast::BlockItem::*;
-
-        match item {
-            Statement(stmt) => {
-                self.collect_local_vars_from_statement(stmt, local_vars);
-            }
-            Function(func) => {
-                // Function parameters are local to the function
-                for param in &func.params {
-                    local_vars.insert(param.name.clone());
-                }
-                // Do NOT descend into nested function bodies - their locals belong to their own scope
-                // A nested function declaration contributes no variables to the current scope
-            }
-            Watcher(_) => {
-                // Watchers don't declare variables by themselves
-            }
-        }
-    }
-
-    /// Recursively collect local variable declarations from a statement
-    fn collect_local_vars_from_statement(&self, stmt: &Statement, local_vars: &mut std::collections::HashSet<String>) {
-        use crate::ast::Statement::*;
-
-        match stmt {
-            Let(let_decl) => {
-                if let crate::ast::LetPattern::Identifier(name, _) = &let_decl.pattern {
-                    local_vars.insert(name.clone());
-                }
-            }
-            If(if_stmt) => {
-                for item in &if_stmt.then_block.items {
-                    self.collect_local_vars_from_block_item(item, local_vars);
-                }
-                if let Some(else_block) = &if_stmt.else_block {
-                    for item in &else_block.items {
-                        self.collect_local_vars_from_block_item(item, local_vars);
-                    }
-                }
-            }
-            While(while_stmt) => {
-                for item in &while_stmt.body.items {
-                    self.collect_local_vars_from_block_item(item, local_vars);
-                }
-            }
-            Loop(loop_stmt) => {
-                for item in &loop_stmt.body.items {
-                    self.collect_local_vars_from_block_item(item, local_vars);
-                }
-            }
-            ForIn(for_stmt) => {
-                // The iteration variables are local
-                local_vars.insert(for_stmt.key_name.clone());
-                local_vars.insert(for_stmt.value_name.clone());
-                for item in &for_stmt.body.items {
-                    self.collect_local_vars_from_block_item(item, local_vars);
-                }
-            }
-            StealthBlock(block, _) => {
-                for item in &block.items {
-                    self.collect_local_vars_from_block_item(item, local_vars);
-                }
-            }
-            _ => {
-                // Other statement types don't declare variables
-            }
-        }
-    }
 }

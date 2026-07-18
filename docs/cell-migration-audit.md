@@ -813,6 +813,61 @@ point of deleting-with-confidence.
   **User decision needed at this step:** do the two escape-rejection tests
   (§4.3 last row) remain spec (keep a deliberate check) or fall away (boxing
   makes escape sound)? *Gate: full suite (modulo that decision).*
+  (Landed 2026-07-18 per the approved plan. The recorded user decision was
+  already resolved by §5 item 1 in 3b — escape is sound, those tests are
+  gone. PRE-DELETION INVENTORY (exhaustive reference audit, each read site
+  verdicted live/dead): watcher_subscribers had ONE writer
+  (register_watcher_subscriptions) and zero value-consuming reads;
+  heap_watcher_subscribers had ZERO writers since 3b (always empty — its
+  masking restore loop never iterated); the shadow-masking block in
+  generate_function + collect_local_variable_names + two recursive helpers
+  served only those two dead maps; watcher_name_to_id carried exactly two
+  live roles — id TRANSPORT from the pass-3 allocation loops to the pass-4
+  consumption loops (three get sites), and the inference mirror.
+  scalar_watcher_captures / temp_watcher_expr_* / array_watcher_registrations
+  / HeapType::Environment: grep-confirmed already gone (3b/2b). REPLACEMENTS:
+  id transport became ORDER-BASED — pass 3 pushes allocated ids into a local
+  Vec in item order (program-body split: new program_watcher_ids field,
+  filled by the generate_program_body_functions pre-pass BEFORE nested
+  functions generate, consumed by position in
+  generate_program_body_statements) — numbering byte-exact, proven by a
+  corpus-wide C diff of the transport-only state (286 identical, 28
+  rejection fixtures no-C-either-side, modules/diamond = the recorded
+  module-order permutation, same two-variant md5 pair on both binaries).
+  The inference mirror re-keyed from watcher_name_to_id to
+  variable_types == Type::Watcher (the same key the 3c dispatch arm uses) —
+  the ONE disclosed behavior edge: expression-form watcher method-call
+  inference unified with decl-form (isActive: i32→bool, pause/resume/end:
+  i32→Nothing on the fall-through path). Consequence pinned live by new
+  fixture watcher_expression_isactive_print (print(w.isActive()) now
+  true/false, was 1/0 — probe-only shape, no fixture had pinned the split).
+  DISCLOSED PREDICTION MISS: the plan declared zero expected corpus diffs
+  from the re-key; the post-deletion corpus diff found ONE —
+  watcher/expression_methods, where `if (w.isActive())` now emits
+  `if (hl_watcher_is_active(w))` instead of
+  `if ((hl_watcher_is_active(w) != 0))` (Bool inference drops the i32
+  truthiness coercion) — semantically identical C, runtime output and
+  valgrind verified unchanged; it is the adjudicated (2a) unification
+  manifesting, not an undeclared class, but the zero-diff prediction was
+  wrong on this fixture. Everything else byte-identical corpus-wide.
+  Deletion resolved via dead-code checks alone: warning count 27→25,
+  the delta being exactly the two accepted fields-never-read struct
+  warnings from 3b. Shadowing sentinels passed unchanged. Tests 301→302
+  (+1 pin, no drops); REJECTION_FIXTURES unchanged; KNOWN_MEMORY_BUGS
+  EMPTY; ignored stays 2. Full ritual green, gate green.)
+- **3e Variable-slot cells.** The rebinding-watch bucket, adjudicated
+  (scheduled 2026-07-18 with plan approval of 3d, per the owner's
+  instruction): string watching, decl-form watchers on container-typed
+  variables, and `(assigned)obj` all mean watching the VARIABLE (rebinding),
+  implemented via the boxing machinery extended to reference-typed payloads —
+  a boxed variable slot whose cell fires on rebinding, distinct from the
+  value's own cell. Scheduled immediately after 3d. The 3b STATUS
+  open-question rider carries into this phase: the spec's
+  `(changed)`-on-non-primitives reference-equality wording vs the cell
+  model's content-mutation firing is resolved here, deliberately. The three
+  standing rejections (string_watcher_rejected, watcher_decl_container_rejected,
+  object_watch_assigned_rejected) flip live or re-scope in this phase.
+  *Gate: full suite; the three rejection fixtures are the entry sentinels.*
 
 ### Phase 4 — temporaries
 

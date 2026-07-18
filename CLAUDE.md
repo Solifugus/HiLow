@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 3d — delete name-keyed subscription: `watcher_subscribers`, `heap_watcher_subscribers`, `watcher_name_to_id` (and the inference mirror keyed on it), `scalar_watcher_captures` remnants, shadow masking, the `WatcherSubscription`/`HeapWatcherSubscription` structs. Shadowing tests must pass unchanged. (The step's recorded "user decision" on the two escape-rejection tests was already resolved by §5 item 1 in 3b — escape is sound, those tests are gone.) Gate: full suite.**
+**Current phase: 3e — variable-slot cells (rebinding watch), adjudicated as one bucket: string watching, decl-form watchers on container-typed variables, and `(assigned)obj` all mean watching the VARIABLE (rebinding), implemented via the boxing machinery extended to reference-typed payloads — a boxed variable slot whose cell fires on rebinding, distinct from the value's own cell. The three standing rejections are the entry sentinels; the spec's `(changed)`-on-non-primitives reference-equality wording vs the cell model's content-mutation firing is resolved in this phase, deliberately. Gate: full suite.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

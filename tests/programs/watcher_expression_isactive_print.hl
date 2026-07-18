@@ -1,0 +1,11 @@
+high program(): i32 {
+    let x = 0
+    let w = watcher(x) { print("nope") }
+    print(w.isActive())
+    w.pause()
+    print(w.isActive())
+    w.resume()
+    w.end()
+    print(w.isActive())
+    return 0
+}
