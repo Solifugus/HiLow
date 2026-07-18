@@ -671,6 +671,62 @@ point of deleting-with-confidence.
   variables stay raw locals — verify by inspecting generated C for an
   unwatched program (zero-cost check). *Gate: full suite; changed/assigned
   and stealth scalar tests are the sentinels.*
+  (Landed 2026-07-17 per the approved plan. RUNTIME: HiLowScalar = HiLowCell
+  header + HiLowValue payload — HiLowValue IS the one payload representation
+  (3a design statement); only the i32 kind has ctor/get/set (corpus set,
+  §5 item 7 — no speculative matrix, optional allow-list unchanged since no
+  new kind landed). hl_cell_set_i32: store always (stealth suppresses only
+  notification), CHANGED notify iff payload differed, then HL_SCALAR_ASSIGNED
+  (6) always — changed subscribers before assigned, the legacy order.
+  hl_cell_notify amended: CHANGED/DEEP modifiers do NOT fire on
+  HL_SCALAR_ASSIGNED and it never triggers the deep parent walk (equal-value
+  assignment is not a mutation). hl_cell_subscribe now APPENDS (see §5 item
+  9). HiLowWatcher gained env_dtor: EVERY watcher env slot (subscribed and
+  captured, containers included) is a RETAINED cell released by a generated
+  per-watcher dtor at final release — escape soundness (§5 item 1); the
+  runtime frees the env itself. LOWERING: boxed let → hl_scalar_new_i32 +
+  HeapType::Scalar scope release (early returns included; `return x` copies
+  the payload and does NOT transfer the cell); boxed reads →
+  hl_scalar_get_i32; assignment (incl. compound, adjudication B) →
+  hl_cell_set_i32; boxed params box in the prologue (name rebinds to the
+  cell); boxed PROGRAM-scope declarations become file-scope statics so
+  nested named functions subscribe/capture by cell identity (this replaces
+  the name-collision accident the legacy factory fixtures leaned on). BOTH
+  watcher forms subscribe via hl_watcher_new_subscribed (registration by
+  construction): expression-form scalars migrated off the 2b heap path onto
+  the 2c env-ABI path; decl-form bodies are env-ABI too, gated on the legacy
+  statics (which stay until 3c), constructed at the declaration site as a
+  hidden scope-owned watcher — pre-declaration assignments cannot fire (no
+  subscriber on the cell yet), replacing the compile-time ordering trick.
+  Watcher-env capture lists come from the 3a analysis
+  (BoxingAnalysis::captures_for, shadow-correct) for scalar watchers and
+  decl-form; container watchers keep the legacy list (its phantom
+  subscribed-container slots are the multi-subscription rebind mechanism)
+  with unboxed-scalar phantoms skipped. DELETED: the scalar firing block +
+  Phase 10-γ compound rejection, the 2b scalar WatcherExpr branch (bare
+  hl_watcher_new + side-channel + _cap_ pointer params),
+  emit_watcher_call_args{,_from_names}, extract_watcher_id, the
+  scalar-capture read branch, the typecheck escape machinery
+  (capture_unsafe_watchers, current_function_scope_depth,
+  check_watcher_escape_reachability, both rejection sites) and the spec's
+  reachability rule (sound-escape text landed in its place). ADJUDICATIONS
+  (plan approval): A decl-form on container variables → compile diagnostic
+  (rebinding-watch = variable-slot bucket with (assigned)obj and strings;
+  was untested, leaking, rebinding-firing); B compound assignment to watched
+  scalars lowers and fires; C decl-form captures work (previously emitted
+  non-compiling C); D watchable kinds narrowed to i32+containers with honest
+  diagnostics; E boxed destructured bindings and boxed closure-hoisted vars
+  reject cleanly; F env retains for all watcher envs. TESTS: −3 escape
+  rejections (fixtures deleted, gate −3), +7 (changed/assigned order,
+  compound fires, decl capture, capture-escape-sound, subscribed-local-
+  escape-sound, decl-container rejection, destructured rejection; gate +2
+  rejection entries) → integration 297/0/2. Three array expected files
+  flipped to declaration order per §5 item 9. STRING watching stays rejected
+  with the variable-slot wording (pinned substrings preserved). Zero-cost
+  verified: 211 unwatched compilable corpus programs byte-identical HEAD vs
+  3b (the 14 non-diffable are module-entry/rejection fixtures that never
+  reach codegen). Sound escape demonstrated live + valgrind 0; the 2b
+  laundering residual closes as resolved-by-design.)
 - **3c Runtime watcher lifecycle.** Watcher declarations construct runtime
   watcher values (both forms share the heap path); delete static
   `_active`/`_ended` bools, the four static helpers, activation/deactivation
@@ -800,3 +856,19 @@ named and are not to be re-litigated.
    it lands, the Phase 2e rejections stand — `(added)obj` stays a
    compile-time diagnostic, and the runtime's new-key → ADDED mapping
    (already implemented in 2e) stays surface-unreachable.
+9. **Multi-watcher fire order (adjudicated 2026-07-17, during Phase 3b):
+   SUBSCRIPTION (DECLARATION) ORDER — the earliest-subscribed watcher fires
+   first.** The unified firing path exposed that the legacy split
+   implementations pinned CONTRADICTORY orders for the same abstract program
+   (two watchers, one cell): the scalar firing block fired in registration
+   order (pinned by nested_watchers, expression_coexists), while
+   hl_cell_subscribe's prepend made container watchers fire newest-first
+   (pinned by three 2c-era array fixtures). No single subscribe discipline
+   satisfies both — the owner ruled declaration order; hl_cell_subscribe now
+   appends, the three array expected files
+   (test_array_watcher_added_and_changed_both_fire,
+   array_moved_changed_both_fire, array_insert_watcher_fires) were flipped
+   deliberately as part of the ruling (not a test weakening), and the spec's
+   watcher-lifecycle section gained the fire-order sentence. The
+   changed-before-assigned ordering on one changing scalar assignment is a
+   separate, compatible property (two notify calls in hl_cell_set).

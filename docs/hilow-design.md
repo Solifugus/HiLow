@@ -1593,39 +1593,24 @@ function processSession(session) {
 
 This matches HiLow's broader scope-based ownership model.
 
-**Escape and the reachability rule.** When a watcher value escapes its declaring scope (returned from a function, stored in an outer-scope variable, captured by another escaping closure), every variable in its subscription list must remain reachable from the new scope. A subscription to a function-local variable in an escaping watcher is a compile-time error:
+**Escape is sound.** A watcher value may escape its declaring scope — returned from a function, stored in an outer-scope variable, captured by another closure. The watcher holds its subscribed and captured variables alive: a watched variable lives as long as any watcher that references it, even after its declaring scope exits. There is no reachability restriction.
 
 ```hilow
-function bad() {
-  let local = 0
-  watcher w((changed)local) {
-    print(local)
-  }
-  return w                          // ✗ Error: w subscribes to `local`,
-                                    //   which is local to bad() and would
-                                    //   be unreachable from the caller.
-}
-```
-
-The factory pattern works because parameters captured by the watcher are references to the caller's variables, which remain reachable when the watcher returns:
-
-```hilow
-function makeMonitor(target) {
-  watcher w((changed)target) {
-    print(target)
-  }
-  return w                          // ✓ Legal: `target` is the caller's
-                                    //   variable, reachable post-return.
+function makeMonitor(target: [i32]): watcher {
+  let count = 0
+  return watcher((added)target) {
+    print(count)                    // ✓ `count` outlives makeMonitor: the
+  }                                 //   watcher keeps it alive.
 }
 
-let myVar = 0
-let m = makeMonitor(myVar)
-myVar = 5                           // Fires through m
+let items = []: [i32]
+let m = makeMonitor(items)
+items.push(1)                       // Fires through m
 ```
 
-If a watcher subscribes to multiple variables, **every** subscription must be valid for the watcher to escape. A single function-local subscription poisons the escape.
+A subscription to a variable that no surviving scope can reach is legal but inert — nothing can mutate the variable anymore, so the watcher simply never fires again through that subscription.
 
-The error message names the offending variable and the function from which the watcher would escape, and suggests remedies (promote the variable to a parameter, mark it `shared`, or keep the watcher non-escaping).
+**Fire order.** When several watchers observe the same variable, a mutation fires them in subscription order: the watcher declared earliest fires first.
 
 **Low mode.** Low mode forbids watcher escape entirely, matching the broader Low-mode closure restriction.
 

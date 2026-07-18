@@ -1,0 +1,11 @@
+high program(): i32 {
+    let counter = 0
+    let extra = 7
+    watcher onCounter((changed)counter) {
+        print(extra)
+    }
+    counter = 1
+    extra = 8
+    counter = 2
+    return 0
+}

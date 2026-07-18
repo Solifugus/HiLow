@@ -25,8 +25,6 @@ const REJECTION_FIXTURES: &[&str] = &[
     "match_non_exhaustive_expression_error.hl",      // is_err test
     "reject_money_mismatch.hl",                      // is_err test
     "reject_tuple_arity_mismatch.hl",                // is_err test
-    "watcher/expression_return_rejected/main.hl",    // is_err test
-    "watcher/escape_function_local_rejected/main.hl", // is_err test
     "array/type_mismatch.hl",                        // is_err test
     "array_moved_alias_rejected_on_changed.hl",      // is_err test
     "wrong_context.hl",                              // rejection fixture; test commented out
@@ -38,10 +36,11 @@ const REJECTION_FIXTURES: &[&str] = &[
     "optional_i64_rejected.hl",                      // is_err test test_optional_i64_rejected — Phase 2b step zero (audit §5 item 7): optional payload matrix lands in Phase 3
     "optional_bool_let_rejected.hl",                 // is_err test test_optional_bool_let_rejected — same adjudication
     "optional_return_mismatch_rejected.hl",          // is_err test test_optional_return_mismatch_rejected — narrow optional-return type check (Phase 2b step zero)
-    "watcher_capture_escape_rejected.hl",            // is_err test test_watcher_capture_escape_rejected — capture-escape rejected until Phase 3 boxing (Phase 2b)
     "watcher_deep_scalar_rejected.hl",               // is_err test test_watcher_deep_scalar_rejected — (deep) is containers-only until scalars box (Phase 2d; objects joined in 2e)
     "object_watch_added_rejected.hl",                // is_err test test_object_watch_added_rejected — Phase 2e adjudication: ADDED has no reachable trigger until dynamic property addition lands (STATUS.md open question)
     "object_watch_removed_rejected.hl",              // is_err test test_object_watch_removed_rejected — no REMOVED event: property removal unimplemented (tombstone ruling)
+    "watcher_decl_container_rejected.hl",            // is_err test test_watcher_decl_container_rejected — Phase 3b adjudication A: decl-form on a container variable is rebinding-watch (variable-slot cell, unscheduled)
+    "watcher_destructured_binding_rejected.hl",       // is_err test test_watcher_destructured_binding_rejected — Phase 3b adjudication E: destructured bindings do not box yet
     "object_watch_assigned_rejected.hl",             // is_err test test_object_watch_assigned_rejected — rebinding detection needs Phase 3 boxing
     "watcher_mixed_array_object_rejected.hl",        // is_err test test_watcher_mixed_array_object_rejected — body prologue casts to one container type (Phase 2e single-container-kind watchers)
 ];

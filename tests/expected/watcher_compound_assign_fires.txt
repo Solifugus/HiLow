@@ -1,0 +1,4 @@
+changed fired
+after compound
+after zero compound
+2

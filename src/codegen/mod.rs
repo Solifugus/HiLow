@@ -46,6 +46,40 @@ pub enum HeapType {
     Watcher,        // HiLowWatcher*
     Array,          // HiLowArray*
     Tuple(Vec<Type>), // Tuple with heap-allocated elements
+    Scalar,         // HiLowScalar* — boxed watched scalar (Phase 3b)
+}
+
+/// Phase 3b: the kind of cell a watcher env slot holds. Every slot is a
+/// retained cell pointer — scalar cells joined containers when boxing landed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum EnvSlot {
+    Scalar,
+    Array,
+    Object,
+}
+
+impl EnvSlot {
+    fn c_type(self) -> &'static str {
+        match self {
+            EnvSlot::Scalar => "HiLowScalar*",
+            EnvSlot::Array => "HiLowArray*",
+            EnvSlot::Object => "HiLowObject*",
+        }
+    }
+    fn retain_fn(self) -> &'static str {
+        match self {
+            EnvSlot::Scalar => "hl_scalar_retain",
+            EnvSlot::Array => "hl_array_retain",
+            EnvSlot::Object => "hl_object_retain",
+        }
+    }
+    fn release_fn(self) -> &'static str {
+        match self {
+            EnvSlot::Scalar => "hl_scalar_release",
+            EnvSlot::Array => "hl_array_release",
+            EnvSlot::Object => "hl_object_release",
+        }
+    }
 }
 
 /// Loop context for control-transfer cleanup (Phase 1.5b).
@@ -191,15 +225,21 @@ pub struct CodeGenerator {
     /// C-variable-names that captured the variable. Parallel to watcher_subscribers
     /// (which tracks declaration-form watchers).
     heap_watcher_subscribers: HashMap<String, Vec<HeapWatcherSubscription>>,
-    /// Phase 10-δ-β: temporary storage for body function name during WatcherExpr generation
-    /// so let statement can access it for heap subscription registration
-    temp_watcher_expr_body_fn: Option<String>,
-    /// Phase 10-δ-β: temporary storage for WatcherExpr subscriptions during generation
-    temp_watcher_expr_subscriptions: Vec<Subscription>,
-    /// Phase 10a: temporary storage for WatcherExpr captured variables during generation
-    temp_watcher_expr_captured_vars: Vec<String>,
-    /// Phase 10a: tracks captured variables in scalar watchers for pointer-dereference access
-    scalar_watcher_captures: HashSet<String>,
+    /// Phase 3b: boxing analysis for the TopLevel currently being generated
+    /// (set at the top of generate/generate_graph; per-module for graphs).
+    boxing: Option<crate::typecheck::boxing::BoxingAnalysis>,
+    /// Phase 3b: (name, scope_depth, boxed) for scalar bindings, innermost
+    /// last; exit_scope pops its depth's entries. Read/assign sites consult
+    /// the LAST entry for a name — a raw inner shadow of a boxed outer
+    /// binding correctly reads raw.
+    boxed_bindings: Vec<(String, usize, bool)>,
+    /// Phase 3b: env-hoisted captures that are boxed scalar cells — reads
+    /// emit hl_scalar_get_i32(env->x), writes emit hl_cell_set_i32(env->x, v).
+    boxed_hoisted: HashSet<String>,
+    /// Phase 3b: file-scope `static HiLowScalar*` declarations for boxed
+    /// PROGRAM-scope variables — nested named functions subscribe/capture
+    /// them by cell identity (emitted right after the includes).
+    boxed_scalar_statics: String,
 }
 
 impl CodeGenerator {
@@ -241,15 +281,91 @@ impl CodeGenerator {
             watcher_counter: 0,
             watcher_name_to_id: HashMap::new(),
             heap_watcher_subscribers: HashMap::new(),
-            temp_watcher_expr_body_fn: None,
-            temp_watcher_expr_subscriptions: Vec::new(),
-            temp_watcher_expr_captured_vars: Vec::new(),
-            scalar_watcher_captures: HashSet::new(),
+            boxing: None,
+            boxed_bindings: Vec::new(),
+            boxed_hoisted: HashSet::new(),
+            boxed_scalar_statics: String::new(),
         }
+    }
+
+    /// Phase 3b: does the 3a analysis box the declaration at (name, pos)?
+    fn is_boxed_decl(&self, name: &str, pos: &crate::lexer::Position) -> bool {
+        self.boxing.as_ref().map_or(false, |b| b.is_boxed(name, pos))
+    }
+
+    /// Phase 3b: is the CURRENT binding of `name` a boxed HiLowScalar* cell?
+    fn current_binding_boxed(&self, name: &str) -> bool {
+        self.boxed_bindings
+            .iter()
+            .rev()
+            .find(|(n, _, _)| n == name)
+            .map_or(false, |(_, _, boxed)| *boxed)
+    }
+
+    /// Phase 3b: record the boxedness of a fresh binding at the current
+    /// scope depth (raw bindings are recorded too, so an inner raw shadow
+    /// masks an outer boxed one).
+    fn push_boxed_binding(&mut self, name: &str, boxed: bool) {
+        self.boxed_bindings
+            .push((name.to_string(), self.scope_depth, boxed));
+    }
+
+    /// Phase 3b: the C lvalue of a cell-valued variable at the current
+    /// emission site — through the enclosing watcher env when hoisted,
+    /// otherwise the (possibly static-hoisted) C name.
+    fn env_slot_rvalue(&self, name: &str) -> String {
+        if let Some((env_var, _)) = self.hoisted_variables.get(name) {
+            format!("{}->{}", env_var, name)
+        } else {
+            self.mangle_variable_name(name)
+        }
+    }
+
+    /// Phase 3b: emit a watcher env struct + its cell-releasing destructor
+    /// into environment_structs; returns the destructor's name. Every env
+    /// slot OWNS a retain on its cell (escape soundness — audit §5 item 1);
+    /// the dtor releases them, the runtime frees the env itself.
+    fn emit_watcher_env_struct(&mut self, env_struct_name: &str, fields: &[(String, EnvSlot)]) -> String {
+        self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
+        for (name, slot) in fields {
+            self.environment_structs.push_str(&format!("    {} {};\n", slot.c_type(), name));
+        }
+        self.environment_structs.push_str(&format!("}} {};\n\n", env_struct_name));
+
+        let dtor_name = format!("{}_dtor", env_struct_name);
+        self.environment_structs.push_str(&format!("static void {}(void* raw) {{\n", dtor_name));
+        self.environment_structs.push_str(&format!("    {}* e = ({}*)raw;\n", env_struct_name, env_struct_name));
+        for (name, slot) in fields {
+            self.environment_structs.push_str(&format!("    {}(e->{});\n", slot.release_fn(), name));
+        }
+        self.environment_structs.push_str("}\n\n");
+        dtor_name
+    }
+
+    /// Phase 3b: build the env allocation + packing declaration (hoisted to
+    /// statement scope by the caller). Each slot retains its cell.
+    fn watcher_env_pack_decl(&self, env_struct_name: &str, env_var: &str, fields: &[(String, EnvSlot)]) -> String {
+        let mut decl = format!(
+            "{}* {} = malloc(sizeof({})); hl_alloc_count++;",
+            env_struct_name, env_var, env_struct_name
+        );
+        for (name, slot) in fields {
+            let rvalue = self.env_slot_rvalue(name);
+            decl.push_str(&format!(
+                " {}->{} = {}; {}({}->{});",
+                env_var, name, rvalue,
+                slot.retain_fn(), env_var, name
+            ));
+        }
+        decl
     }
 
     /// Generate C code for the entire program
     pub fn generate(&mut self, top_level: &TopLevel, type_checker: &TypeChecker) -> Result<String, CodegenError> {
+        // Phase 3b: run the boxing analysis (Phase 3a) — the lowering below
+        // consults it at every scalar declaration, read, and assignment.
+        self.boxing = Some(crate::typecheck::boxing::analyze(top_level));
+
         // Build the final output in the correct order:
         // 1. Includes
         // 2. Environment struct definitions (from closures)
@@ -283,6 +399,10 @@ impl CodeGenerator {
                 });
             }
         }
+
+        // Phase 3b: boxed program-scope scalar cells (file-scope statics,
+        // referenced by nested functions and watcher envs below)
+        final_output.push_str(&self.boxed_scalar_statics);
 
         // Add environment struct definitions (Phase 7c-δ)
         final_output.push_str(&self.environment_structs);
@@ -339,13 +459,21 @@ impl CodeGenerator {
 
             self.current_name_map = Some(name_map);
 
+            // Phase 3b: per-module boxing analysis (positions are
+            // module-local, so the analysis must be too).
+            self.boxing = Some(crate::typecheck::boxing::analyze(parsed_file));
+
             match parsed_file {
                 TopLevel::Module(module) => {
-                    // Phase 10-γ: Generate module watchers
+                    // Phase 10-γ: Generate module watchers (Phase 3b: bodies
+                    // only — module-level watchers have no execution site to
+                    // construct at, so they remain inert until modules gain
+                    // an initialization phase)
                     for watcher in &module.watchers {
-                        let func_name = self.generate_watcher(watcher, self.watcher_counter, type_checker)?;
-                        self.register_watcher_subscriptions(watcher, func_name);
+                        let watcher_id = self.watcher_counter;
                         self.watcher_counter += 1;
+                        let (func_name, _env_fields, _env_dtor) = self.generate_watcher(watcher, watcher_id, type_checker)?;
+                        self.register_watcher_subscriptions(watcher, func_name);
                     }
 
                     // Generate forward declarations and exported functions with mangled names
@@ -405,6 +533,9 @@ impl CodeGenerator {
         // Add forward declarations for exported functions and lets (Phase 11b)
         final_output.push_str(&self.forward_declarations);
         final_output.push_str("\n");
+
+        // Phase 3b: boxed program-scope scalar cells (file-scope statics)
+        final_output.push_str(&self.boxed_scalar_statics);
 
         // Add tuple struct definitions (Phase 9e)
         final_output.push_str(&self.tuple_struct_definitions);
@@ -642,20 +773,37 @@ impl CodeGenerator {
         let c_func_name = self.mangle_function_name(&function.name);
         self.output.push_str(&format!("{} {}(", c_return_type, c_func_name));
 
-        // Generate parameters and track their types
+        // Generate parameters and track their types. Phase 3b: a parameter
+        // the boxing analysis marks arrives raw and is boxed in the
+        // prologue — the name rebinds to the cell for the whole body.
+        let boxed_param_base = self.boxed_bindings.len();
+        let mut boxed_params: Vec<String> = Vec::new();
         for (i, param) in function.params.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
             }
-            let c_type = self.hilow_type_to_c(&Type::from_ast_type(&param.ty));
-            self.output.push_str(&format!("{} {}", c_type, param.name));
+            let param_type = Type::from_ast_type(&param.ty);
+            let boxed = self.is_boxed_decl(&param.name, &param.position)
+                && matches!(param_type, Type::I32);
+            let c_type = self.hilow_type_to_c(&param_type);
+            if boxed {
+                self.output.push_str(&format!("{} {}__raw", c_type, param.name));
+                boxed_params.push(param.name.clone());
+            } else {
+                self.output.push_str(&format!("{} {}", c_type, param.name));
+            }
 
             // Track parameter types for capture analysis
-            let param_type = Type::from_ast_type(&param.ty);
             self.variable_types.insert(param.name.clone(), param_type);
+            self.push_boxed_binding(&param.name, boxed);
         }
 
         self.output.push_str(") {\n");
+
+        for name in &boxed_params {
+            let c_var = self.mangle_variable_name(name);
+            self.output.push_str(&format!("  HiLowScalar* {} = hl_scalar_new_i32({}__raw);\n", c_var, name));
+        }
 
         // Set current function return type for optional handling
         let return_type = Type::from_ast_type(&function.return_type);
@@ -674,6 +822,13 @@ impl CodeGenerator {
         // (generating `hl_array_release(xs);` in main where xs is undeclared → C compile error).
         // Same family as the transferred_vars fix above.
         let saved_heap_owners = std::mem::take(&mut self.heap_owners);
+
+        // Phase 3b: the prologue-boxed parameter cells belong to the body
+        // scope (entered by generate_block_with_parameter_context below) and
+        // release on every exit path like any boxed local.
+        for name in &boxed_params {
+            self.heap_owners.insert(name.clone(), (HeapType::Scalar, self.scope_depth + 1));
+        }
 
         // Phase 1.5b: control-transfer context is per-C-function — a return/
         // break inside this body must not see the enclosing function's
@@ -745,6 +900,9 @@ impl CodeGenerator {
             self.heap_watcher_subscribers.insert(name, entry);
         }
 
+        // Phase 3b: drop this function's parameter binding records
+        self.boxed_bindings.truncate(boxed_param_base);
+
         // Clear function return type context
         self.current_function_return_type = None;
 
@@ -775,29 +933,31 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 3: emit nested watcher bodies and helpers (as file-scope C)
-        // PLUS register their state and activation/deactivation hooks
+        // Phase 3: register watcher ids and name-keyed subscriptions (the
+        // map feeds shadow masking until Phase 3d; body generation moved to
+        // the declaration site in Phase 4 so captures see earlier lets)
         for item in &block.items {
             if let BlockItem::Watcher(w) = item {
                 let watcher_id = self.watcher_counter;
                 self.watcher_counter += 1;
-                let func_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                let func_name = format!("hilow_watcher_{}_{}", watcher_id, w.name);
                 self.register_watcher_subscriptions(w, func_name);
                 self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
             }
         }
 
-        // Phase 4: emit statements and watcher activations in source order
+        // Phase 4: emit statements and watcher constructions in source order
         for item in &block.items {
             match item {
                 BlockItem::Statement(s) => {
                     self.generate_statement(s, type_checker)?;
                 }
                 BlockItem::Watcher(w) => {
-                    // Activate the watcher when its declaration is reached
+                    // Phase 3b: body + statics into watcher_bodies, then
+                    // activation + cell subscription at the declaration site
                     let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
-                    self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
-                    self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+                    let (_func_name, env_fields, env_dtor) = self.generate_watcher(w, id, type_checker)?;
+                    self.emit_decl_watcher_construction(w, id, &env_fields, env_dtor.as_deref());
                 }
                 BlockItem::Function(_) => {
                     // Function already emitted in Phase 2
@@ -841,29 +1001,31 @@ impl CodeGenerator {
             }
         }
 
-        // Phase 3: emit nested watcher bodies and helpers (as file-scope C)
-        // PLUS register their state and activation/deactivation hooks
+        // Phase 3: register watcher ids and name-keyed subscriptions (the
+        // map feeds shadow masking until Phase 3d; body generation moved to
+        // the declaration site in Phase 4 so captures see earlier lets)
         for item in &block.items {
             if let BlockItem::Watcher(w) = item {
                 let watcher_id = self.watcher_counter;
                 self.watcher_counter += 1;
-                let func_name = self.generate_watcher(w, watcher_id, type_checker)?;
+                let func_name = format!("hilow_watcher_{}_{}", watcher_id, w.name);
                 self.register_watcher_subscriptions(w, func_name);
                 self.watcher_name_to_id.insert(w.name.clone(), watcher_id);
             }
         }
 
-        // Phase 4: emit statements and watcher activations in source order
+        // Phase 4: emit statements and watcher constructions in source order
         for item in &block.items {
             match item {
                 BlockItem::Statement(s) => {
                     self.generate_statement(s, type_checker)?;
                 }
                 BlockItem::Watcher(w) => {
-                    // Activate the watcher when its declaration is reached
+                    // Phase 3b: body + statics into watcher_bodies, then
+                    // activation + cell subscription at the declaration site
                     let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
-                    self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", id));
-                    self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", id));
+                    let (_func_name, env_fields, env_dtor) = self.generate_watcher(w, id, type_checker)?;
+                    self.emit_decl_watcher_construction(w, id, &env_fields, env_dtor.as_deref());
                 }
                 BlockItem::Function(_) => {
                     // Function already emitted in Phase 2
@@ -900,6 +1062,10 @@ impl CodeGenerator {
         }
 
         // Process variable declarations first to populate variable_types
+        // (nested functions and watcher bodies generated before the main
+        // statements reference them). Phase 3b: pre-record boxedness too, so
+        // a nested function subscribing a program-scope scalar resolves it
+        // as the (static-hoisted) cell.
         for item in &body.items {
             if let BlockItem::Statement(Statement::Let(let_decl)) = item {
                 // Add variable type to variable_types so watchers can reference it
@@ -907,6 +1073,8 @@ impl CodeGenerator {
                     LetPattern::Identifier(name, Some(ty)) => {
                         let hilow_type = Type::from_ast_type(ty);
                         self.variable_types.insert(name.clone(), hilow_type);
+                        let boxed = self.is_boxed_decl(name, &let_decl.position);
+                        self.push_boxed_binding(name, boxed);
                     }
                     LetPattern::Identifier(name, None) => {
                         // Type inference case - get from type checker
@@ -914,19 +1082,25 @@ impl CodeGenerator {
                             let inferred_type = type_checker.get_expression_type(init);
                             self.variable_types.insert(name.clone(), inferred_type);
                         }
+                        let boxed = self.is_boxed_decl(name, &let_decl.position);
+                        self.push_boxed_binding(name, boxed);
                     }
                     _ => {} // Tuple patterns handled elsewhere
                 }
             }
         }
 
-        // Now generate the deferred watchers
+        // Phase 3b: register ids + name-keyed subscriptions here (the map
+        // feeds shadow masking until 3d); bodies and constructions are
+        // emitted at the declaration site in generate_program_body_statements
+        // so captures see earlier lets and pre-declaration assignments
+        // cannot fire (no subscriber on the cell yet).
         for watcher in deferred_watchers {
             let watcher_id = self.watcher_counter;
-            let func_name = self.generate_watcher(watcher, watcher_id, type_checker)?;
+            self.watcher_counter += 1;
+            let func_name = format!("hilow_watcher_{}_{}", watcher_id, watcher.name);
             self.register_watcher_subscriptions(watcher, func_name);
             self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
-            self.watcher_counter += 1;
         }
 
         // Generate nested functions as top-level C functions
@@ -958,10 +1132,19 @@ impl CodeGenerator {
         // Set up environment for captured locals (Phase 7c-δ)
         self.setup_environment_for_block(&synthetic_block)?;
 
-        // Generate only the statements, not the nested functions
+        // Generate statements and watcher constructions in source order
+        // (Phase 3b: decl-form watchers subscribe at their declaration site)
         for item in &body.items {
-            if let BlockItem::Statement(statement) = item {
-                self.generate_statement(statement, type_checker)?;
+            match item {
+                BlockItem::Statement(statement) => {
+                    self.generate_statement(statement, type_checker)?;
+                }
+                BlockItem::Watcher(w) => {
+                    let id = self.watcher_name_to_id.get(&w.name).copied().unwrap();
+                    let (_func_name, env_fields, env_dtor) = self.generate_watcher(w, id, type_checker)?;
+                    self.emit_decl_watcher_construction(w, id, &env_fields, env_dtor.as_deref());
+                }
+                BlockItem::Function(_) => {}
             }
         }
         Ok(())
@@ -1133,15 +1316,25 @@ impl CodeGenerator {
     fn generate_let_statement(&mut self, let_decl: &LetDecl, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         match &let_decl.pattern {
             LetPattern::Identifier(name, ty) => {
-                self.generate_identifier_let_statement(name, ty.as_ref(), &let_decl.initializer, type_checker)
+                self.generate_identifier_let_statement(name, ty.as_ref(), &let_decl.initializer, &let_decl.position, type_checker)
             },
             LetPattern::Tuple(names) => {
+                // Phase 3b: watching a destructuring binding is unscheduled —
+                // reject rather than miscompile (adjudication E).
+                for name in names {
+                    if self.is_boxed_decl(name, &let_decl.position) {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("watching or capturing the tuple-destructured binding '{}'", name),
+                            phase: "a future phase — destructured bindings do not box yet (Phase 3b boxes plain let/param declarations)".to_string(),
+                        });
+                    }
+                }
                 self.generate_tuple_let_statement(names, &let_decl.initializer, type_checker)
             }
         }
     }
 
-    fn generate_identifier_let_statement(&mut self, name: &str, ty: Option<&crate::ast::Type>, initializer: &Option<Expression>, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+    fn generate_identifier_let_statement(&mut self, name: &str, ty: Option<&crate::ast::Type>, initializer: &Option<Expression>, position: &crate::lexer::Position, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         // Determine the type
         let var_type = if let Some(ty) = ty {
             Type::from_ast_type(ty)
@@ -1189,6 +1382,56 @@ impl CodeGenerator {
             Type::Nothing
         };
 
+        // Phase 3b: a declaration the boxing analysis marks lowers to a
+        // cell. Containers and heap values are subsumed (they already ARE
+        // cells); scalar kinds without a payload yet reject cleanly.
+        if self.is_boxed_decl(name, position) {
+            match &var_type {
+                Type::I32 => {
+                    if self.hoisted_variables.contains_key(name) {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("'{}' is both watched and captured by a function closure", name),
+                            phase: "a future phase — closure envs do not hold scalar cells yet (Phase 3b)".to_string(),
+                        });
+                    }
+                    let c_var_name = self.mangle_variable_name(name);
+                    if self.in_main_program {
+                        // Program-scope cells are file-scope statics so
+                        // nested functions can subscribe and capture them
+                        // (cell identity is what makes this sound).
+                        self.boxed_scalar_statics.push_str(&format!("static HiLowScalar* {} = NULL;\n", c_var_name));
+                        self.output.push_str(&format!("  {} = hl_scalar_new_i32(", c_var_name));
+                    } else {
+                        self.output.push_str(&format!("  HiLowScalar* {} = hl_scalar_new_i32(", c_var_name));
+                    }
+                    if let Some(ref initializer) = initializer {
+                        let old_context = self.function_expr_context.clone();
+                        self.function_expr_context = FunctionExprContext::LetInitializer;
+                        self.generate_expression(initializer, type_checker, ExprContext::Owned)?;
+                        self.function_expr_context = old_context;
+                    } else {
+                        self.output.push_str("0");
+                    }
+                    self.output.push_str(");\n");
+                    self.variable_types.insert(name.to_string(), Type::I32);
+                    self.track_heap_owner(name, HeapType::Scalar);
+                    self.push_boxed_binding(name, true);
+                    return Ok(());
+                }
+                Type::DynamicArray(_) | Type::Object(_) | Type::String | Type::Watcher
+                | Type::Function(_, _) | Type::Optional(_) | Type::Unknown | Type::UnknownType
+                | Type::Tuple(_) | Type::Nothing => {
+                    // Subsumed: fall through to the normal lowering.
+                }
+                other => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("watching or capturing '{}' of scalar type {:?}", name, other),
+                        phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today; audit §5 item 7)".to_string(),
+                    });
+                }
+            }
+        }
+
         // Check if this variable is hoisted to an environment
         if let Some((env_var, _env_struct)) = self.hoisted_variables.get(name) {
             // Variable is hoisted - generate environment field assignment
@@ -1231,6 +1474,9 @@ impl CodeGenerator {
 
         // Track the variable type for later reference
         self.variable_types.insert(name.to_string(), var_type.clone());
+        // Phase 3b: record the (raw) binding so an inner raw shadow masks an
+        // outer boxed one at read/assign sites
+        self.push_boxed_binding(name, false);
 
         // Phase 8a: Track heap ownership if initializer creates heap allocation
         if let Some(ref initializer) = initializer {
@@ -1340,38 +1586,11 @@ impl CodeGenerator {
                     }
                 }
                 Expression::WatcherExpr(_) => {
+                    // Phase 2a/3b: EVERY watcher registers by construction
+                    // inside the expression itself (hl_watcher_new_subscribed)
+                    // — the let just owns the value. The scalar name-keyed
+                    // side-channel died with the firing block.
                     self.track_heap_owner(name, HeapType::Watcher);
-
-                    // Phase 2a: ARRAY watchers register by construction inside
-                    // the watcher expression itself (hl_watcher_new_subscribed)
-                    // — nothing to consume here. The side-channel below is
-                    // populated for SCALAR watcher expressions only
-                    // (compile-time name-keyed wiring, migrates in Phase 3).
-                    if let (Some(body_fn_name), subscriptions, captured_vars) = (
-                        self.temp_watcher_expr_body_fn.take(),
-                        std::mem::take(&mut self.temp_watcher_expr_subscriptions),
-                        std::mem::take(&mut self.temp_watcher_expr_captured_vars)
-                    ) {
-                        let c_var_name = self.mangle_variable_name(name);
-
-                        // Scalar watcher: existing heap registration logic
-                        let all_subscriptions: Vec<String> = subscriptions.iter()
-                            .map(|s| s.variable_name.clone())
-                            .collect();
-
-                        for subscription in subscriptions {
-                            self.heap_watcher_subscribers
-                                .entry(subscription.variable_name.clone())
-                                .or_insert_with(Vec::new)
-                                .push(HeapWatcherSubscription {
-                                    watcher_var: c_var_name.clone(),
-                                    body_fn_name: body_fn_name.clone(),
-                                    modifier: subscription.modifier.clone(),
-                                    all_subscriptions: all_subscriptions.clone(),
-                                    captured_vars: captured_vars.clone(),
-                                });
-                        }
-                    }
                 }
                 Expression::Call(call_expr) => {
                     // Check if this is a function call that returns a heap value
@@ -1605,11 +1824,16 @@ impl CodeGenerator {
     }
 
     fn generate_return_statement(&mut self, return_stmt: &ReturnStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
-        // Phase 8a: Handle ownership transfer for returned heap values
+        // Phase 8a: Handle ownership transfer for returned heap values.
+        // Phase 3b: NOT for boxed scalars — `return x` returns a COPY of the
+        // payload (hl_scalar_get_i32), so the cell still releases with its
+        // scope; transferring it would leak the cell.
         if let Some(ref value) = return_stmt.value {
             // Check if we're returning a variable that owns a heap value
             if let Expression::Ident { name: var_name, .. } = value {
-                if self.heap_owners.contains_key(var_name) {
+                if self.heap_owners.contains_key(var_name)
+                    && !matches!(self.heap_owners.get(var_name), Some((HeapType::Scalar, _)))
+                {
                     // Transfer ownership - don't free this variable
                     self.transfer_ownership(var_name);
                 }
@@ -2246,154 +2470,34 @@ impl CodeGenerator {
         } else {
             // Regular assignment to variables
 
-            // Phase 10-γ: Check for compound assignment to watched variables
-            if assign_stmt.op != AssignOpKind::Assign {
-                if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
-                    if self.watcher_subscribers.contains_key(var_name) {
-                        return Err(CodegenError::UnsupportedFeature {
-                            feature: "compound assignment of watched variable".to_string(),
-                            phase: "Phase 10-γ".to_string(),
-                        });
+            // Phase 3b: assignment to a BOXED scalar lowers to the
+            // hl_cell_set family — store + equality check + notify (changed
+            // fires only on inequality, assigned on every set; stealth
+            // suppresses both). Compound assignment is an assignment: it
+            // reads the payload, applies the operator, and sets — the old
+            // Phase 10-γ rejection and the firing block died here.
+            if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
+                let boxed_capture = self.boxed_hoisted.contains(var_name);
+                if boxed_capture || self.current_binding_boxed(var_name) {
+                    let cell = self.env_slot_rvalue(var_name);
+                    let compound_op = match assign_stmt.op {
+                        AssignOpKind::Assign => None,
+                        AssignOpKind::AddAssign => Some("+"),
+                        AssignOpKind::SubAssign => Some("-"),
+                        AssignOpKind::MulAssign => Some("*"),
+                        AssignOpKind::DivAssign => Some("/"),
+                        AssignOpKind::ModAssign => Some("%"),
+                    };
+                    self.output.push_str(&format!("  hl_cell_set_i32({}, ", cell));
+                    if let Some(op) = compound_op {
+                        self.output.push_str(&format!("hl_scalar_get_i32({}) {} (", cell, op));
                     }
-                }
-            }
-
-            // Phase 10-δ-β: Handle watcher notifications for simple assignment (combined path)
-            if assign_stmt.op == AssignOpKind::Assign {
-                if let Expression::Ident { name: var_name, .. } = &assign_stmt.target {
-                    let decl_subs = self.watcher_subscribers.get(var_name).cloned().unwrap_or_default();
-                    let heap_subs = self.heap_watcher_subscribers.get(var_name).cloned().unwrap_or_default();
-
-                    if !decl_subs.is_empty() || !heap_subs.is_empty() {
-                        // Combined emission path
-                        let has_changed = decl_subs.iter().any(|s| s.modifier == SubscriptionModifier::Changed)
-                                        || heap_subs.iter().any(|s| s.modifier == SubscriptionModifier::Changed);
-
-                        if has_changed {
-                            // Old-vs-new wrapping path for changed modifiers
-                            let var_type = self.variable_types.get(var_name).cloned()
-                                .unwrap_or(Type::I32); // Fallback type
-                            let c_type = self.hilow_type_to_c(&var_type);
-                            let old_var = format!("__hl_old_{}", self.var_counter);
-                            self.var_counter += 1;
-
-                            self.output.push_str("{\n");
-                            self.output.push_str(&format!("    {} {} = {};\n", c_type, old_var, var_name));
-                            self.output.push_str(&format!("    {} = ", var_name));
-                            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
-                            self.output.push_str(";\n");
-
-                            // Emit notifications inside the changed check
-                            self.output.push_str("    if (hl_stealth_depth == 0) {\n");
-                            self.output.push_str(&format!("        if ({} != {}) {{\n", old_var, var_name));
-
-                            // Declaration-form watchers (changed modifier only)
-                            for subscriber in &decl_subs {
-                                if subscriber.modifier == SubscriptionModifier::Changed {
-                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
-                                        self.output.push_str(&format!("            if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                        self.output.push_str(&format!("                {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
-                                        self.output.push_str(");\n");
-                                        self.output.push_str("            }\n");
-                                    } else {
-                                        self.output.push_str(&format!("            {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
-                                        self.output.push_str(");\n");
-                                    }
-                                }
-                            }
-
-                            // Heap watchers (changed modifier only)
-                            for heap_sub in &heap_subs {
-                                if heap_sub.modifier == SubscriptionModifier::Changed {
-                                    self.output.push_str(&format!(
-                                        "            if ({} != NULL && {}->active && !{}->ended) {{\n",
-                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
-                                    ));
-                                    self.output.push_str(&format!("                {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions, &heap_sub.captured_vars)?;
-                                    self.output.push_str(");\n");
-                                    self.output.push_str("            }\n");
-                                }
-                            }
-
-                            self.output.push_str("        }\n");
-
-                            // Emit assigned notifications outside the changed check
-                            for subscriber in &decl_subs {
-                                if subscriber.modifier == SubscriptionModifier::Assigned {
-                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
-                                        self.output.push_str(&format!("        if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                        self.output.push_str(&format!("            {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
-                                        self.output.push_str(");\n");
-                                        self.output.push_str("        }\n");
-                                    } else {
-                                        self.output.push_str(&format!("        {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
-                                        self.output.push_str(");\n");
-                                    }
-                                }
-                            }
-
-                            for heap_sub in &heap_subs {
-                                if heap_sub.modifier == SubscriptionModifier::Assigned {
-                                    self.output.push_str(&format!(
-                                        "        if ({} != NULL && {}->active && !{}->ended) {{\n",
-                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
-                                    ));
-                                    self.output.push_str(&format!("            {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions, &heap_sub.captured_vars)?;
-                                    self.output.push_str(");\n");
-                                    self.output.push_str("        }\n");
-                                }
-                            }
-
-                            self.output.push_str("    }\n"); // Close stealth check
-                            self.output.push_str("}\n");
-                        } else {
-                            // Assigned-only path - no old value tracking needed
-                            self.generate_expression(&assign_stmt.target, type_checker, ExprContext::Temporary)?;
-                            self.output.push_str(" = ");
-                            self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
-                            self.output.push_str(";\n");
-
-                            self.output.push_str("  if (hl_stealth_depth == 0) {\n");
-                            // Declaration-form notifications (assigned only)
-                            for subscriber in &decl_subs {
-                                if subscriber.modifier == SubscriptionModifier::Assigned {
-                                    if let Some(watcher_id) = self.extract_watcher_id(&subscriber.fn_name) {
-                                        self.output.push_str(&format!("    if (hilow_watcher_{}_active) {{\n", watcher_id));
-                                        self.output.push_str(&format!("      {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
-                                        self.output.push_str(");\n");
-                                        self.output.push_str("    }\n");
-                                    } else {
-                                        self.output.push_str(&format!("    {}(", subscriber.fn_name));
-                                        self.emit_watcher_call_args(&subscriber.all_subscriptions, &subscriber.captured_vars)?;
-                                        self.output.push_str(");\n");
-                                    }
-                                }
-                            }
-
-                            // Heap watcher notifications (assigned only)
-                            for heap_sub in &heap_subs {
-                                if heap_sub.modifier == SubscriptionModifier::Assigned {
-                                    self.output.push_str(&format!(
-                                        "    if ({} != NULL && {}->active && !{}->ended) {{\n",
-                                        heap_sub.watcher_var, heap_sub.watcher_var, heap_sub.watcher_var
-                                    ));
-                                    self.output.push_str(&format!("      {}(", heap_sub.body_fn_name));
-                                    self.emit_watcher_call_args_from_names(&heap_sub.all_subscriptions, &heap_sub.captured_vars)?;
-                                    self.output.push_str(");\n");
-                                    self.output.push_str("    }\n");
-                                }
-                            }
-                            self.output.push_str("  }\n"); // Close stealth check
-                        }
-                        return Ok(());
+                    self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Owned)?;
+                    if compound_op.is_some() {
+                        self.output.push_str(")");
                     }
+                    self.output.push_str(");\n");
+                    return Ok(());
                 }
             }
 
@@ -2625,6 +2729,15 @@ impl CodeGenerator {
                     return Ok(());
                 }
 
+                // Phase 3b: a boxed scalar capture in a watcher env — read
+                // the current payload through the retained cell.
+                if self.boxed_hoisted.contains(name) {
+                    if let Some((env_var, _)) = self.hoisted_variables.get(name) {
+                        self.output.push_str(&format!("hl_scalar_get_i32({}->{})", env_var, name));
+                        return Ok(());
+                    }
+                }
+
                 // Check if this variable is hoisted to an environment
                 if let Some((env_var, env_struct)) = self.hoisted_variables.get(name) {
                     // Variable is hoisted - use environment access
@@ -2632,7 +2745,7 @@ impl CodeGenerator {
 
                     if is_array_watcher_env {
                         // Container captures (arrays; objects as of Phase 2e)
-                        // are stored directly; scalars by pointer
+                        // are stored directly; legacy scalars by pointer
                         let is_array_type = self.variable_types.get(name)
                             .map(|ty| matches!(ty, Type::DynamicArray(_) | Type::Object(_)))
                             .unwrap_or(false);
@@ -2663,17 +2776,10 @@ impl CodeGenerator {
                         // Close the dereference paren for scalars
                         self.output.push_str(")");
                     }
-                } else if self.scalar_watcher_captures.contains(name) {
-                    // Phase 10a: Captured variable in scalar watcher - use pointer dereference
-                    if let Some(ref refined) = refined_type {
-                        // If the variable is narrowed, emit unwrap for the refined type
-                        let types_refined = Type::from_ast_type(refined);
-                        // Note: For captures, we need to dereference first then apply refinements
-                        // This is a simplified approach - may need refinement
-                        self.output.push_str(&format!("(*_cap_{})", name));
-                    } else {
-                        self.output.push_str(&format!("(*_cap_{})", name));
-                    }
+                } else if self.current_binding_boxed(name) {
+                    // Phase 3b: boxed scalar local (or static-hoisted program
+                    // cell) — deref the payload
+                    self.output.push_str(&format!("hl_scalar_get_i32({})", self.mangle_variable_name(name)));
                 } else {
                     // Normal variable reference
                     if let Some(ref refined) = refined_type {
@@ -2813,20 +2919,27 @@ impl CodeGenerator {
                 self.output.push_str(&format!("._{}", index));
             }
             Expression::WatcherExpr(watcher_expr) => {
-                // Phase 10-δ-β: Validate subscribed variable types.
-                // Phase 2e: objects are watchable in expression form (the
-                // cell path); the decl-form gate is unchanged — decl-form
-                // wires through the legacy name-keyed map that dies in
-                // Phase 3.
+                // Phase 3b: every subscription is a cell now. Watchable:
+                // i32 scalars (the corpus payload kind), arrays, objects.
+                // Other scalar kinds get a payload as programs need them.
                 for subscription in &watcher_expr.subscriptions {
                     let var_name = &subscription.variable_name;
                     if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
+                        if matches!(var_type, crate::ast::Type::Primitive(crate::ast::PrimitiveType::String)) {
+                            // Audit §5 item 2 rider: watching a string
+                            // VARIABLE is rebinding-watch — the variable-slot
+                            // cell bucket, unscheduled (Phase 3b).
+                            return Err(CodegenError::UnsupportedFeature {
+                                feature: format!("watching value of type {:?}", var_type),
+                                phase: "a future phase (string and composite watching): watching a string variable means rebinding-watch, which needs a variable-slot cell".to_string(),
+                            });
+                        }
                         if !self.is_ast_type_watchable_in_phase_10g(var_type)
                             && !matches!(var_type, crate::ast::Type::Object(_))
                         {
                             return Err(CodegenError::UnsupportedFeature {
-                                feature: format!("watching value of type {:?}", var_type),
-                                phase: "future phase (string and composite watching)".to_string(),
+                                feature: format!("watching a scalar of type {:?}", var_type),
+                                phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today; audit §5 item 7)".to_string(),
                             });
                         }
                     } else {
@@ -2930,45 +3043,13 @@ impl CodeGenerator {
                 let watcher_index = self.watcher_counter;
                 self.watcher_counter += 1;
 
-                // Generate function signature based on watcher type
+                // One firing ABI for EVERY watcher (Phase 2c containers,
+                // Phase 3b scalars): env-first, cell second, value delta
+                // third. Container bodies rebind the watched name from the
+                // fired cell; scalar bodies snapshot subscribed values from
+                // the env's retained cells.
                 self.watcher_bodies.push_str(&format!("void {}(", body_fn_name));
-
-                if has_cells {
-                    // One firing ABI (Phase 2c): env-first, cell second, value
-                    // delta third. The watched variable name rebinds from the
-                    // cell (the container's first member), preserving the
-                    // pre-2c semantics — including the multi-container case
-                    // where the first subscription's name binds whichever
-                    // fired. Objects joined this path in Phase 2e.
-                    self.watcher_bodies.push_str("void* env, HiLowCell* hilow_cell, const HiLowDelta* delta");
-                } else {
-                    // Scalar watcher: watched variables as value parameters
-                    for (i, subscription) in watcher_expr.subscriptions.iter().enumerate() {
-                        if i > 0 {
-                            self.watcher_bodies.push_str(", ");
-                        }
-
-                        let var_name = &subscription.variable_name;
-                        let param_name = subscription.alias.as_ref().unwrap_or(var_name);
-
-                        // Get the variable type from resolved type on subscription
-                        if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                            let c_type = self.ast_type_to_c(var_type);
-                            self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
-                        }
-                    }
-
-                    // Phase 10a: Add captured variables as pointer parameters for by-reference access
-                    let captures = watcher_expr.captures.borrow();
-                    for (i, (var_name, ast_type, _pos)) in captures.iter().enumerate() {
-                        if !watcher_expr.subscriptions.is_empty() || i > 0 {
-                            self.watcher_bodies.push_str(", ");
-                        }
-                        let c_type = self.ast_type_to_c(ast_type);
-                        self.watcher_bodies.push_str(&format!("{}* _cap_{}", c_type, var_name));
-                    }
-                }
-
+                self.watcher_bodies.push_str("void* env, HiLowCell* hilow_cell, const HiLowDelta* delta");
                 self.watcher_bodies.push_str(") {\n");
 
                 // Phase 2c: rebind the watched array name from the cell, then
@@ -3008,6 +3089,78 @@ impl CodeGenerator {
                     }
                 }
 
+                // Phase 3b: compute the env field list BEFORE entering the
+                // body context (boxedness of captured names is a property of
+                // the ENCLOSING scope). Containers keep the legacy capture
+                // list (its phantom subscribed-container entries are the
+                // functional rebind mechanism for multi-subscription
+                // watchers); scalars use the shadow-correct 3a analysis.
+                let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_index);
+                let mut env_fields: Vec<(String, EnvSlot)> = Vec::new();
+                if has_cells {
+                    for (var_name, ast_type, _pos) in watcher_expr.captures.borrow().iter() {
+                        let slot = match ast_type {
+                            crate::ast::Type::DynamicArray(_) => Some(EnvSlot::Array),
+                            crate::ast::Type::Object(_) => Some(EnvSlot::Object),
+                            _ => {
+                                if self.current_binding_boxed(var_name)
+                                    || self.boxed_hoisted.contains(var_name)
+                                {
+                                    Some(EnvSlot::Scalar)
+                                } else {
+                                    // A legacy-scan phantom (the 2e finding:
+                                    // body-local shadows recorded as captures)
+                                    // — the body never reads the outer
+                                    // binding, so no slot.
+                                    None
+                                }
+                            }
+                        };
+                        if let Some(slot) = slot {
+                            env_fields.push((var_name.clone(), slot));
+                        }
+                    }
+                } else {
+                    // Subscribed cells first (deduplicated), then captures.
+                    for subscription in &watcher_expr.subscriptions {
+                        let var_name = &subscription.variable_name;
+                        if !env_fields.iter().any(|(n, _)| n == var_name) {
+                            env_fields.push((var_name.clone(), EnvSlot::Scalar));
+                        }
+                    }
+                    let analysis_captures: Vec<String> = self
+                        .boxing
+                        .as_ref()
+                        .map(|b| b.captures_for(&watcher_expr.position).to_vec())
+                        .unwrap_or_default();
+                    for var_name in &analysis_captures {
+                        if env_fields.iter().any(|(n, _)| n == var_name) {
+                            continue;
+                        }
+                        let var_type = self.variable_types.get(var_name).cloned();
+                        let slot = match var_type {
+                            Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
+                            Some(Type::Object(_)) => EnvSlot::Object,
+                            Some(Type::I32) => EnvSlot::Scalar,
+                            other => {
+                                return Err(CodegenError::UnsupportedFeature {
+                                    feature: format!(
+                                        "watcher capture of '{}' with type {:?}",
+                                        var_name, other
+                                    ),
+                                    phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today)".to_string(),
+                                });
+                            }
+                        };
+                        env_fields.push((var_name.clone(), slot));
+                    }
+                }
+                let env_dtor_name = if env_fields.is_empty() {
+                    None
+                } else {
+                    Some(self.emit_watcher_env_struct(&env_struct_name, &env_fields))
+                };
+
                 // Generate the watcher body
                 let saved_output = self.output.clone();
                 self.output.clear();
@@ -3015,9 +3168,11 @@ impl CodeGenerator {
                 // Save current variable_types and add watcher parameters to scope
                 let old_variable_types = self.variable_types.clone();
 
-                // Save hoisted variables state for array watchers (before any modification)
+                // Save hoisted variables state (before any modification)
                 let old_hoisted_variables = self.hoisted_variables.clone();
                 let old_current_env_var = self.current_env_var.clone();
+                let old_boxed_hoisted = self.boxed_hoisted.clone();
+                let boxed_mask_base = self.boxed_bindings.len();
 
                 if has_cells {
                     // Container watcher: add the container parameter to scope
@@ -3047,37 +3202,26 @@ impl CodeGenerator {
                         }
                     }
 
-                    // Array watcher: Add captured variables via env struct (like function expressions)
-                    let captures = watcher_expr.captures.borrow();
-                    if !captures.is_empty() {
-                        // Generate env struct name for this watcher
-                        let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_index);
-
-                        // Generate environment struct definition
-                        self.environment_structs.push_str(&format!("typedef struct {} {{\n", env_struct_name));
-                        for (var_name, ast_type, _pos) in captures.iter() {
-                            let c_type = self.ast_type_to_c(ast_type);
-                            // For scalar types, store pointers for by-reference access.
-                            // For container types (arrays; objects as of
-                            // Phase 2e), store the pointer directly (identity
-                            // capture).
-                            if matches!(ast_type, crate::ast::Type::DynamicArray(_) | crate::ast::Type::Object(_)) {
-                                self.environment_structs.push_str(&format!("    {} {};\n", c_type, var_name));
-                            } else {
-                                self.environment_structs.push_str(&format!("    {}* {};\n", c_type, var_name));
-                            }
-                        }
-                        self.environment_structs.push_str(&format!("}} {};\n\n", env_struct_name));
-
+                    if !env_fields.is_empty() {
                         // Set up hoisted variables for captured variables (using env_cast)
                         self.hoisted_variables.clear();
                         self.current_env_var = Some("env_cast".to_string());
 
-                        for (var_name, ast_type, _pos) in captures.iter() {
+                        for (var_name, slot) in &env_fields {
                             self.hoisted_variables.insert(var_name.clone(), ("env_cast".to_string(), env_struct_name.clone()));
-                            // Add captured variable types to variable_types
-                            let hilow_type = Type::from_ast_type(ast_type);
-                            self.variable_types.insert(var_name.clone(), hilow_type);
+                            match slot {
+                                EnvSlot::Scalar => {
+                                    self.boxed_hoisted.insert(var_name.clone());
+                                    self.variable_types.insert(var_name.clone(), Type::I32);
+                                }
+                                _ => {
+                                    // Container types were recorded by the
+                                    // legacy captures list; keep them.
+                                    if let Some((_, ast_type, _)) = watcher_expr.captures.borrow().iter().find(|(n, _, _)| n == var_name) {
+                                        self.variable_types.insert(var_name.clone(), Type::from_ast_type(ast_type));
+                                    }
+                                }
+                            }
                         }
 
                         // Emit env cast at the beginning of the body generation (before body statements)
@@ -3085,39 +3229,59 @@ impl CodeGenerator {
                             env_struct_name, env_struct_name));
                     }
                 } else {
-                    // Scalar watcher: watched variables as value parameters
+                    // Phase 3b scalar watcher: every subscribed/captured cell
+                    // lives in the env. Subscribed names bind SNAPSHOT locals
+                    // read from the cells at fire time (assignment to them in
+                    // the body writes the snapshot, not the cell — the
+                    // pre-queue no-re-entrancy semantics, unchanged);
+                    // captures go through the env as cells.
+                    self.output.push_str(&format!("  {}* env_cast = ({}*)env;\n",
+                        env_struct_name, env_struct_name));
+                    self.output.push_str("  (void)hilow_cell; (void)delta;\n");
+
                     for subscription in &watcher_expr.subscriptions {
                         let var_name = &subscription.variable_name;
                         let param_name = subscription.alias.as_ref().unwrap_or(var_name);
-
-                        // Get the variable type from resolved type on subscription
-                        if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                            let types_var_type = Type::from_ast_type(ast_var_type);
-                            self.variable_types.insert(param_name.clone(), types_var_type);
-                        }
+                        self.output.push_str(&format!(
+                            "  int32_t {} = hl_scalar_get_i32(env_cast->{});\n",
+                            param_name, var_name
+                        ));
+                        self.variable_types.insert(param_name.clone(), Type::I32);
+                        // Mask any outer boxed binding of this name: inside
+                        // the body it is a raw snapshot local.
+                        self.push_boxed_binding(param_name, false);
                     }
 
-                    // Phase 10a: Add captured variables as pointer-dereferenced variables
-                    let captures = watcher_expr.captures.borrow();
-                    for (var_name, ast_type, _pos) in captures.iter() {
-                        // Add captured variable type to variable_types
-                        let hilow_type = Type::from_ast_type(ast_type);
-                        self.variable_types.insert(var_name.clone(), hilow_type);
-
-                        // Mark this variable as captured for special access handling
-                        self.scalar_watcher_captures.insert(var_name.clone());
+                    self.hoisted_variables.clear();
+                    self.current_env_var = Some("env_cast".to_string());
+                    for (var_name, slot) in &env_fields {
+                        if watcher_expr.subscriptions.iter().any(|s| &s.variable_name == var_name) {
+                            continue; // subscribed names bind snapshots, not env reads
+                        }
+                        self.hoisted_variables.insert(var_name.clone(), ("env_cast".to_string(), env_struct_name.clone()));
+                        match slot {
+                            EnvSlot::Scalar => {
+                                self.boxed_hoisted.insert(var_name.clone());
+                                self.variable_types.insert(var_name.clone(), Type::I32);
+                            }
+                            EnvSlot::Array => {
+                                if !self.variable_types.contains_key(var_name) {
+                                    self.variable_types.insert(var_name.clone(), Type::DynamicArray(Box::new(Type::I32)));
+                                }
+                            }
+                            EnvSlot::Object => {}
+                        }
                     }
                 }
 
                 self.generate_block(&watcher_expr.body, type_checker)?;
 
-                // Restore original variable_types and clear capture tracking
+                // Restore enclosing-scope state
                 self.variable_types = old_variable_types;
-                self.scalar_watcher_captures.clear();
-
-                // Restore hoisted variables state
                 self.hoisted_variables = old_hoisted_variables;
                 self.current_env_var = old_current_env_var;
+                self.boxed_hoisted = old_boxed_hoisted;
+                self.boxed_bindings.truncate(boxed_mask_base);
 
                 self.watcher_bodies.push_str(&self.output);
                 self.watcher_bodies.push_str("}\n\n");
@@ -3125,97 +3289,60 @@ impl CodeGenerator {
                 // Restore output and emit the watcher-value creation
                 self.output = saved_output;
 
-                if has_cells {
-                    // Phase 2a: registration by construction. The expression
-                    // value is ONE call that creates the watcher AND
-                    // subscribes it to every cell — any syntactic position
-                    // registers (let RHS, call argument, anywhere). There is
-                    // no side-channel for a statement shape to forget.
-                    let captured_var_names: Vec<String> = watcher_expr.captures.borrow().iter()
-                        .map(|(var_name, _ast_type, _pos)| var_name.clone())
-                        .collect();
-
-                    // Env allocation + packing, hoisted to statement level.
-                    // Phase 2b: ownership passes to hl_watcher_new_subscribed
-                    // — the watcher frees the env on its final release. No
-                    // scope/temp tracking of the env anywhere.
-                    let env_var_name = if captured_var_names.is_empty() {
-                        "NULL".to_string()
-                    } else {
-                        let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_index);
-                        let env_var = format!("__watcher_env_{}", watcher_index);
-
-                        let mut decl = format!("{}* {} = malloc(sizeof({})); hl_alloc_count++;",
-                            env_struct_name, env_var, env_struct_name);
-                        for var_name in &captured_var_names {
-                            let c_var = self.mangle_variable_name(var_name);
-                            let is_container_capture = self.variable_types.get(var_name)
-                                .map(|t| matches!(t, Type::DynamicArray(_) | Type::Object(_)))
-                                .unwrap_or(false);
-                            if is_container_capture {
-                                // Containers (arrays; objects as of Phase 2e):
-                                // store the pointer directly (identity capture)
-                                decl.push_str(&format!(" {}->{} = {};", env_var, var_name, c_var));
-                            } else {
-                                // Scalars: store pointer for by-reference access
-                                decl.push_str(&format!(" {}->{} = &{};", env_var, var_name, c_var));
-                            }
-                        }
-                        self.pending_statement_decls.push(decl);
-                        env_var
-                    };
-
-                    // Build the construction call.
-                    let mut call = format!("hl_watcher_new_subscribed({}, {}", body_fn_name, env_var_name);
-                    let mut n_subs = 0;
-                    let mut sub_args = String::new();
-                    for subscription in &watcher_expr.subscriptions {
-                        let c_modifier = match subscription.modifier {
-                            SubscriptionModifier::Changed => "HL_ARR_CHANGED",
-                            SubscriptionModifier::Added => "HL_ARR_ADDED",
-                            SubscriptionModifier::Removed => "HL_ARR_REMOVED",
-                            SubscriptionModifier::Moved => "HL_ARR_MOVED",
-                            SubscriptionModifier::Deep => "HL_ARR_DEEP",
-                            _ => continue, // rejected by validation above
-                        };
-                        let arr_var = self.mangle_variable_name(&subscription.variable_name);
-                        if matches!(subscription.modifier, SubscriptionModifier::Deep) {
-                            // Phase 2d/2e: a (deep) subscription marks the
-                            // whole subtree deep-watched so nested mutations
-                            // walk up. The mark call is container-typed.
-                            let mark_fn = if has_objects { "hl_object_mark_deep" } else { "hl_array_mark_deep" };
-                            self.pending_statement_decls.push(format!("{}({});", mark_fn, arr_var));
-                        }
-                        sub_args.push_str(&format!(", &{}->cell, {}", arr_var, c_modifier));
-                        n_subs += 1;
-                    }
-                    call.push_str(&format!(", {}{})", n_subs, sub_args));
-
-                    if context == ExprContext::Temporary {
-                        // The fresh +1 watcher must be released at statement
-                        // end (which unsubscribes it) — hoist as a tracked
-                        // temp, mirroring the optional-member pattern.
-                        let temp_name = self.next_temp_name();
-                        self.temp_owners.insert(temp_name.clone(), (HeapType::Watcher, self.scope_depth));
-                        self.pending_statement_decls.push(format!("HiLowWatcher* {} = {};", temp_name, call));
-                        self.output.push_str(&temp_name);
-                    } else {
-                        self.output.push_str(&call);
-                    }
+                // Phase 2a/3b: registration by construction, ONE path for
+                // every watcher kind. The expression value is ONE call that
+                // creates the watcher AND subscribes it to every cell — any
+                // syntactic position registers. The env owns a retain on
+                // every cell it holds; its generated dtor releases them on
+                // the watcher's final release (escape soundness, §5 item 1).
+                let env_var_name = if env_fields.is_empty() {
+                    "NULL".to_string()
                 } else {
-                    // Scalar watcher: unchanged (compile-time name-keyed
-                    // wiring; migrates to cells in Phase 3). The side-channel
-                    // below is consumed by the let path only — the known
-                    // statement-shape limitation persists for scalars.
-                    self.output.push_str("hl_watcher_new()");
+                    let env_var = format!("__watcher_env_{}", watcher_index);
+                    let decl = self.watcher_env_pack_decl(&env_struct_name, &env_var, &env_fields);
+                    self.pending_statement_decls.push(decl);
+                    env_var
+                };
+                let dtor_arg = env_dtor_name.as_deref().unwrap_or("NULL").to_string();
 
-                    self.temp_watcher_expr_body_fn = Some(body_fn_name);
-                    self.temp_watcher_expr_subscriptions = watcher_expr.subscriptions.clone();
+                // Build the construction call.
+                let mut call = format!("hl_watcher_new_subscribed((void*){}, {}, {}", body_fn_name, env_var_name, dtor_arg);
+                let mut n_subs = 0;
+                let mut sub_args = String::new();
+                for subscription in &watcher_expr.subscriptions {
+                    let c_modifier = match subscription.modifier {
+                        // Phase 3b: (assigned) is the scalar every-assignment
+                        // event; (changed) fires only on inequality.
+                        SubscriptionModifier::Changed => "HL_ARR_CHANGED",
+                        SubscriptionModifier::Assigned => "HL_SCALAR_ASSIGNED",
+                        SubscriptionModifier::Added => "HL_ARR_ADDED",
+                        SubscriptionModifier::Removed => "HL_ARR_REMOVED",
+                        SubscriptionModifier::Moved => "HL_ARR_MOVED",
+                        SubscriptionModifier::Deep => "HL_ARR_DEEP",
+                    };
+                    let cell_var = self.env_slot_rvalue(&subscription.variable_name);
+                    if matches!(subscription.modifier, SubscriptionModifier::Deep) {
+                        // Phase 2d/2e: a (deep) subscription marks the
+                        // whole subtree deep-watched so nested mutations
+                        // walk up. The mark call is container-typed.
+                        let mark_fn = if has_objects { "hl_object_mark_deep" } else { "hl_array_mark_deep" };
+                        self.pending_statement_decls.push(format!("{}({});", mark_fn, cell_var));
+                    }
+                    sub_args.push_str(&format!(", &{}->cell, {}", cell_var, c_modifier));
+                    n_subs += 1;
+                }
+                call.push_str(&format!(", {}{})", n_subs, sub_args));
 
-                    let captures = watcher_expr.captures.borrow();
-                    self.temp_watcher_expr_captured_vars = captures.iter()
-                        .map(|(var_name, _ast_type, _pos)| var_name.clone())
-                        .collect();
+                if context == ExprContext::Temporary {
+                    // The fresh +1 watcher must be released at statement
+                    // end (which unsubscribes it) — hoist as a tracked
+                    // temp, mirroring the optional-member pattern.
+                    let temp_name = self.next_temp_name();
+                    self.temp_owners.insert(temp_name.clone(), (HeapType::Watcher, self.scope_depth));
+                    self.pending_statement_decls.push(format!("HiLowWatcher* {} = {};", temp_name, call));
+                    self.output.push_str(&temp_name);
+                } else {
+                    self.output.push_str(&call);
                 }
             }
             Expression::ArrayLit(elements, _) => {
@@ -7116,6 +7243,11 @@ impl CodeGenerator {
     /// Exit current scope and emit cleanup for variables declared in this scope
     fn exit_scope(&mut self) {
         self.emit_scope_cleanup(self.scope_depth);
+        // Phase 3b: drop this scope's boxed-binding records (stack order —
+        // entries are pushed in declaration order, deepest last)
+        while matches!(self.boxed_bindings.last(), Some((_, d, _)) if *d == self.scope_depth) {
+            self.boxed_bindings.pop();
+        }
         self.scope_depth = self.scope_depth.saturating_sub(1);
     }
 
@@ -7160,6 +7292,11 @@ impl CodeGenerator {
                     }
                     HeapType::Array => {
                         self.output.push_str(&format!("    hl_array_release({});\n", c_var_name));
+                    }
+                    HeapType::Scalar => {
+                        // Phase 3b: the scope's reference to a boxed scalar
+                        // cell; an escaped watcher's env retain keeps it alive
+                        self.output.push_str(&format!("    hl_scalar_release({});\n", c_var_name));
                     }
                     HeapType::Tuple(element_types) => {
                         // Release heap-allocated elements in the tuple
@@ -7223,6 +7360,9 @@ impl CodeGenerator {
             }
             HeapType::Array => {
                 self.output.push_str(&format!("  hl_array_release({});\n", temp_name));
+            }
+            HeapType::Scalar => {
+                self.output.push_str(&format!("  hl_scalar_release({});\n", temp_name));
             }
             HeapType::Tuple(_) => {
                 // Tuples are stack-allocated and shouldn't appear in temp_owners
@@ -7324,6 +7464,10 @@ impl CodeGenerator {
                     }
                     HeapType::Array => {
                         self.output.push_str(&format!("    hl_array_release({});\n", c_var_name));
+                    }
+                    HeapType::Scalar => {
+                        // Phase 3b: boxed scalar cell (early-return path)
+                        self.output.push_str(&format!("    hl_scalar_release({});\n", c_var_name));
                     }
                     HeapType::Tuple(element_types) => {
                         // Release heap-allocated elements in the tuple
@@ -7541,31 +7685,55 @@ impl CodeGenerator {
         )
     }
 
+    /// Phase 3b: watchable types are the boxed-payload kinds the corpus
+    /// needs (i32 only — audit §5 item 7, no speculative matrix) plus the
+    /// container cells. Further scalar kinds land as programs need them.
     fn is_ast_type_watchable_in_phase_10g(&self, ty: &crate::ast::Type) -> bool {
         use crate::ast::{Type as AstType, PrimitiveType};
         matches!(ty,
-            AstType::Primitive(PrimitiveType::I8) | AstType::Primitive(PrimitiveType::I16) |
-            AstType::Primitive(PrimitiveType::I32) | AstType::Primitive(PrimitiveType::I64) |
-            AstType::Primitive(PrimitiveType::I128) | AstType::Primitive(PrimitiveType::U8) |
-            AstType::Primitive(PrimitiveType::U16) | AstType::Primitive(PrimitiveType::U32) |
-            AstType::Primitive(PrimitiveType::U64) | AstType::Primitive(PrimitiveType::U128) |
-            AstType::Primitive(PrimitiveType::F32) | AstType::Primitive(PrimitiveType::F64) |
-            AstType::Primitive(PrimitiveType::Bool) | AstType::DynamicArray(_)
+            AstType::Primitive(PrimitiveType::I32) | AstType::DynamicArray(_)
         )
     }
 
-    /// Phase 10-γ: Generate a watcher body as a C function
-    fn generate_watcher(&mut self, watcher: &Watcher, watcher_id: usize, type_checker: &TypeChecker) -> Result<String, CodegenError> {
-        // Validate all subscribed variable types are allowed in Phase 10-γ
+    /// Phase 3b: generate a decl-form watcher — env-ABI body dispatched
+    /// through the subscribed cells, gated on the legacy statics (they die
+    /// in 3c). Emits statics, helpers, and the body into watcher_bodies;
+    /// returns (body fn name, env fields, env dtor name) for the caller to
+    /// emit the construction at the declaration site.
+    fn generate_watcher(
+        &mut self,
+        watcher: &Watcher,
+        watcher_id: usize,
+        type_checker: &TypeChecker,
+    ) -> Result<(String, Vec<(String, EnvSlot)>, Option<String>), CodegenError> {
+        // Validate subscribed types: i32 scalars only. A decl-form watcher
+        // on a container variable means REBINDING watch, which needs a
+        // variable-slot cell — unscheduled (Phase 3b adjudication A; same
+        // bucket as (assigned)obj and string watching). Content watching of
+        // containers is the expression form.
         for subscription in &watcher.subscriptions {
             let var_name = &subscription.variable_name;
-            // Get variable type from resolved type on subscription (populated by type checker)
             if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                if !self.is_ast_type_watchable_in_phase_10g(var_type) {
-                    return Err(CodegenError::UnsupportedFeature {
-                        feature: format!("watching value of type {:?}", var_type),
-                        phase: "future phase (string and composite watching)".to_string(),
-                    });
+                match var_type {
+                    crate::ast::Type::Primitive(crate::ast::PrimitiveType::I32) => {}
+                    crate::ast::Type::Primitive(crate::ast::PrimitiveType::String) => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("watching value of type {:?}", var_type),
+                            phase: "a future phase (string and composite watching): watching a string variable means rebinding-watch, which needs a variable-slot cell".to_string(),
+                        });
+                    }
+                    crate::ast::Type::DynamicArray(_) | crate::ast::Type::Object(_) => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("decl-form watcher on container-typed variable '{}'", var_name),
+                            phase: "a future phase — watching a container VARIABLE means rebinding-watch, which needs a variable-slot cell (unscheduled); use an expression-form watcher to observe content mutations".to_string(),
+                        });
+                    }
+                    other => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("watching a scalar of type {:?}", other),
+                            phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today; audit §5 item 7)".to_string(),
+                        });
+                    }
                 }
             } else {
                 return Err(CodegenError::UnsupportedFeature {
@@ -7575,7 +7743,7 @@ impl CodeGenerator {
             }
         }
 
-        // Validate all modifiers are supported in Phase 10-γ
+        // Validate all modifiers are supported (decl-form: changed/assigned)
         for subscription in &watcher.subscriptions {
             match subscription.modifier {
                 SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
@@ -7592,67 +7760,53 @@ impl CodeGenerator {
             }
         }
 
-        // Generate mangled function name
         let func_name = format!("hilow_watcher_{}_{}", watcher_id, watcher.name);
+        let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_id);
 
-        // Generate function signature
-        self.watcher_bodies.push_str(&format!("void {}(", func_name));
-
-        // Add parameters for each subscription, in declaration order
-        for (i, subscription) in watcher.subscriptions.iter().enumerate() {
-            if i > 0 {
-                self.watcher_bodies.push_str(", ");
-            }
-
-            let var_name = &subscription.variable_name;
-            let param_name = subscription.alias.as_ref().unwrap_or(var_name);
-
-            // Get the variable type from resolved type on subscription
-            if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                let c_type = self.ast_type_to_c(var_type);
-                self.watcher_bodies.push_str(&format!("{} {}", c_type, param_name));
-            }
-        }
-
-        self.watcher_bodies.push_str(") {\n");
-
-        // Generate the watcher body
-        let saved_output = self.output.clone();
-        self.output.clear();
-
-        // Save current variable_types and add watcher parameters to scope
-        let old_variable_types = self.variable_types.clone();
+        // Env fields: the subscribed cells (deduplicated), then the
+        // shadow-correct capture list from the 3a analysis.
+        let mut env_fields: Vec<(String, EnvSlot)> = Vec::new();
         for subscription in &watcher.subscriptions {
             let var_name = &subscription.variable_name;
-            let param_name = subscription.alias.as_ref().unwrap_or(var_name);
-
-            // Get the variable type from resolved type on subscription
-            if let Some(ast_var_type) = subscription.resolved_var_type.borrow().as_ref() {
-                let types_var_type = Type::from_ast_type(ast_var_type);
-                self.variable_types.insert(param_name.clone(), types_var_type);
+            if !env_fields.iter().any(|(n, _)| n == var_name) {
+                env_fields.push((var_name.clone(), EnvSlot::Scalar));
             }
         }
-
-        self.generate_block(&watcher.body, type_checker)?;
-
-        // Restore original variable_types
-        self.variable_types = old_variable_types;
-
-        self.watcher_bodies.push_str(&self.output);
-        self.watcher_bodies.push_str("}\n\n");
+        let analysis_captures: Vec<String> = self
+            .boxing
+            .as_ref()
+            .map(|b| b.captures_for(&watcher.position).to_vec())
+            .unwrap_or_default();
+        for var_name in &analysis_captures {
+            if env_fields.iter().any(|(n, _)| n == var_name) {
+                continue;
+            }
+            let var_type = self.variable_types.get(var_name).cloned();
+            let slot = match var_type {
+                Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
+                Some(Type::Object(_)) => EnvSlot::Object,
+                Some(Type::I32) => EnvSlot::Scalar,
+                other => {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("watcher capture of '{}' with type {:?}", var_name, other),
+                        phase: "a future phase — boxed scalar payload kinds land as programs need them (i32 today)".to_string(),
+                    });
+                }
+            };
+            env_fields.push((var_name.clone(), slot));
+        }
+        let env_dtor_name = Some(self.emit_watcher_env_struct(&env_struct_name, &env_fields));
 
         // Phase 10-γ-fixup: Add watcher name to ID mapping for method dispatch
         self.watcher_name_to_id.insert(watcher.name.clone(), watcher_id);
 
-        // Phase 10-γ-fixup: Emit static state variables and helper functions
+        // Statics BEFORE the body (the body's gate reads them), then helpers.
         self.watcher_bodies.push_str(&format!(
             "static bool hilow_watcher_{}_active = false;\n", watcher_id
         ));
         self.watcher_bodies.push_str(&format!(
             "static bool hilow_watcher_{}_ended = false;\n\n", watcher_id
         ));
-
-        // Emit the four helper functions
         self.watcher_bodies.push_str(&format!(
             "static void hilow_watcher_{}_pause(void) {{ hilow_watcher_{}_active = false; }}\n",
             watcher_id, watcher_id
@@ -7670,23 +7824,117 @@ impl CodeGenerator {
             watcher_id, watcher_id
         ));
 
-        self.output = saved_output;
+        // Body: one firing ABI (env, cell, delta), statics-gated.
+        self.watcher_bodies.push_str(&format!(
+            "void {}(void* env, HiLowCell* hilow_cell, const HiLowDelta* delta) {{\n",
+            func_name
+        ));
+        self.watcher_bodies.push_str(&format!(
+            "  if (!hilow_watcher_{}_active || hilow_watcher_{}_ended) return;\n",
+            watcher_id, watcher_id
+        ));
 
-        Ok(func_name)
-    }
+        // Generate the watcher body
+        let saved_output = self.output.clone();
+        self.output.clear();
 
-    /// Phase 10-γ-fixup: Extract watcher ID from function name for active flag check
-    fn extract_watcher_id(&self, func_name: &str) -> Option<usize> {
-        // Function name format: "hilow_watcher_{id}_{name}"
-        if let Some(prefix_end) = func_name.find("hilow_watcher_") {
-            let after_prefix = &func_name[prefix_end + "hilow_watcher_".len()..];
-            if let Some(id_end) = after_prefix.find('_') {
-                if let Ok(id) = after_prefix[..id_end].parse::<usize>() {
-                    return Some(id);
-                }
+        let old_variable_types = self.variable_types.clone();
+        let old_hoisted_variables = self.hoisted_variables.clone();
+        let old_current_env_var = self.current_env_var.clone();
+        let old_boxed_hoisted = self.boxed_hoisted.clone();
+        let boxed_mask_base = self.boxed_bindings.len();
+
+        self.output.push_str(&format!("  {}* env_cast = ({}*)env;\n", env_struct_name, env_struct_name));
+        self.output.push_str("  (void)hilow_cell; (void)delta;\n");
+
+        // Subscribed names bind snapshot locals read at fire time.
+        for subscription in &watcher.subscriptions {
+            let var_name = &subscription.variable_name;
+            let param_name = subscription.alias.as_ref().unwrap_or(var_name);
+            self.output.push_str(&format!(
+                "  int32_t {} = hl_scalar_get_i32(env_cast->{});\n",
+                param_name, var_name
+            ));
+            self.variable_types.insert(param_name.clone(), Type::I32);
+            self.push_boxed_binding(param_name, false);
+        }
+
+        // Captures go through the env as cells.
+        self.hoisted_variables.clear();
+        self.current_env_var = Some("env_cast".to_string());
+        for (var_name, slot) in &env_fields {
+            if watcher.subscriptions.iter().any(|s| &s.variable_name == var_name) {
+                continue;
+            }
+            self.hoisted_variables.insert(var_name.clone(), ("env_cast".to_string(), env_struct_name.clone()));
+            if matches!(slot, EnvSlot::Scalar) {
+                self.boxed_hoisted.insert(var_name.clone());
+                self.variable_types.insert(var_name.clone(), Type::I32);
             }
         }
-        None
+
+        self.generate_block(&watcher.body, type_checker)?;
+
+        // Restore enclosing-scope state
+        self.variable_types = old_variable_types;
+        self.hoisted_variables = old_hoisted_variables;
+        self.current_env_var = old_current_env_var;
+        self.boxed_hoisted = old_boxed_hoisted;
+        self.boxed_bindings.truncate(boxed_mask_base);
+
+        self.watcher_bodies.push_str(&self.output);
+        self.watcher_bodies.push_str("}\n\n");
+
+        self.output = saved_output;
+
+        Ok((func_name, env_fields, env_dtor_name))
+    }
+
+    /// Phase 3b: emit a decl-form watcher's activation + construction at its
+    /// declaration site. Pre-declaration assignments cannot fire — the cell
+    /// has no subscriber until this runs.
+    fn emit_decl_watcher_construction(
+        &mut self,
+        watcher: &Watcher,
+        watcher_id: usize,
+        env_fields: &[(String, EnvSlot)],
+        env_dtor_name: Option<&str>,
+    ) {
+        self.output.push_str(&format!("  hilow_watcher_{}_active = true;\n", watcher_id));
+        self.output.push_str(&format!("  hilow_watcher_{}_ended = false;\n", watcher_id));
+
+        let env_struct_name = format!("hilow_array_watcher_env_{}", watcher_id);
+        let env_var = format!("__watcher_env_{}", watcher_id);
+        let func_name = format!("hilow_watcher_{}_{}", watcher_id, watcher.name);
+        let hidden_var = format!("hilow_watcher_{}_w", watcher_id);
+
+        let env_arg = if env_fields.is_empty() {
+            "NULL".to_string()
+        } else {
+            let decl = self.watcher_env_pack_decl(&env_struct_name, &env_var, env_fields);
+            self.output.push_str(&format!("  {}\n", decl));
+            env_var
+        };
+
+        let mut call = format!(
+            "hl_watcher_new_subscribed((void*){}, {}, {}",
+            func_name, env_arg, env_dtor_name.unwrap_or("NULL")
+        );
+        let mut n_subs = 0;
+        let mut sub_args = String::new();
+        for subscription in &watcher.subscriptions {
+            let c_modifier = match subscription.modifier {
+                SubscriptionModifier::Assigned => "HL_SCALAR_ASSIGNED",
+                _ => "HL_ARR_CHANGED", // only changed/assigned pass validation
+            };
+            let cell_var = self.env_slot_rvalue(&subscription.variable_name);
+            sub_args.push_str(&format!(", &{}->cell, {}", cell_var, c_modifier));
+            n_subs += 1;
+        }
+        call.push_str(&format!(", {}{})", n_subs, sub_args));
+
+        self.output.push_str(&format!("  HiLowWatcher* {} = {};\n", hidden_var, call));
+        self.track_heap_owner(&hidden_var, HeapType::Watcher);
     }
 
     /// Phase 10-γ: Register a watcher as a subscriber to its variables
@@ -7715,44 +7963,6 @@ impl CodeGenerator {
                 .or_insert_with(Vec::new)
                 .push(watcher_subscription);
         }
-    }
-
-    /// Phase 10-γ: Emit arguments for a watcher function call (current values of all subscribed variables)
-    /// Phase 10-δ-β: Emit arguments for heap watcher body calls from variable names
-    fn emit_watcher_call_args_from_names(&mut self, var_names: &[String], captured_vars: &[String]) -> Result<(), CodegenError> {
-        for (i, var_name) in var_names.iter().enumerate() {
-            if i > 0 {
-                self.output.push_str(", ");
-            }
-            self.output.push_str(var_name);
-        }
-
-        // Phase 10a: Add captured variables as &var arguments for scalar watchers
-        for (i, var_name) in captured_vars.iter().enumerate() {
-            if !var_names.is_empty() || i > 0 {
-                self.output.push_str(", ");
-            }
-            self.output.push_str(&format!("&{}", self.mangle_variable_name(var_name)));
-        }
-        Ok(())
-    }
-
-    fn emit_watcher_call_args(&mut self, all_subscriptions: &[(String, String)], captured_vars: &[String]) -> Result<(), CodegenError> {
-        for (i, (var_name, _param_name)) in all_subscriptions.iter().enumerate() {
-            if i > 0 {
-                self.output.push_str(", ");
-            }
-            self.output.push_str(var_name);
-        }
-
-        // Phase 10a: Add captured variables as &var arguments for scalar watchers
-        for (i, var_name) in captured_vars.iter().enumerate() {
-            if !all_subscriptions.is_empty() || i > 0 {
-                self.output.push_str(", ");
-            }
-            self.output.push_str(&format!("&{}", self.mangle_variable_name(var_name)));
-        }
-        Ok(())
     }
 
     /// Collect names of variables declared locally within the given block items

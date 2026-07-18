@@ -53,10 +53,16 @@ pub struct BoxDecision {
 }
 
 /// Result of the analysis: one decision per variable declaration, in
-/// encounter (declaration) order.
+/// encounter (declaration) order. Phase 3b addition: per-watcher capture
+/// lists, keyed by the watcher's source position — shadow-correct (unlike the
+/// legacy `WatcherExpr.captures` scan), in first-reference order, covering
+/// EVERY enclosing watcher a reference crosses (a nested watcher's outer
+/// reference appears in its own list and in each enclosing watcher's list,
+/// since each env must be able to pack the inner one).
 #[derive(Debug, Default)]
 pub struct BoxingAnalysis {
     decisions: Vec<BoxDecision>,
+    watcher_captures: HashMap<(usize, usize), Vec<String>>,
 }
 
 impl BoxingAnalysis {
@@ -80,6 +86,18 @@ impl BoxingAnalysis {
     pub fn decisions(&self) -> &[BoxDecision] {
         &self.decisions
     }
+
+    /// Names a watcher's body references from outside the watcher's own
+    /// scope (its env captures), in first-reference order. Keyed by the
+    /// watcher's position (decl-form `Watcher.position` or
+    /// `WatcherExpr.position`). Subscribed names are NOT captures — body uses
+    /// of them resolve to the subscription binding inside the boundary.
+    pub fn captures_for(&self, pos: &Position) -> &[String] {
+        self.watcher_captures
+            .get(&(pos.line, pos.column))
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
 }
 
 /// Run the analysis over a type-checked program. The walker resolves names
@@ -91,6 +109,7 @@ pub fn analyze(top_level: &TopLevel) -> BoxingAnalysis {
         result: BoxingAnalysis::default(),
         scopes: Vec::new(),
         watcher_boundaries: Vec::new(),
+        watcher_keys: Vec::new(),
     };
     a.push_scope();
     match top_level {
@@ -109,8 +128,12 @@ struct Analyzer {
     /// Scope-stack index of each enclosing watcher's own scope. A reference
     /// resolving to a scope BELOW the innermost boundary crosses out of that
     /// watcher and boxes its target. (Resolutions inside the innermost
-    /// watcher are also inside every outer one, so one check suffices.)
+    /// watcher are also inside every outer one, so one check suffices for
+    /// marking; the capture lists check every boundary.)
     watcher_boundaries: Vec<usize>,
+    /// Position key of each enclosing watcher, parallel to
+    /// `watcher_boundaries` — capture-list recording (Phase 3b).
+    watcher_keys: Vec<(usize, usize)>,
 }
 
 impl Analyzer {
@@ -164,12 +187,23 @@ impl Analyzer {
     }
 
     /// An identifier use. Boxes its declaration iff the reference crosses
-    /// the innermost enclosing watcher boundary.
+    /// the innermost enclosing watcher boundary, and records the name in the
+    /// capture list of EVERY enclosing watcher it crosses (each env packs
+    /// the next one in — Phase 3b).
     fn reference(&mut self, name: &str) {
         if let Some((decl_idx, scope_idx)) = self.resolve(name) {
             if let Some(&boundary) = self.watcher_boundaries.last() {
                 if scope_idx < boundary {
                     self.mark(decl_idx, BoxReason::WatcherCaptured);
+                }
+            }
+            for (i, &boundary) in self.watcher_boundaries.iter().enumerate() {
+                if scope_idx < boundary {
+                    let key = self.watcher_keys[i];
+                    let list = self.result.watcher_captures.entry(key).or_default();
+                    if !list.iter().any(|n| n == name) {
+                        list.push(name.to_string());
+                    }
                 }
             }
         }
@@ -253,6 +287,7 @@ impl Analyzer {
         }
         self.push_scope();
         self.watcher_boundaries.push(self.scopes.len() - 1);
+        self.watcher_keys.push((w.position.line, w.position.column));
         for sub in &w.subscriptions {
             self.declare(&sub.variable_name, &sub.position);
             if let Some(alias) = &sub.alias {
@@ -260,6 +295,7 @@ impl Analyzer {
             }
         }
         self.walk_items(&w.body.items);
+        self.watcher_keys.pop();
         self.watcher_boundaries.pop();
         self.pop_scope();
     }
@@ -270,6 +306,7 @@ impl Analyzer {
         }
         self.push_scope();
         self.watcher_boundaries.push(self.scopes.len() - 1);
+        self.watcher_keys.push((w.position.line, w.position.column));
         for sub in &w.subscriptions {
             self.declare(&sub.variable_name, &sub.position);
             if let Some(alias) = &sub.alias {
@@ -277,6 +314,7 @@ impl Analyzer {
             }
         }
         self.walk_items(&w.body.items);
+        self.watcher_keys.pop();
         self.watcher_boundaries.pop();
         self.pop_scope();
     }

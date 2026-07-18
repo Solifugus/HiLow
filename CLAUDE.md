@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 3b — hl_cell_set: boxed scalars (per the 3a analysis) lower to cells; assignment to them becomes hl_cell_set (equality check + notify); delete the scalar firing block; unwatched variables stay raw C locals (zero-cost check on generated C, now byte-diffable). Per audit §5 item 1 the escape-rejection tests drop in this commit with a sound-escape demonstration. Gate: full suite; changed/assigned and stealth scalar tests are the sentinels.**
+**Current phase: 3c — runtime watcher lifecycle: watcher declarations construct runtime watcher values (both forms share the heap path); delete static _active/_ended bools, the four static helpers, activation/deactivation emission (Phase 4/5 loops in both block walkers + emit_main_function), and the static-dispatch method arm. Scope exit releases the watcher — reaches early returns for free; §4.4 item 4 test flips from pinning the hole to pinning the fix. Gate: full suite; pause/resume/end/isActive, scope-bounding, factory tests are the sentinels.**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

@@ -1,0 +1,5 @@
+assigned fired
+after same
+changed fired
+assigned fired
+after diff

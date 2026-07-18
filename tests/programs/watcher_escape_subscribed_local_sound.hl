@@ -1,0 +1,9 @@
+high program(): i32 {
+    function makeWatcher(): watcher {
+        let local = 3
+        return watcher((changed)local) { print("never fires") }
+    }
+    let w = makeWatcher()
+    print("watcher escaped")
+    return 0
+}

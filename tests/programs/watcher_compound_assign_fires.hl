@@ -1,0 +1,16 @@
+high program(): i32 {
+    let x: i32 = 5
+    let hits = 0
+    let w = watcher((changed)x) {
+        print("changed fired")
+    }
+    watcher onAsg((assigned)x) {
+        hits += 1
+    }
+    x += 1
+    print("after compound")
+    x += 0
+    print("after zero compound")
+    print(hits)
+    return 0
+}

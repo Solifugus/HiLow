@@ -1,0 +1,6 @@
+high program(): i32 {
+    let (a, b) = (1, 2)
+    let w = watcher((changed)a) { print("fired") }
+    a = 3
+    return 0
+}

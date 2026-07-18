@@ -2735,19 +2735,6 @@ fn test_watcher_expression_scope_release() {
 }
 
 #[test]
-fn test_watcher_expression_return_rejected() {
-    let result = compile_program("tests/programs/watcher/expression_return_rejected/main.hl");
-
-    // This should fail to compile
-    assert!(result.is_err(), "Expected compilation to fail for escaping watcher expression");
-
-    let error_message = result.unwrap_err();
-    assert!(error_message.contains("subscribed variable 'localCounter' is not reachable from the function's caller") &&
-            error_message.contains("declared inside the function"),
-            "Error should mention reachability restriction for function-local variable, got: {}", error_message);
-}
-
-#[test]
 fn test_watcher_expression_fires_on_change() {
     let executable = compile_program("tests/programs/watcher/expression_fires/main.hl")
         .expect("Failed to compile test_watcher_expression_fires_on_change.hl");
@@ -2865,20 +2852,6 @@ fn test_three_level_shadow_probe() {
 
     // Clean up
     let _ = fs::remove_file(&executable);
-}
-
-#[test]
-fn test_watcher_escape_function_local_rejected() {
-    let result = compile_program("tests/programs/watcher/escape_function_local_rejected/main.hl");
-
-    // This should fail to compile
-    assert!(result.is_err(), "Expected compilation to fail for watcher capturing function-local variable");
-
-    let error_message = result.unwrap_err();
-    assert!(error_message.contains("subscribed variable") &&
-            error_message.contains("not reachable from the function's caller") &&
-            error_message.contains("declared inside the function"),
-            "Error should mention reachability restriction, got: {}", error_message);
 }
 
 // Array Phase A integration tests
@@ -5255,25 +5228,6 @@ fn test_optional_return_mismatch_rejected() {
     );
 }
 
-// Phase 2b: a watcher capturing function-frame variables cannot escape its
-// declaring function (its env holds addresses into the dead frame). The
-// `let w = ...; return w` shape previously dodged every escape check and was
-// kept sound only by the scope-owned-env safety net this phase deleted.
-// Sound escape lands in Phase 3 (boxing), where the restriction drops
-// entirely per audit §5 item 1.
-#[test]
-fn test_watcher_capture_escape_rejected() {
-    let result = compile_program("tests/programs/watcher_capture_escape_rejected.hl");
-    assert!(result.is_err(), "capture-escape should be rejected");
-    let msg = result.unwrap_err();
-    assert!(
-        msg.contains("watcher 'w' captures 'z'")
-            && msg.contains("cannot escape its declaring function until Phase 3"),
-        "diagnostic should name the watcher and captured variable, got: {}",
-        msg
-    );
-}
-
 // Phase 2c: the SECOND §3.4(a) firing site — the from==to no-op branch of
 // hl_array_move had its own 2-arg env-dropping cast, uncovered by the 1.5d
 // fixture (which exercises only the real-move branch). A capturing (moved)
@@ -5539,6 +5493,95 @@ fn test_watcher_mixed_array_object_rejected() {
     assert!(
         msg.contains("mixed array and object subscriptions in one watcher"),
         "Expected the mixed-container diagnostic, got: {}",
+        msg
+    );
+}
+
+// ===== Phase 3b: boxed scalars lower to cells (hl_cell_set) =====
+
+/// Helper for Phase 3b run-fixtures: compile tests/programs/<name>.hl, run,
+/// assert exit 0 / empty stderr / stdout matches tests/expected/<name>.txt.
+fn run_3b_fixture(name: &str) {
+    let executable = compile_program(&format!("tests/programs/{}.hl", name))
+        .unwrap_or_else(|e| panic!("Failed to compile {}: {}", name, e));
+    let (stdout, stderr, exit_code) = run_program(&executable)
+        .unwrap_or_else(|e| panic!("Failed to run {}: {}", name, e));
+    assert_eq!(exit_code, 0, "{}: program should exit with code 0 (stderr: {})", name, stderr);
+    assert!(stderr.is_empty(), "{}: no stderr expected, got: {}", name, stderr);
+    let expected = fs::read_to_string(&format!("tests/expected/{}.txt", name))
+        .expect("Failed to read expected output");
+    assert_eq!(stdout.trim(), expected.trim(), "{}: stdout should match expected output", name);
+    let _ = fs::remove_file(&executable);
+}
+
+// Fire-order ruling (Phase 3b): on one changing assignment, changed
+// subscribers fire before assigned subscribers (the legacy firing block's
+// order); a same-value assignment fires assigned only.
+#[test]
+fn test_watcher_changed_assigned_order() {
+    run_3b_fixture("watcher_changed_assigned_order");
+}
+
+// Adjudication B: compound assignment to a watched scalar is an assignment —
+// read payload, apply operator, hl_cell_set. (changed) fires only when the
+// result differs; (assigned) fires every time. The Phase 10-γ rejection and
+// the silent expression-form no-fire both died with the firing block.
+#[test]
+fn test_watcher_compound_assign_fires() {
+    run_3b_fixture("watcher_compound_assign_fires");
+}
+
+// Adjudication C: decl-form watcher bodies may reference outer non-subscribed
+// variables (previously emitted C that did not compile). The capture reads
+// the cell at fire time — the second fire sees the updated value.
+#[test]
+fn test_watcher_decl_capture_fires() {
+    run_3b_fixture("watcher_decl_capture_fires");
+}
+
+// §5 item 1: escape is SOUND. The previously-rejected direct-return shape —
+// a watcher capturing a function-local — escapes and keeps firing; the env's
+// retain keeps the boxed cell alive (valgrind-clean via the gate).
+#[test]
+fn test_watcher_escape_capture_sound() {
+    run_3b_fixture("watcher_escape_capture_sound");
+}
+
+// §5 item 1: a watcher subscribing a function-LOCAL escapes soundly too —
+// nothing can mutate the cell after return, so it never fires again; it is
+// merely inert, not dangling (the reachability rule's case, now safe).
+#[test]
+fn test_watcher_escape_subscribed_local_sound() {
+    run_3b_fixture("watcher_escape_subscribed_local_sound");
+}
+
+// Adjudication A: decl-form on a container variable means rebinding-watch —
+// variable-slot cells are unscheduled (same bucket as (assigned)obj and
+// string watching). Previously this compiled, fired on rebinding only, and
+// leaked; now it rejects cleanly.
+#[test]
+fn test_watcher_decl_container_rejected() {
+    let result = compile_program("tests/programs/watcher_decl_container_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for decl-form watcher on an array variable");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("decl-form watcher on container-typed variable 'xs'")
+            && msg.contains("variable-slot cell"),
+        "Expected the rebinding-watch diagnostic, got: {}",
+        msg
+    );
+}
+
+// Adjudication E: a boxed tuple-destructured binding rejects rather than
+// miscompiles (destructured bindings do not box in 3b).
+#[test]
+fn test_watcher_destructured_binding_rejected() {
+    let result = compile_program("tests/programs/watcher_destructured_binding_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for watching a destructured binding");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("tuple-destructured binding"),
+        "Expected the destructured-binding diagnostic, got: {}",
         msg
     );
 }

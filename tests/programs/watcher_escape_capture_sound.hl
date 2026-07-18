@@ -1,0 +1,11 @@
+high program(): i32 {
+    function makeWatcher(xs: [i32]): watcher {
+        let label = 42
+        return watcher((added)xs) { print(label) }
+    }
+    let xs = []: [i32]
+    let w = makeWatcher(xs)
+    xs.push(1)
+    xs.push(2)
+    return 0
+}

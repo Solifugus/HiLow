@@ -79,21 +79,11 @@ pub struct TypeChecker {
     switch_depth: usize, // Track nested switch depth for break validation
     qualifier_registry: QualifierRegistry,
     method_context: Option<Type>, // Track the receiver object type when inside a method
-    /// Phase 10-δ-γ: Scope depth at which the currently checking function's body
-    /// begins. Used by escape analysis to determine which subscribed variables
-    /// are function-local (depth >= this value) vs reachable from the caller
-    /// (depth < this value).
-    current_function_scope_depth: Option<usize>,
     /// Phase 2b step zero: the declared return type of the function whose body
     /// is being checked. Used by check_return_statement to validate returns
     /// into optional-declared functions (the narrow return-type check; the
     /// general return-type gap remains an open question).
     current_function_return_type: Option<Type>,
-    /// Phase 2b: watcher bindings (in the current function) whose initializer
-    /// was a WatcherExpr capturing function-frame variables. Returning one is
-    /// rejected until Phase 3 boxing makes escape sound. Maps binding name →
-    /// name of the offending captured variable.
-    capture_unsafe_watchers: HashMap<String, String>,
     /// Cross-module export tables, keyed by module path. Populated during pass 1 of check_graph.
     /// Empty during single-file `check`.
     module_exports: HashMap<String, ExportTable>,
@@ -111,9 +101,7 @@ impl TypeChecker {
             switch_depth: 0,
             qualifier_registry: QualifierRegistry::new(),
             method_context: None,
-            current_function_scope_depth: None,
             current_function_return_type: None,
-            capture_unsafe_watchers: HashMap::new(),
             module_exports: HashMap::new(),
         }
     }
@@ -502,10 +490,6 @@ impl TypeChecker {
         // Enter function scope
         self.enter_scope();
 
-        // Phase 10-δ-γ: Track function scope depth for escape analysis
-        let saved_depth = self.current_function_scope_depth;
-        self.current_function_scope_depth = Some(self.scopes.len() - 1);
-
         // Phase 2b step zero: validate declared types (optional payload
         // allow-list) and track the declared return type for the narrow
         // optional-return check.
@@ -513,7 +497,6 @@ impl TypeChecker {
         self.validate_declared_type(&declared_return, &function.position);
         let saved_return = self.current_function_return_type.take();
         self.current_function_return_type = Some(declared_return);
-        let saved_unsafe = std::mem::take(&mut self.capture_unsafe_watchers);
 
         // Add parameters to scope
         for param in &function.params {
@@ -528,9 +511,7 @@ impl TypeChecker {
         }
 
         // Restore previous function context
-        self.current_function_scope_depth = saved_depth;
         self.current_function_return_type = saved_return;
-        self.capture_unsafe_watchers = saved_unsafe;
 
         // Exit function scope
         self.exit_function_scope();
@@ -937,27 +918,6 @@ impl TypeChecker {
                     }
                 });
 
-                // Phase 2b: a watcher binding that captures function-frame
-                // variables (locals or params — both stack-resident, captured
-                // by address) must not escape its declaring function. Record
-                // it so check_return_statement can reject `return <name>`.
-                // Sound escape lands in Phase 3 (boxing).
-                self.capture_unsafe_watchers.remove(name); // rebinding clears
-                if let (Some(Expression::WatcherExpr(watcher_expr)), Some(function_depth)) =
-                    (let_decl.initializer.as_ref(), self.current_function_scope_depth)
-                {
-                    let captures = watcher_expr.captures.borrow();
-                    for (cap_name, _ty, _pos) in captures.iter() {
-                        if let Some((_, var_depth)) = self.lookup_variable_with_depth(cap_name) {
-                            if var_depth >= function_depth {
-                                self.capture_unsafe_watchers
-                                    .insert(name.clone(), cap_name.clone());
-                                break;
-                            }
-                        }
-                    }
-                }
-
                 let final_type = match (declared_type, initializer_type) {
                     (Some(declared), Some(inferred)) => {
                         // Check that initializer matches declared type
@@ -1055,32 +1015,10 @@ impl TypeChecker {
 
     fn check_return_statement(&mut self, return_stmt: &ReturnStmt) {
         if let Some(value) = &return_stmt.value {
-            // Phase 2b: reject returning a watcher binding that captures
-            // function-frame variables (its env would hold addresses into the
-            // dead frame). Sound escape lands in Phase 3 (boxing).
-            if let Expression::Ident { name, .. } = value {
-                if let Some(cap_name) = self.capture_unsafe_watchers.get(name) {
-                    self.add_error(
-                        format!(
-                            "watcher '{}' captures '{}', which lives in this function's \
-                             frame — a watcher capturing function-local variables cannot \
-                             escape its declaring function until Phase 3 (scalar boxing)",
-                            name, cap_name
-                        ),
-                        return_stmt.position.clone(),
-                    );
-                }
-            }
-
+            // Phase 3b: watcher escape is SOUND — env slots retain the boxed
+            // cells they capture, so a watcher may leave its declaring scope
+            // (the escape-rejection machinery died with audit §5 item 1).
             let value_type = self.check_expression(value);
-
-            // Phase 10-δ-γ: Validate reachability of subscribed variables for
-            // escaping watcher expressions. Runs AFTER check_expression so the
-            // watcher's captures (populated during checking) are visible to
-            // the Phase 2b capture-escape rejection.
-            if let Expression::WatcherExpr(watcher_expr) = value {
-                self.check_watcher_escape_reachability(watcher_expr, &return_stmt.position);
-            }
 
             // Phase 2b step zero: narrow return-type check for functions
             // declared to return T? — the returned value must be the inner
@@ -1103,66 +1041,6 @@ impl TypeChecker {
             }
         }
         // TODO (unchanged general gap): check non-optional return types too
-    }
-
-    fn check_watcher_escape_reachability(&mut self, watcher_expr: &WatcherExpr, return_position: &Position) {
-        let function_depth = match self.current_function_scope_depth {
-            Some(d) => d,
-            None => {
-                // Not inside a function — shouldn't happen for a return statement, but
-                // belt-and-suspenders.
-                self.errors.push(TypeError::new(
-                    "watcher expression in return statement outside function context",
-                    return_position.clone()
-                ));
-                return;
-            }
-        };
-
-        for sub in &watcher_expr.subscriptions {
-            match self.lookup_variable_with_depth(&sub.variable_name) {
-                None => {
-                    self.errors.push(TypeError::new(
-                        &format!("subscribed variable '{}' is not in scope", sub.variable_name),
-                        sub.position.clone()
-                    ));
-                }
-                Some((_, var_depth)) => {
-                    if var_depth >= function_depth {
-                        // Variable is at function-local depth or deeper — not reachable from caller
-                        self.errors.push(TypeError::new(
-                            &format!(
-                                "subscribed variable '{}' is not reachable from the function's caller; \
-                                 the watcher cannot escape this scope because '{}' is declared inside the function. \
-                                 Move the variable declaration to an enclosing scope to allow the watcher to escape.",
-                                sub.variable_name, sub.variable_name
-                            ),
-                            sub.position.clone()
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Phase 2b: captured variables are stored in the env by address —
-        // function-frame captures (locals AND params) dangle if the watcher
-        // escapes. Reject until Phase 3 boxing makes escape sound.
-        let captures = watcher_expr.captures.borrow();
-        for (cap_name, _ty, _pos) in captures.iter() {
-            if let Some((_, var_depth)) = self.lookup_variable_with_depth(cap_name) {
-                if var_depth >= function_depth {
-                    self.errors.push(TypeError::new(
-                        &format!(
-                            "watcher captures '{}', which lives in this function's frame — \
-                             a watcher capturing function-local variables cannot escape its \
-                             declaring function until Phase 3 (scalar boxing)",
-                            cap_name
-                        ),
-                        return_position.clone()
-                    ));
-                }
-            }
-        }
     }
 
     fn check_if_statement(&mut self, if_stmt: &IfStmt) {
@@ -3219,16 +3097,11 @@ impl TypeChecker {
         // Create a new scope for the function body
         self.enter_scope();
 
-        // Phase 10-δ-γ: Track function scope depth for escape analysis
-        let saved_depth = self.current_function_scope_depth;
-        self.current_function_scope_depth = Some(self.scopes.len() - 1);
-
         // Phase 2b step zero: declared-type validation + return-type context
         let declared_return = Type::from_ast_type(&func_expr.return_type);
         self.validate_declared_type(&declared_return, &func_expr.position);
         let saved_return = self.current_function_return_type.take();
         self.current_function_return_type = Some(declared_return);
-        let saved_unsafe = std::mem::take(&mut self.capture_unsafe_watchers);
 
         // Add parameters to the scope
         let mut param_types = Vec::new();
@@ -3266,9 +3139,7 @@ impl TypeChecker {
         let return_type = Type::from_ast_type(&func_expr.return_type);
 
         // Restore previous function context
-        self.current_function_scope_depth = saved_depth;
         self.current_function_return_type = saved_return;
-        self.capture_unsafe_watchers = saved_unsafe;
 
         self.exit_function_scope();
 

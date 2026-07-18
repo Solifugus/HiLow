@@ -236,10 +236,13 @@ typedef struct HiLowWatcher {
     bool active;           // Whether the watcher is currently active
     bool ended;            // Whether the watcher has been permanently ended
     HiLowWatcherSub* subs; // cells this watcher is subscribed on (Phase 2a)
-    void* env;             // captured environment, OWNED: freed on final
+    void* env;             // captured environment, OWNED: released on final
                            // release (Phase 2b). The watcher's refcount is the
-                           // env's refcount — envs are never shared. Contents
-                           // are borrowed pointers (no dtor needed).
+                           // env's refcount — envs are never shared.
+    void (*env_dtor)(void*); // Phase 3b: env slots RETAIN their cells (escape
+                           // soundness); the generated dtor releases each
+                           // cell. The runtime frees the env itself either
+                           // way; NULL means no cells to release.
 } HiLowWatcher;
 
 // Object support (Phase 7a)
@@ -388,9 +391,31 @@ void hl_cell_remove_parent(HiLowCell* child, HiLowCell* parent);
 
 // Watcher construction that registers by construction (Phase 2a): creates the
 // watcher AND subscribes it to n (HiLowCell*, int modifier) varargs pairs.
-// The ONLY way generated code attaches an array watcher — there is no
-// separate register call for codegen to forget.
-HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, int n, ...);
+// The ONLY way generated code attaches a watcher — there is no separate
+// register call for codegen to forget. Phase 3b: env_dtor releases the env's
+// retained cells on final release; the runtime then frees the env.
+HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, void (*env_dtor)(void*), int n, ...);
+
+// Boxed scalar (Phase 3b): a watched scalar variable lowered to a cell.
+// Cell header first (all notify/subscribe/parent machinery applies unchanged);
+// the payload is HiLowValue — the ONE payload representation (3a design
+// statement): boxed scalars and, later, HiLowOptional kinds converge on it.
+// Only the kinds the corpus needs have constructors — i32 as of 3b.
+typedef struct HiLowScalar {
+    HiLowCell cell;            // cell header — MUST be first member
+    HiLowValue value;          // {kind, union} payload
+} HiLowScalar;
+
+HiLowScalar* hl_scalar_new_i32(int32_t v);
+void hl_scalar_retain(HiLowScalar* s);
+void hl_scalar_release(HiLowScalar* s);
+int32_t hl_scalar_get_i32(HiLowScalar* s);
+// The hl_cell_set family: store + equality check + notify. Fires CHANGED only
+// when the value differed (spec: "(changed)" = value differs from previous),
+// then HL_SCALAR_ASSIGNED on every call — changed subscribers before assigned
+// subscribers, matching the legacy firing block's order. Store happens under
+// stealth too; stealth suppresses only the notifications.
+void hl_cell_set_i32(HiLowScalar* s, int32_t v);
 
 typedef struct HiLowArray {
     HiLowCell cell;                // cell header — MUST be first member (Phase 2a)
@@ -411,6 +436,11 @@ typedef struct HiLowArray {
 #define HL_ARR_CHANGED 3
 #define HL_ARR_DEEP 4
 #define HL_ARR_MOVED 5
+// Scalar assignment event (Phase 3b): fired on EVERY hl_cell_set_* call,
+// after the CHANGED notify when the value differed. An equal-value assignment
+// is NOT a mutation: CHANGED and DEEP subscribers do not fire on it, and it
+// never triggers the deep parent walk.
+#define HL_SCALAR_ASSIGNED 6
 
 HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn);
 void hl_array_retain(HiLowArray* arr);

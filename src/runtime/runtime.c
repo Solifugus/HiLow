@@ -920,8 +920,14 @@ void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiL
     node->body_fn = body_fn;
     node->env = env;
     node->watcher = w;
-    node->next = c->watchers;
-    c->watchers = node;
+    // Phase 3b: APPEND — subscribers fire in subscription order (the legacy
+    // firing block's order: earlier-declared watchers fire first).
+    node->next = NULL;
+    HiLowCellWatcher** tail = &c->watchers;
+    while (*tail) {
+        tail = &(*tail)->next;
+    }
+    *tail = node;
 
     if (w) {
         HiLowWatcherSub* sub = malloc(sizeof(HiLowWatcherSub));
@@ -1044,14 +1050,19 @@ void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
     for (HiLowCellWatcher* node = c->watchers; node != NULL; node = node->next) {
         HiLowWatcher* state = node->watcher;
         if (state == NULL || !state->active || state->ended) continue;
-        if (node->modifier == event || node->modifier == HL_ARR_CHANGED
-            || node->modifier == HL_ARR_DEEP) {
+        // Phase 3b: an equal-value scalar assignment is NOT a mutation —
+        // CHANGED and DEEP subscribers do not fire on HL_SCALAR_ASSIGNED.
+        if (node->modifier == event
+            || (node->modifier == HL_ARR_CHANGED && event != HL_SCALAR_ASSIGNED)
+            || (node->modifier == HL_ARR_DEEP && event != HL_SCALAR_ASSIGNED)) {
             ((HiLowWatcherBody)node->body_fn)(node->env, c, delta);
         }
     }
 
     // Parent walk (Phase 2d): zero cost unless someone deep-watches above.
-    if (c->deep_watched && c->parents != NULL) {
+    // Phase 3b: never for HL_SCALAR_ASSIGNED (not a mutation; unreachable for
+    // scalar cells today — no parents, never deep-marked — but written so).
+    if (event != HL_SCALAR_ASSIGNED && c->deep_watched && c->parents != NULL) {
         hl_deep_epoch++;
         c->version = hl_deep_epoch;  // own deep nodes already fired above
         HiLowCell** ancestors = NULL;
@@ -1079,16 +1090,20 @@ HiLowWatcher* hl_watcher_new(void) {
     w->ended = false;          // Not ended initially
     w->subs = NULL;            // No subscriptions yet (Phase 2a)
     w->env = NULL;             // No owned env (Phase 2b)
+    w->env_dtor = NULL;        // No retained env cells (Phase 3b)
     return w;
 }
 
-// Registration by construction (Phase 2a): creating an array-watcher value
+// Registration by construction (Phase 2a): creating a watcher value
 // subscribes it. Varargs are n (HiLowCell*, int modifier) pairs.
 // Phase 2b: the watcher takes OWNERSHIP of env — it is freed on the
-// watcher's final release, never by scope cleanup.
-HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, int n, ...) {
+// watcher's final release, never by scope cleanup. Phase 3b: env_dtor
+// releases the env's retained cells at that point (the env slots own a
+// retain on every cell they hold — escape soundness).
+HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, void (*env_dtor)(void*), int n, ...) {
     HiLowWatcher* w = hl_watcher_new();
     w->env = env;
+    w->env_dtor = env_dtor;
     va_list args;
     va_start(args, n);
     for (int i = 0; i < n; i++) {
@@ -1127,8 +1142,12 @@ void hl_watcher_release(HiLowWatcher* w) {
                 }
             }
             // Phase 2b: the watcher owns its env — free it after
-            // unsubscribing (env contents are borrowed pointers, no dtor).
+            // unsubscribing. Phase 3b: the generated dtor first releases the
+            // cells the env slots retain; the free itself stays here.
             if (w->env) {
+                if (w->env_dtor) {
+                    w->env_dtor(w->env);
+                }
                 free(w->env);
                 hl_free_count++;
             }
@@ -1162,6 +1181,59 @@ bool hl_watcher_is_active(HiLowWatcher* w) {
         return w->active;
     }
     return false;
+}
+
+// Boxed scalars (Phase 3b). A watched scalar variable lowered to a cell:
+// cell header first, HiLowValue payload — the one payload representation.
+// Only corpus-needed kinds have constructors (i32 as of 3b).
+HiLowScalar* hl_scalar_new_i32(int32_t v) {
+    HiLowScalar* s = malloc(sizeof(HiLowScalar));
+    hl_alloc_count++;
+    s->cell.refcount = 1;
+    s->cell.watchers = NULL;
+    s->cell.parents = NULL;
+    s->cell.version = 0;
+    s->cell.deep_watched = false;
+    s->value.type = HL_VALUE_I32;
+    s->value.value.i32_val = v;
+    return s;
+}
+
+void hl_scalar_retain(HiLowScalar* s) {
+    if (s != NULL) {
+        hl_cell_retain(&s->cell);
+    }
+}
+
+void hl_scalar_release(HiLowScalar* s) {
+    if (s == NULL) return;
+    // hl_cell_release tears down the subscription and parent lists at zero;
+    // the payload is POD (no heap kinds landed), so teardown is just the free.
+    if (hl_cell_release(&s->cell)) {
+        free(s);
+        hl_free_count++;
+    }
+}
+
+int32_t hl_scalar_get_i32(HiLowScalar* s) {
+    return s->value.value.i32_val;
+}
+
+// The hl_cell_set family: store + equality check + notify. The store happens
+// under stealth too — stealth suppresses only the notifications (the
+// authoritative gate is inside hl_cell_notify; the outer check just skips
+// the calls). CHANGED fires only when the value differed, then
+// HL_SCALAR_ASSIGNED on every call — changed subscribers before assigned
+// subscribers, the legacy firing block's order.
+void hl_cell_set_i32(HiLowScalar* s, int32_t v) {
+    bool changed = s->value.value.i32_val != v;
+    s->value.value.i32_val = v;
+    if (hl_stealth_depth == 0 && cell_has_audience(&s->cell)) {
+        if (changed) {
+            hl_cell_notify(&s->cell, HL_ARR_CHANGED, NULL);
+        }
+        hl_cell_notify(&s->cell, HL_SCALAR_ASSIGNED, NULL);
+    }
 }
 
 // Helper function to get the proto property as an object (Phase 7b)
