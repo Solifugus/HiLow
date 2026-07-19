@@ -196,6 +196,12 @@ typedef struct HiLowCellWatcher {
     void* body_fn;
     void* env;                       // borrowed from the owning watcher (Phase 2b)
     struct HiLowWatcher* watcher;    // gating (active/ended) + identity; NOT owned
+    struct HiLowCell* origin;        // Phase 3e-γ: the SLOT cell whose follow
+                                     // created this node (decl-form container
+                                     // content subscriptions); NULL for every
+                                     // other node. hl_slot_retarget moves only
+                                     // nodes whose origin is the rebinding
+                                     // slot; NULL-origin nodes never move.
     struct HiLowCellWatcher* next;
 } HiLowCellWatcher;
 
@@ -365,11 +371,18 @@ void hl_cell_retain(HiLowCell* c);
 // subscription list (unlinking each node's backref from its watcher) and the
 // parent list.
 bool hl_cell_release(HiLowCell* c);
-// Subscribe w to c for one modifier: prepends a node AND records the backref
-// in w->subs. Called only from hl_watcher_new_subscribed.
-void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w);
+// Subscribe w to c for one modifier: appends a node AND records the backref
+// in w->subs. Runtime-internal (called from hl_watcher_new_subscribed[_origins]
+// and hl_slot_retarget — never emitted by codegen). origin is the slot cell
+// this subscription is attributed to for retargeting (Phase 3e-γ), NULL for
+// non-followed subscriptions.
+void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w, HiLowCell* origin);
 // Remove ALL of w's nodes from c and w's backrefs to c. Idempotent.
 void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w);
+// Phase 3e-γ: remove only w's nodes on c whose origin matches (one backref
+// dropped per removed node — nodes with other origins keep theirs). Used by
+// hl_slot_retarget; teardown paths keep the unfiltered variant.
+void hl_cell_unsubscribe_watcher_origin(HiLowCell* c, HiLowWatcher* w, HiLowCell* origin);
 // The ONE firing path (Phase 2c; deep walk added 2d). No-op under stealth
 // (which therefore suppresses deep fires too). One walk of c->watchers in
 // list order; a node fires iff its watcher is active and not ended AND (its
@@ -395,6 +408,13 @@ void hl_cell_remove_parent(HiLowCell* child, HiLowCell* parent);
 // register call for codegen to forget. Phase 3b: env_dtor releases the env's
 // retained cells on final release; the runtime then frees the env.
 HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, void (*env_dtor)(void*), int n, ...);
+// Phase 3e-γ variant for decl-form watchers with followed variables: varargs
+// are n (HiLowCell*, int modifier, HiLowCell* origin) TRIPLES — origin is the
+// slot cell a container-content subscription is attributed to (NULL for slot
+// (changed)/(assigned) subscriptions and FOLLOW markers). Emitted only when
+// the watcher follows at least one variable; everything else keeps the pairs
+// symbol above.
+HiLowWatcher* hl_watcher_new_subscribed_origins(void* body_fn, void* env, void (*env_dtor)(void*), int n, ...);
 
 // Boxed scalar (Phase 3b): a watched scalar variable lowered to a cell.
 // Cell header first (all notify/subscribe/parent machinery applies unchanged);

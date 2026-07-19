@@ -1,0 +1,18 @@
+high program(args: [string]): i32 {
+    let inner1 = [1]
+    let xs = [inner1]
+    let ys = xs
+    watcher w((deep)xs, (deep)ys) {
+        print("deep")
+    }
+    inner1.push(2)
+    print("m1")
+    let inner2 = [5]
+    xs = [inner2]
+    inner1.push(3)
+    print("m2")
+    inner2.push(6)
+    print("m3")
+    print("done")
+    return 0
+}

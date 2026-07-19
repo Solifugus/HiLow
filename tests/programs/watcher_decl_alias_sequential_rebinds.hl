@@ -1,0 +1,21 @@
+high program(args: [string]): i32 {
+    let xs = [1]
+    let ys = xs
+    watcher w((added)xs, (added)ys) {
+        print("hit")
+    }
+    xs.push(2)
+    print("m1")
+    xs = [10]
+    ys.push(3)
+    print("m2")
+    let keep = ys
+    ys = [20]
+    ys.push(4)
+    print("m3")
+    xs.push(5)
+    print("m4")
+    keep.push(9)
+    print("done")
+    return 0
+}

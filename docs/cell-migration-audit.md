@@ -1151,3 +1151,16 @@ named and are not to be re-litigated.
    slot's cell; hl_slot_retarget moves the follower's nodes old→new in
    collected order (hl_cell_subscribe appends = item 9 order), re-marks
    deep subtrees, and runs unconditionally under pause and stealth.)
+   (3e-γ landed 2026-07-19, owner-ruled from the step-zero probe of the
+   aliased-slot edge: ATTRIBUTION is the semantics — each content-
+   subscription node records the SLOT CELL whose follow created it
+   (HiLowCellWatcher.origin, pointer identity set at construction via the
+   hl_watcher_new_subscribed_origins triples variant; NULL for
+   expression-form/slot/FOLLOW nodes, which never move), and
+   hl_slot_retarget moves only nodes whose origin is the rebinding slot,
+   via origin-filtered unsubscribe. Two followed variables holding the
+   same container stay independent; origin is constant across moves, so
+   each slot's later rebind finds exactly its own nodes — the FOLLOW-
+   orphan follow-on resolved by the same mechanism. Zero-cost: diffs
+   confined to the construction call of decl-form container-content
+   watchers; everything else byte-identical vs the β binary.)

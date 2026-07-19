@@ -8034,17 +8034,18 @@ impl CodeGenerator {
             env_var
         };
 
-        let mut call = format!(
-            "hl_watcher_new_subscribed((void*){}, {}, {}",
-            func_name, env_arg, env_dtor_name.unwrap_or("NULL")
-        );
         // Phase 3e-β: (changed)/(assigned) subscribe the SLOT (rebinding-
         // watch, audit §5 item 10a); content modifiers subscribe the CURRENT
         // value's cell (payload deref) and follow rebinding — each followed
         // variable gets ONE HL_SLOT_FOLLOW marker node on its slot so
         // hl_slot_retarget can find the watcher's nodes on rebinding.
-        let mut n_subs = 0;
-        let mut sub_args = String::new();
+        // Phase 3e-γ: each content subscription is ATTRIBUTED to its slot's
+        // cell (the origin) so retargeting moves only the rebinding slot's
+        // nodes — two followed variables holding the same container stay
+        // independent. Watchers with followed variables emit the origins
+        // (triples) constructor; everything else keeps the pairs form
+        // byte-identically.
+        let mut subs: Vec<(String, &str, Option<String>)> = Vec::new();
         let mut followed_vars: Vec<String> = Vec::new();
         for subscription in &watcher.subscriptions {
             let slot_var = self.env_slot_rvalue(&subscription.variable_name);
@@ -8056,7 +8057,7 @@ impl CodeGenerator {
                 SubscriptionModifier::Moved => ("HL_ARR_MOVED", true),
                 SubscriptionModifier::Deep => ("HL_ARR_DEEP", true),
             };
-            let cell_var = if is_content {
+            if is_content {
                 let getter = match subscription.resolved_var_type.borrow().as_ref() {
                     Some(crate::ast::Type::Object(_)) => "hl_scalar_get_object_ref",
                     _ => "hl_scalar_get_array_ref",
@@ -8075,19 +8076,42 @@ impl CodeGenerator {
                     self.output
                         .push_str(&format!("  {}({}({}));\n", mark_fn, getter, slot_var));
                 }
-                format!("{}({})", getter, slot_var)
+                subs.push((
+                    format!("&{}({})->cell", getter, slot_var),
+                    c_modifier,
+                    Some(format!("&{}->cell", slot_var)),
+                ));
             } else {
-                slot_var
-            };
-            sub_args.push_str(&format!(", &{}->cell, {}", cell_var, c_modifier));
-            n_subs += 1;
+                subs.push((format!("&{}->cell", slot_var), c_modifier, None));
+            }
         }
         for var_name in &followed_vars {
             let slot_var = self.env_slot_rvalue(var_name);
-            sub_args.push_str(&format!(", &{}->cell, HL_SLOT_FOLLOW", slot_var));
-            n_subs += 1;
+            subs.push((format!("&{}->cell", slot_var), "HL_SLOT_FOLLOW", None));
         }
-        call.push_str(&format!(", {}{})", n_subs, sub_args));
+        let ctor = if followed_vars.is_empty() {
+            "hl_watcher_new_subscribed"
+        } else {
+            "hl_watcher_new_subscribed_origins"
+        };
+        let mut call = format!(
+            "{}((void*){}, {}, {}, {}",
+            ctor,
+            func_name,
+            env_arg,
+            env_dtor_name.unwrap_or("NULL"),
+            subs.len()
+        );
+        for (cell_expr, c_modifier, origin) in &subs {
+            call.push_str(&format!(", {}, {}", cell_expr, c_modifier));
+            if !followed_vars.is_empty() {
+                call.push_str(&format!(
+                    ", {}",
+                    origin.as_deref().unwrap_or("NULL")
+                ));
+            }
+        }
+        call.push(')');
 
         self.output.push_str(&format!("  HiLowWatcher* {} = {};\n", watcher.name, call));
         self.variable_types.insert(watcher.name.clone(), Type::Watcher);

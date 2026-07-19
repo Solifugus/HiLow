@@ -1,0 +1,8 @@
+hit
+hit
+m1
+hit
+m2
+hit
+m3
+done

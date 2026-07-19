@@ -5777,3 +5777,41 @@ fn test_watcher_decl_assigned_rebind_in_body() {
 fn test_watcher_decl_follow_rebind_in_body() {
     run_3b_fixture("watcher_decl_follow_rebind_in_body");
 }
+
+// ===== Phase 3e-γ: aliased-slot retarget attribution (origin-keyed moves) =====
+// Ruling: retargeting moves only the nodes attributed to the rebinding slot
+// (origin = the slot's cell identity, set at construction). Two followed
+// variables holding the SAME container stay independent: each variable's
+// rebind moves exactly its own subscriptions.
+
+// Shape 1 (was already correct pre-γ — pinned): two watchers, one following
+// each of two aliased variables. Rebinding xs moves wa's node only; wb keeps
+// firing for the old container's mutations.
+#[test]
+fn test_watcher_decl_alias_two_watchers() {
+    run_3b_fixture("watcher_decl_alias_two_watchers");
+}
+
+// Shape 2 (the γ ruling): ONE watcher following both aliased variables.
+// After xs rebinds, ys's subscription stays on the old container (its push
+// still fires) and xs's subscription fires exactly once on the new one.
+#[test]
+fn test_watcher_decl_alias_one_watcher() {
+    run_3b_fixture("watcher_decl_alias_one_watcher");
+}
+
+// The FOLLOW-orphan proof: sequential rebinds of both aliased variables each
+// find and move exactly their own nodes (origin is constant across moves);
+// the original container ends up fully drained — its mutation is silent.
+#[test]
+fn test_watcher_decl_alias_sequential_rebinds() {
+    run_3b_fixture("watcher_decl_alias_sequential_rebinds");
+}
+
+// Attribution applied to (deep): each aliased variable's deep node moves
+// independently, and the moved-node re-mark runs only for the rebinding
+// slot's own subtree.
+#[test]
+fn test_watcher_decl_alias_deep() {
+    run_3b_fixture("watcher_decl_alias_deep");
+}

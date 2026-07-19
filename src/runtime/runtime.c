@@ -914,12 +914,13 @@ bool hl_cell_release(HiLowCell* c) {
     return true;  // caller does its type-specific teardown and free
 }
 
-void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w) {
+void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w, HiLowCell* origin) {
     HiLowCellWatcher* node = malloc(sizeof(HiLowCellWatcher));
     node->modifier = modifier;
     node->body_fn = body_fn;
     node->env = env;
     node->watcher = w;
+    node->origin = origin;
     // Phase 3b: APPEND — subscribers fire in subscription order (the legacy
     // firing block's order: earlier-declared watchers fire first).
     node->next = NULL;
@@ -945,6 +946,26 @@ void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
             HiLowCellWatcher* dead = *cur;
             *cur = dead->next;
             // Symmetric unlink: one backref per subscription node.
+            watcher_drop_backref(w, c);
+            free(dead);
+        } else {
+            cur = &(*cur)->next;
+        }
+    }
+}
+
+// Phase 3e-γ: origin-filtered removal for retargeting — only w's nodes
+// attributed to `origin` (the rebinding slot's cell) are removed; w's nodes
+// with other origins stay, and each of those keeps its own backref (one
+// backref per node, dropped only for removed nodes — the symmetry
+// hl_cell_subscribe establishes).
+void hl_cell_unsubscribe_watcher_origin(HiLowCell* c, HiLowWatcher* w, HiLowCell* origin) {
+    if (!c || !w) return;
+    HiLowCellWatcher** cur = &c->watchers;
+    while (*cur) {
+        if ((*cur)->watcher == w && (*cur)->origin == origin) {
+            HiLowCellWatcher* dead = *cur;
+            *cur = dead->next;
             watcher_drop_backref(w, c);
             free(dead);
         } else {
@@ -1102,6 +1123,8 @@ typedef struct {
     void* body_fn;
     void* env;
     HiLowWatcher* watcher;
+    HiLowCell* origin;   // Phase 3e-γ: carried so retarget re-subscribes with
+                         // the node's attribution intact; inert for notify
 } HiLowNodeSnap;
 
 #define HL_NODE_SNAP_INLINE 16
@@ -1125,6 +1148,7 @@ static size_t snapshot_cell_nodes(HiLowCell* c, HiLowNodeSnap inline_buf[], HiLo
         (*snap)[n].body_fn = node->body_fn;
         (*snap)[n].env = node->env;
         (*snap)[n].watcher = node->watcher;
+        (*snap)[n].origin = node->origin;
         n++;
     }
     return n;
@@ -1214,7 +1238,26 @@ HiLowWatcher* hl_watcher_new_subscribed(void* body_fn, void* env, void (*env_dto
     for (int i = 0; i < n; i++) {
         HiLowCell* cell = va_arg(args, HiLowCell*);
         int modifier = va_arg(args, int);
-        hl_cell_subscribe(cell, modifier, body_fn, env, w);
+        hl_cell_subscribe(cell, modifier, body_fn, env, w, NULL);
+    }
+    va_end(args);
+    return w;
+}
+
+// Phase 3e-γ: (cell, modifier, origin) triples — decl-form watchers with
+// followed variables attribute each container-content subscription to its
+// slot's cell so hl_slot_retarget moves only the rebinding slot's nodes.
+HiLowWatcher* hl_watcher_new_subscribed_origins(void* body_fn, void* env, void (*env_dtor)(void*), int n, ...) {
+    HiLowWatcher* w = hl_watcher_new();
+    w->env = env;
+    w->env_dtor = env_dtor;
+    va_list args;
+    va_start(args, n);
+    for (int i = 0; i < n; i++) {
+        HiLowCell* cell = va_arg(args, HiLowCell*);
+        int modifier = va_arg(args, int);
+        HiLowCell* origin = va_arg(args, HiLowCell*);
+        hl_cell_subscribe(cell, modifier, body_fn, env, w, origin);
     }
     va_end(args);
     return w;
@@ -1423,13 +1466,17 @@ static void hl_slot_retarget(HiLowScalar* s, HiLowCell* old_cell) {
         if (snap[i].modifier != HL_SLOT_FOLLOW) continue;
         HiLowWatcher* w = snap[i].watcher;
         if (w == NULL) continue;
-        // Collect this watcher's nodes on the old cell, in list order.
+        // Collect this watcher's nodes on the old cell, in list order —
+        // Phase 3e-γ: only the nodes ATTRIBUTED to this slot (origin ==
+        // &s->cell). Another followed variable holding the same container
+        // keeps its own nodes; NULL-origin nodes (expression form) never
+        // move.
         HiLowNodeSnap moved_inline[HL_NODE_SNAP_INLINE];
         HiLowNodeSnap* moved;
         size_t moved_n = 0, moved_cap = HL_NODE_SNAP_INLINE;
         moved = moved_inline;
         for (HiLowCellWatcher* node = old_cell->watchers; node != NULL; node = node->next) {
-            if (node->watcher != w) continue;
+            if (node->watcher != w || node->origin != &s->cell) continue;
             if (moved_n == moved_cap) {
                 moved_cap *= 2;
                 if (moved == moved_inline) {
@@ -1443,12 +1490,19 @@ static void hl_slot_retarget(HiLowScalar* s, HiLowCell* old_cell) {
             moved[moved_n].body_fn = node->body_fn;
             moved[moved_n].env = node->env;
             moved[moved_n].watcher = node->watcher;
+            moved[moved_n].origin = node->origin;
             moved_n++;
         }
         if (moved_n > 0) {
-            hl_cell_unsubscribe_watcher(old_cell, w);
+            // Origin-filtered removal: w's nodes attributed to OTHER slots
+            // (aliased followed variables) stay on old_cell with their
+            // backrefs intact.
+            hl_cell_unsubscribe_watcher_origin(old_cell, w, &s->cell);
             for (size_t j = 0; j < moved_n; j++) {
-                hl_cell_subscribe(new_cell, moved[j].modifier, moved[j].body_fn, moved[j].env, w);
+                // Re-subscribe with the origin preserved — it is the slot's
+                // own cell, constant across moves, so this slot's NEXT rebind
+                // finds exactly these nodes wherever the payload then lives.
+                hl_cell_subscribe(new_cell, moved[j].modifier, moved[j].body_fn, moved[j].env, w, moved[j].origin);
                 if (moved[j].modifier == HL_ARR_DEEP) {
                     if (new_is_object) {
                         hl_object_mark_deep(s->value.value.obj_val);
