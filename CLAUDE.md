@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 3e-β — decl-form content-following on containers: on rebinding, the watcher's container-subscription nodes retarget from the old value's cell to the new value's cell (old-container unsubscribe, new-container subscribe in §5 item 9 order), with deep-watched propagation into the new subtree; slot (changed)/(assigned) fire after retargeting completes (audit §5 item 10b; the step table is in the 3e-α plan). Flips watcher_decl_container_rejected to the follow-proof fixtures: mutation fires before AND after rebinding; old-container mutation after rebinding fires nothing; a body that rebinds the watched variable is sound. Gate: full suite.**
+**Current phase: 4a — temporaries: wire producers into `pending_statement_stmts` (the inert landing pad from `a21a6de`) — every heap temporary produced in an expression registers into a statement-local release list, released at statement end through the single cell-release function; retire `temp_owners`. Gate: full suite + string_concat/string_equality valgrind-clean (closes the string-operand-temporaries STATUS open question).**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

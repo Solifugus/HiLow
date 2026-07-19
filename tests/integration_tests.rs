@@ -5548,21 +5548,17 @@ fn test_watcher_escape_subscribed_local_sound() {
     run_3b_fixture("watcher_escape_subscribed_local_sound");
 }
 
-// Adjudication A: decl-form on a container variable means rebinding-watch —
-// variable-slot cells are unscheduled (same bucket as (assigned)obj and
-// string watching). Previously this compiled, fired on rebinding only, and
-// leaked; now it rejects cleanly.
+// (Adjudication A's rejection flipped LIVE in Phase 3e-β: decl-form
+// watchers on container variables work — (changed)/(assigned) subscribe the
+// slot, content modifiers follow rebinding via retargeting. The old fixture's
+// shape — (changed)xs + push — lives on as
+// watcher_decl_container_changed_slot_only; the sentinel now asserts the
+// surface compiles and behaves.)
 #[test]
 fn test_watcher_decl_container_rejected() {
-    let result = compile_program("tests/programs/watcher_decl_container_rejected.hl");
-    assert!(result.is_err(), "Expected compilation to fail for decl-form watcher on an array variable");
-    let msg = result.unwrap_err();
-    assert!(
-        msg.contains("decl-form watcher on container-typed variable 'xs'")
-            && msg.contains("variable-slot cell"),
-        "Expected the rebinding-watch diagnostic, got: {}",
-        msg
-    );
+    // Compiles-now assertion on the live fixture that inherited the old
+    // sentinel's shape (the 3e-α precedent for flipped rejections).
+    run_3b_fixture("watcher_decl_container_changed_slot_only");
 }
 
 // Adjudication E: a boxed tuple-destructured binding rejects rather than
@@ -5714,4 +5710,70 @@ fn test_watcher_mixed_assigned_content_rejected() {
         "Expected the mixed-subscriptions diagnostic, got: {}",
         msg
     );
+}
+
+// ============================================================
+// Phase 3e-β: decl-form content-following on containers —
+// subscription retargeting on rebinding (audit §5 item 10b)
+// ============================================================
+
+// THE follow proof: a decl-form (v=added)xs watcher fires on content
+// mutation before AND after rebinding (the alias binds the delta through
+// the retargeted node); mutating the OLD container after rebinding fires
+// nothing (its nodes moved to the new container in §5 item 9 order).
+#[test]
+fn test_watcher_decl_container_follows() {
+    run_3b_fixture("watcher_decl_container_follows");
+}
+
+// Decl-form (changed)xs is a SLOT subscription (spec: mutating a value in
+// place is not an assignment and never fires a variable subscription):
+// push is silent; rebinding to a different array fires once. This fixture
+// inherits the flipped sentinel's exact shape.
+#[test]
+fn test_watcher_decl_container_changed_slot_only() {
+    run_3b_fixture("watcher_decl_container_changed_slot_only");
+}
+
+// Deep-following: decl-form (deep)xs fires for nested mutations, and after
+// rebinding the deep-watched bit propagates into the NEW subtree (retarget
+// step 4) while the old subtree goes silent.
+#[test]
+fn test_watcher_decl_container_deep_follows() {
+    run_3b_fixture("watcher_decl_container_deep_follows");
+}
+
+// The object retarget path (hl_cell_set_object_ref + hl_object_mark_deep):
+// same deep-following shape on an object graph.
+#[test]
+fn test_watcher_decl_object_deep_follows() {
+    run_3b_fixture("watcher_decl_object_deep_follows");
+}
+
+// Watcher state lives on the watcher object; retargeting moves NODES, not
+// state: pause → rebind (nodes still move) → mutation silent → resume →
+// new-container mutation fires, old-container mutation stays silent.
+#[test]
+fn test_watcher_decl_container_pause_retarget() {
+    run_3b_fixture("watcher_decl_container_pause_retarget");
+}
+
+// Retarget-during-fire soundness, shape A: a slot-subscribed watcher whose
+// body (via a companion watcher on a captured trigger) rebinds its own
+// variable — the nested same-slot walk is sound and terminates through the
+// body's guard; fires in declaration order.
+#[test]
+fn test_watcher_decl_assigned_rebind_in_body() {
+    run_3b_fixture("watcher_decl_assigned_rebind_in_body");
+}
+
+// Retarget-during-fire soundness, shape B: a container-following watcher
+// whose firing coincides with a rebinding of the followed variable — the
+// retarget unlinks nodes from the very cell mid-walk (collect-then-fire
+// keeps the walk sound) and the body's snapshot of the OLD container stays
+// valid (the deferred old-release), proven by the post-rebind reads and the
+// valgrind gate.
+#[test]
+fn test_watcher_decl_follow_rebind_in_body() {
+    run_3b_fixture("watcher_decl_follow_rebind_in_body");
 }

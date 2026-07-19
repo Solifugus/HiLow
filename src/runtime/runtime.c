@@ -1019,6 +1019,51 @@ void hl_delta_release(HiLowDelta* d) {
     free(d);
 }
 
+// Notification-walk depth (Phase 3e-β). While any hl_cell_notify walk is in
+// flight, releases of a slot's OLD payload (the hl_cell_set_* step-6 release)
+// are DEFERRED: a watcher body may run inside a walk of the very cell being
+// released (a body rebinding its own followed variable), and the walk — plus
+// the body's borrowed snapshot of the old value — must outlive it. The
+// deferred list drains when the outermost walk completes; releases never
+// notify, so draining cannot recurse into a walk.
+static int hl_notify_depth = 0;
+
+typedef void (*hl_deferred_release_fn)(void*);
+typedef struct {
+    hl_deferred_release_fn fn;
+    void* ptr;
+} HiLowDeferredRelease;
+static HiLowDeferredRelease* hl_deferred_releases = NULL;
+static size_t hl_deferred_len = 0;
+static size_t hl_deferred_cap = 0;
+
+static void hl_release_array_voidp(void* p) { hl_array_release((HiLowArray*)p); }
+static void hl_release_object_voidp(void* p) { hl_object_release((HiLowObject*)p); }
+
+// Release now, or park until the outermost in-flight notify walk finishes.
+static void hl_release_or_defer(hl_deferred_release_fn fn, void* ptr) {
+    if (hl_notify_depth == 0) {
+        fn(ptr);
+        return;
+    }
+    if (hl_deferred_len == hl_deferred_cap) {
+        hl_deferred_cap = (hl_deferred_cap == 0) ? 8 : (hl_deferred_cap * 2);
+        hl_deferred_releases = realloc(hl_deferred_releases, hl_deferred_cap * sizeof(HiLowDeferredRelease));
+    }
+    hl_deferred_releases[hl_deferred_len].fn = fn;
+    hl_deferred_releases[hl_deferred_len].ptr = ptr;
+    hl_deferred_len++;
+}
+
+static void hl_drain_deferred_releases(void) {
+    // Deferrals are only pushed from inside a walk (depth > 0); we run at
+    // depth 0, so the list cannot grow underneath this loop.
+    for (size_t i = 0; i < hl_deferred_len; i++) {
+        hl_deferred_releases[i].fn(hl_deferred_releases[i].ptr);
+    }
+    hl_deferred_len = 0;
+}
+
 // Phase 2d: recursively collect the not-yet-visited ancestors of c into a
 // growable list, stamping each with the current epoch on first visit.
 static void deep_collect_ancestors(HiLowCell* c, HiLowCell*** list, size_t* len, size_t* cap) {
@@ -1045,19 +1090,70 @@ static void deep_collect_ancestors(HiLowCell* c, HiLowCell*** list, size_t* len,
 // under a fresh epoch and cannot corrupt this one. The stealth check lives
 // here, its single authoritative site (mutators also consult it only to
 // skip delta construction) — stealth therefore suppresses deep fires too.
+// Phase 3e-β hardening: snapshot of one subscription node, taken before any
+// body runs. Bodies may retarget or unsubscribe nodes on the cell being
+// walked (a body rebinding its own followed variable), so the walk must
+// never touch live list links after a body has run. Watcher STATE pointers
+// stay valid across a walk (a body cannot release a pre-existing watcher
+// binding — bindings release at their owning scope's exit, which a body
+// cannot pop; .end() sets flags only); active/ended are read at fire time.
+typedef struct {
+    int modifier;
+    void* body_fn;
+    void* env;
+    HiLowWatcher* watcher;
+} HiLowNodeSnap;
+
+#define HL_NODE_SNAP_INLINE 16
+
+// Snapshot c's subscriber list into *snap (inline buffer of
+// HL_NODE_SNAP_INLINE, heap beyond); returns the count.
+static size_t snapshot_cell_nodes(HiLowCell* c, HiLowNodeSnap inline_buf[], HiLowNodeSnap** snap) {
+    size_t n = 0, cap = HL_NODE_SNAP_INLINE;
+    *snap = inline_buf;
+    for (HiLowCellWatcher* node = c->watchers; node != NULL; node = node->next) {
+        if (n == cap) {
+            cap *= 2;
+            if (*snap == inline_buf) {
+                *snap = malloc(cap * sizeof(HiLowNodeSnap));
+                memcpy(*snap, inline_buf, n * sizeof(HiLowNodeSnap));
+            } else {
+                *snap = realloc(*snap, cap * sizeof(HiLowNodeSnap));
+            }
+        }
+        (*snap)[n].modifier = node->modifier;
+        (*snap)[n].body_fn = node->body_fn;
+        (*snap)[n].env = node->env;
+        (*snap)[n].watcher = node->watcher;
+        n++;
+    }
+    return n;
+}
+
 void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
     if (hl_stealth_depth != 0) return;
-    for (HiLowCellWatcher* node = c->watchers; node != NULL; node = node->next) {
-        HiLowWatcher* state = node->watcher;
+    hl_notify_depth++;
+
+    // Collect-then-fire (Phase 3e-β): the traversal is atomic with respect
+    // to body execution — the same discipline the deep walk below has had
+    // since 2d. A node retargeted away mid-walk still fires for this event
+    // (it was subscribed when the event happened); a node subscribed
+    // mid-walk does not.
+    HiLowNodeSnap inline_buf[HL_NODE_SNAP_INLINE];
+    HiLowNodeSnap* snap;
+    size_t n = snapshot_cell_nodes(c, inline_buf, &snap);
+    for (size_t i = 0; i < n; i++) {
+        HiLowWatcher* state = snap[i].watcher;
         if (state == NULL || !state->active || state->ended) continue;
         // Phase 3b: an equal-value scalar assignment is NOT a mutation —
         // CHANGED and DEEP subscribers do not fire on HL_SCALAR_ASSIGNED.
-        if (node->modifier == event
-            || (node->modifier == HL_ARR_CHANGED && event != HL_SCALAR_ASSIGNED)
-            || (node->modifier == HL_ARR_DEEP && event != HL_SCALAR_ASSIGNED)) {
-            ((HiLowWatcherBody)node->body_fn)(node->env, c, delta);
+        if (snap[i].modifier == event
+            || (snap[i].modifier == HL_ARR_CHANGED && event != HL_SCALAR_ASSIGNED)
+            || (snap[i].modifier == HL_ARR_DEEP && event != HL_SCALAR_ASSIGNED)) {
+            ((HiLowWatcherBody)snap[i].body_fn)(snap[i].env, c, delta);
         }
     }
+    if (snap != inline_buf) free(snap);
 
     // Parent walk (Phase 2d): zero cost unless someone deep-watches above.
     // Phase 3b: never for HL_SCALAR_ASSIGNED (not a mutation; unreachable for
@@ -1069,15 +1165,24 @@ void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
         size_t len = 0, cap = 0;
         deep_collect_ancestors(c, &ancestors, &len, &cap);
         for (size_t i = 0; i < len; i++) {
-            for (HiLowCellWatcher* node = ancestors[i]->watchers; node != NULL; node = node->next) {
-                HiLowWatcher* state = node->watcher;
+            HiLowNodeSnap a_inline[HL_NODE_SNAP_INLINE];
+            HiLowNodeSnap* a_snap;
+            size_t a_n = snapshot_cell_nodes(ancestors[i], a_inline, &a_snap);
+            for (size_t j = 0; j < a_n; j++) {
+                HiLowWatcher* state = a_snap[j].watcher;
                 if (state == NULL || !state->active || state->ended) continue;
-                if (node->modifier == HL_ARR_DEEP) {
-                    ((HiLowWatcherBody)node->body_fn)(node->env, ancestors[i], delta);
+                if (a_snap[j].modifier == HL_ARR_DEEP) {
+                    ((HiLowWatcherBody)a_snap[j].body_fn)(a_snap[j].env, ancestors[i], delta);
                 }
             }
+            if (a_snap != a_inline) free(a_snap);
         }
         free(ancestors);
+    }
+
+    hl_notify_depth--;
+    if (hl_notify_depth == 0 && hl_deferred_len > 0) {
+        hl_drain_deferred_releases();
     }
 }
 
@@ -1278,6 +1383,86 @@ HiLowObject* hl_scalar_get_object_ref(HiLowScalar* s) {
     return s->value.value.obj_val;
 }
 
+// Retargeting (Phase 3e-β, audit §5 item 10b steps 3–4). Called from the
+// container set functions AFTER the store and BEFORE the slot's own fire:
+// for each watcher FOLLOWING this slot (an HL_SLOT_FOLLOW node on the slot's
+// cell), move that watcher's subscription nodes from the old value's cell to
+// the new value's cell — unsubscribe old, subscribe new in collected order
+// (hl_cell_subscribe appends, so relative fire order is preserved — §5 item
+// 9). If any moved node is (deep), the new subtree is deep-marked (the 2d
+// containment-add rule reused). Unconditional with respect to pause and
+// stealth: retargeting moves NODES, not watcher state — a paused watcher's
+// nodes still track the variable, and a stealth rebinding (store without
+// notification) must still retarget. The old container is alive throughout:
+// the caller holds its +1 until after the fire (step 6).
+static void hl_slot_retarget(HiLowScalar* s, HiLowCell* old_cell) {
+    HiLowCell* new_cell;
+    bool new_is_object;
+    switch (s->value.type) {
+        case HL_VALUE_ARRAY:
+            new_cell = &s->value.value.arr_val->cell;
+            new_is_object = false;
+            break;
+        case HL_VALUE_OBJECT:
+            new_cell = &s->value.value.obj_val->cell;
+            new_is_object = true;
+            break;
+        default:
+            return;  // strings/scalars: nothing to retarget
+    }
+    if (new_cell == old_cell) return;  // identity self-assignment
+
+    // Walk the slot's OWN subscriber list for FOLLOW markers. Snapshot the
+    // follower set first: hl_cell_subscribe below pushes backrefs, and the
+    // slot list itself is never modified here, but keeping the discipline
+    // uniform costs nothing.
+    HiLowNodeSnap inline_buf[HL_NODE_SNAP_INLINE];
+    HiLowNodeSnap* snap;
+    size_t n = snapshot_cell_nodes(&s->cell, inline_buf, &snap);
+    for (size_t i = 0; i < n; i++) {
+        if (snap[i].modifier != HL_SLOT_FOLLOW) continue;
+        HiLowWatcher* w = snap[i].watcher;
+        if (w == NULL) continue;
+        // Collect this watcher's nodes on the old cell, in list order.
+        HiLowNodeSnap moved_inline[HL_NODE_SNAP_INLINE];
+        HiLowNodeSnap* moved;
+        size_t moved_n = 0, moved_cap = HL_NODE_SNAP_INLINE;
+        moved = moved_inline;
+        for (HiLowCellWatcher* node = old_cell->watchers; node != NULL; node = node->next) {
+            if (node->watcher != w) continue;
+            if (moved_n == moved_cap) {
+                moved_cap *= 2;
+                if (moved == moved_inline) {
+                    moved = malloc(moved_cap * sizeof(HiLowNodeSnap));
+                    memcpy(moved, moved_inline, moved_n * sizeof(HiLowNodeSnap));
+                } else {
+                    moved = realloc(moved, moved_cap * sizeof(HiLowNodeSnap));
+                }
+            }
+            moved[moved_n].modifier = node->modifier;
+            moved[moved_n].body_fn = node->body_fn;
+            moved[moved_n].env = node->env;
+            moved[moved_n].watcher = node->watcher;
+            moved_n++;
+        }
+        if (moved_n > 0) {
+            hl_cell_unsubscribe_watcher(old_cell, w);
+            for (size_t j = 0; j < moved_n; j++) {
+                hl_cell_subscribe(new_cell, moved[j].modifier, moved[j].body_fn, moved[j].env, w);
+                if (moved[j].modifier == HL_ARR_DEEP) {
+                    if (new_is_object) {
+                        hl_object_mark_deep(s->value.value.obj_val);
+                    } else {
+                        hl_array_mark_deep(s->value.value.arr_val);
+                    }
+                }
+            }
+        }
+        if (moved != moved_inline) free(moved);
+    }
+    if (snap != inline_buf) free(snap);
+}
+
 // The hl_cell_set family: store + equality check + notify. The store happens
 // under stealth too — stealth suppresses only the notifications (the
 // authoritative gate is inside hl_cell_notify; the outer check just skips
@@ -1315,24 +1500,33 @@ void hl_cell_set_str(HiLowScalar* s, HiLowArray* v) {
     HiLowArray* old = s->value.value.str_val;
     bool changed = (old != v) && !hl_string_eq(old, v);
     s->value.value.str_val = v;
-    hl_array_release(old);
+    // Phase 3e-β: release old AFTER the fire, deferred past any in-flight
+    // walk — a body's borrowed snapshot of the old value must outlive the
+    // body (strings have no nodes to retarget, but share this rule).
     hl_cell_set_ref_common(s, changed);
+    hl_release_or_defer(hl_release_array_voidp, old);
 }
 
 void hl_cell_set_array_ref(HiLowScalar* s, HiLowArray* v) {
     HiLowArray* old = s->value.value.arr_val;
     bool changed = old != v;
     s->value.value.arr_val = v;
-    hl_array_release(old);
+    // Phase 3e-β step 3/4: retarget followers' nodes old → new while old is
+    // still alive, BEFORE the slot's own changed/assigned fire (step 5).
+    hl_slot_retarget(s, &old->cell);
     hl_cell_set_ref_common(s, changed);
+    // Step 6: release old LAST, deferred past any in-flight walk (a body
+    // rebinding its own followed variable runs inside a walk of old's cell).
+    hl_release_or_defer(hl_release_array_voidp, old);
 }
 
 void hl_cell_set_object_ref(HiLowScalar* s, HiLowObject* v) {
     HiLowObject* old = s->value.value.obj_val;
     bool changed = old != v;
     s->value.value.obj_val = v;
-    hl_object_release(old);
+    hl_slot_retarget(s, &old->cell);
     hl_cell_set_ref_common(s, changed);
+    hl_release_or_defer(hl_release_object_voidp, old);
 }
 
 // Helper function to get the proto property as an object (Phase 7b)

@@ -455,6 +455,12 @@ typedef struct HiLowArray {
 // is NOT a mutation: CHANGED and DEEP subscribers do not fire on it, and it
 // never triggers the deep parent walk.
 #define HL_SCALAR_ASSIGNED 6
+// Follow marker (Phase 3e-β): a subscription node with this modifier on a
+// variable-slot cell marks its watcher as FOLLOWING the variable — on
+// rebinding, the watcher's nodes on the old value's cell retarget to the new
+// value's cell (audit §5 item 10b). Never fired: it matches no event, and the
+// implicit-CHANGED/DEEP arms in hl_cell_notify are modifier-keyed.
+#define HL_SLOT_FOLLOW 7
 
 HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn);
 void hl_array_retain(HiLowArray* arr);

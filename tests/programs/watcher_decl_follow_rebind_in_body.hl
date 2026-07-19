@@ -1,0 +1,21 @@
+high program(): i32 {
+    let t = 0
+    let xs = [1]
+    watcher onXs((v=added)xs) {
+        print("added:")
+        print(v)
+        if (v ?= 2) {
+            t = 1
+        }
+        print(xs[0])
+    }
+    let w2 = watcher((changed)t) {
+        xs = [10]
+    }
+    let old = xs
+    xs.push(2)
+    xs.push(3)
+    old.push(4)
+    print("done")
+    return 0
+}

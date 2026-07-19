@@ -4,5 +4,7 @@ high program(): i32 {
         print("xs changed")
     }
     xs.push(3)
+    xs = [5]
+    print("done")
     return 0
 }

@@ -927,6 +927,75 @@ point of deleting-with-confidence.
   running, all matched, all valgrind 0. Spec gained the
   subscription-target passage + amended (changed)/(assigned) table rows.
   KNOWN_MEMORY_BUGS EMPTY; ignored stays 2.)
+  (3e-β landed 2026-07-18 per the approved plan; no STOP conditions hit.
+  Phase 3 is COMPLETE. RUNTIME: the item 10(b) step table implemented as
+  written — container set functions became compute-changed → store →
+  hl_slot_retarget (steps 3/4: for each HL_SLOT_FOLLOW node on the slot's
+  cell, collect that watcher's nodes on the old value's cell in list
+  order, unsubscribe, re-subscribe on the new value's cell appending =
+  item 9 order; any moved (deep) node re-marks the new subtree) → fire
+  (step 5, hl_cell_set_ref_common) → release old LAST (step 6).
+  Retargeting is unconditional under pause (moves nodes, not state) and
+  stealth (the store still happens). SOUNDNESS HARDENING, adjudicated
+  with the plan (the α analysis's claim that the notify walk saves its
+  next pointer before the body was refuted by the code — the α text
+  itself scheduled β to verify): (A) hl_cell_notify's direct-subscriber
+  loop and the deep walk's per-ancestor node loops are now
+  collect-then-fire (node snapshots, active/ended read at fire time) —
+  a body-triggered retarget/unsubscribe on the walked cell can no longer
+  free live traversal links; semantic delta: a watcher subscribed DURING
+  a walk no longer fires for the in-flight event (no fixture pinned the
+  old tail-append visibility, verified by survey + the zero-diff corpus
+  run). (B) hl_notify_depth + a deferred-release list: the set family's
+  old-payload release defers while any walk is in flight, drained at
+  depth 0 — the walked cell and every fired body's borrowed snapshot of
+  the old value outlive the outermost walk (this hazard was reachable in
+  α's surface, unpinned; now closed and pinned). hl_cell_set_str shares
+  the deferral (same borrowed-snapshot hazard) though it never retargets
+  — a disclosed one-line extension beyond the plan's "untouched" note.
+  CODEGEN: decl-form generate_watcher lifts the container content-
+  modifier rejection and the Added/Removed/Moved/Deep validation arm
+  (containers only; scalars keep defense-in-depth); construction emits
+  content subscriptions on the payload deref cell with the full modifier
+  map, one HL_SLOT_FOLLOW node per followed variable, mark_deep at
+  construction for (deep); the decl body prologue deduplicates snapshot
+  bindings and binds (added)/(removed)/(moved) aliases from the delta
+  (typecheck fills resolved_alias_type form-independently). BOXING:
+  mark_subscription takes the form flag from its two walk_* call sites;
+  decl-form container subscriptions (any modifier) set slot_required.
+  TWO LATENT α BUGS FIXED (both reachable only through slot-boxed
+  containers, hit by probes): (i) `let old = xs` with xs slot-boxed
+  aliased the payload borrow but tracked `old` as HeapType::Scalar with
+  NO retain (scope exit called hl_scalar_release on a HiLowArray* —
+  C compile error at best, mis-release at worst); the Ident-initializer
+  arm now retains and tracks by payload kind. (ii) the program-body
+  pre-pass stored the typechecker's Type::Unknown for inferred container
+  lets, so a nested function assigning a program-scope slot variable
+  keyed the setter on Unknown and rejected; the pre-pass now falls back
+  to codegen inference for slot-needing declarations only. RECORDED, NOT
+  FIXED: watcher bodies cannot call nested functions (emission order —
+  no forward declarations; pre-existing, hit while probing), so the two
+  retarget-during-fire fixtures use a companion watcher on a captured
+  trigger instead of a helper function (same mid-walk shape); the
+  aliased-slot edge (two variables holding the same container, both
+  followed — retarget matches by (watcher, old-cell) and moves both);
+  the pre-existing NULL-delta shape (mixing (changed) with an aliased
+  (added) in one watcher derefs a NULL delta on a changed fire, both
+  forms). TESTS: watcher_decl_container_rejected.hl deleted (flipped);
+  7 live fixtures (follows [alias through retarget + old-silence],
+  changed_slot_only [the sentinel's shape: push silent, rebind fires],
+  deep_follows, object_deep_follows, pause_retarget, and the two
+  rebind-in-body soundness shapes); the old rejection test rewritten as
+  a compiles-now assertion on changed_slot_only. Integration 307→314;
+  REJECTION_FIXTURES −1 → 26; KNOWN_MEMORY_BUGS EMPTY; ignored stays 2.
+  Every fixture output predicted from the semantics before running; all
+  matched; all valgrind 0. ZERO-COST vs the α binary: all 294 programs
+  compiling under both byte-identical (zero diffs — diamond emitted
+  identically this run), 6 new-only fixtures, 26 no-C-both = the
+  rejection list; the 7th fixture (assigned_rebind_in_body) is α-legal
+  surface and compiled identically under both. Spec gained the
+  decl-form content-following bullet; bullet 1 narrowed to
+  (changed)/(assigned).)
 
 ### Phase 4 — temporaries
 
@@ -1072,4 +1141,13 @@ named and are not to be re-litigated.
    into the new subtree (implemented in 3e-β). `(assigned)` — in either
    form — subscribes the slot: it is inherently about the variable. Spec
    edits land with each surface (the slot-vs-value subscription-target
-   passage landed with 3e-α).
+   passage landed with 3e-α; the decl-form content-following bullet with
+   3e-β). (3e-β landed 2026-07-18: the container-subscription nodes are the
+   content modifiers (added)/(removed)/(moved)/(deep) — decl-form
+   (changed)/(assigned) are pure slot subscriptions per the spec's
+   "mutating in place never fires a variable subscription" sentence, so
+   decl-form (changed)xs + push fires nothing, pinned. Retargeting is
+   driven by one HL_SLOT_FOLLOW marker node per followed variable on the
+   slot's cell; hl_slot_retarget moves the follower's nodes old→new in
+   collected order (hl_cell_subscribe appends = item 9 order), re-marks
+   deep subtrees, and runs unconditionally under pause and stealth.)

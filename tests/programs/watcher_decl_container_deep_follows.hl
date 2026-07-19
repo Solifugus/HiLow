@@ -1,0 +1,15 @@
+high program(): i32 {
+    let inner1 = [1]
+    let xs = [inner1]
+    watcher onXs((deep)xs) {
+        print("deep")
+    }
+    inner1.push(2)
+    let old = xs
+    let inner2 = [7]
+    xs = [inner2]
+    inner2.push(8)
+    inner1.push(3)
+    print("done")
+    return 0
+}

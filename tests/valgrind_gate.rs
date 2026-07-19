@@ -38,7 +38,6 @@ const REJECTION_FIXTURES: &[&str] = &[
     "watcher_deep_scalar_rejected.hl",               // is_err test test_watcher_deep_scalar_rejected — (deep) is containers-only until scalars box (Phase 2d; objects joined in 2e)
     "object_watch_added_rejected.hl",                // is_err test test_object_watch_added_rejected — Phase 2e adjudication: ADDED has no reachable trigger until dynamic property addition lands (STATUS.md open question)
     "object_watch_removed_rejected.hl",              // is_err test test_object_watch_removed_rejected — no REMOVED event: property removal unimplemented (tombstone ruling)
-    "watcher_decl_container_rejected.hl",            // is_err test test_watcher_decl_container_rejected — Phase 3b adjudication A: decl-form on a container variable is rebinding-watch (variable-slot cell, unscheduled)
     "watcher_destructured_binding_rejected.hl",       // is_err test test_watcher_destructured_binding_rejected — Phase 3b adjudication E: destructured bindings do not box yet
     "watcher_mixed_array_object_rejected.hl",        // is_err test test_watcher_mixed_array_object_rejected — body prologue casts to one container type (Phase 2e single-container-kind watchers)
     "watcher_mixed_assigned_content_rejected.hl",    // is_err test test_watcher_mixed_assigned_content_rejected — Phase 3e-α: slot-kind + value-kind subscriptions in one watcher hit the mixed-scalar-container gate

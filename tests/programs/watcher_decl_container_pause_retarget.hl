@@ -1,0 +1,16 @@
+high program(): i32 {
+    let xs = [1]
+    watcher onXs((added)xs) {
+        print("added")
+    }
+    xs.push(2)
+    onXs.pause()
+    let old = xs
+    xs = [5]
+    xs.push(6)
+    onXs.resume()
+    xs.push(7)
+    old.push(8)
+    print("done")
+    return 0
+}

@@ -1,0 +1,15 @@
+high program(): i32 {
+    let in1 = { x: 1 }
+    let o = { child: in1 }
+    watcher onO((deep)o) {
+        print("deep")
+    }
+    o.child.x = 7
+    let old = o
+    let in2 = { x: 7 }
+    o = { child: in2 }
+    in2.x = 5
+    old.child.x = 9
+    print("done")
+    return 0
+}

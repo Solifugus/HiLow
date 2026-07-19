@@ -1023,7 +1023,17 @@ impl CodeGenerator {
                     LetPattern::Identifier(name, None) => {
                         // Type inference case - get from type checker
                         if let Some(init) = &let_decl.initializer {
-                            let inferred_type = type_checker.get_expression_type(init);
+                            let mut inferred_type = type_checker.get_expression_type(init);
+                            // Phase 3e-β: the typechecker's expression map
+                            // does not record literal container types. A
+                            // slot-boxed variable must carry its real type
+                            // here — nested functions key the slot setter on
+                            // it (hl_cell_set_array_ref vs _object_ref).
+                            if matches!(inferred_type, Type::Unknown)
+                                && self.needs_slot_decl(name, &let_decl.position)
+                            {
+                                inferred_type = self.infer_expression_type_for_codegen(init);
+                            }
                             self.variable_types.insert(name.clone(), inferred_type);
                         }
                         let boxed = self.is_boxed_decl(name, &let_decl.position);
@@ -1668,6 +1678,27 @@ impl CodeGenerator {
                             HeapType::Array => {
                                 let c_var_name = self.mangle_variable_name(name);
                                 self.output.push_str(&format!(";\n  hl_array_retain({});", c_var_name));
+                            }
+                            HeapType::Scalar => {
+                                // Phase 3e-β: reading a slot-boxed variable
+                                // yields its PAYLOAD (type-keyed getter, a
+                                // borrow) — the binding owns a payload
+                                // reference, never the slot. Retain and
+                                // track by payload kind; i32 payloads copy
+                                // by value (no tracking).
+                                let c_var_name = self.mangle_variable_name(name);
+                                match self.variable_types.get(var_name) {
+                                    Some(Type::DynamicArray(_)) | Some(Type::String) => {
+                                        self.output.push_str(&format!(";\n  hl_array_retain({});", c_var_name));
+                                        self.track_heap_owner(name, HeapType::Array);
+                                    }
+                                    Some(Type::Object(_)) => {
+                                        self.output.push_str(&format!(";\n  hl_object_retain({});", c_var_name));
+                                        self.track_heap_owner(name, HeapType::Object);
+                                    }
+                                    _ => {}
+                                }
+                                return Ok(());
                             }
                             _ => {} // Other heap types don't have specific retain functions yet
                         }
@@ -7765,11 +7796,10 @@ impl CodeGenerator {
         watcher_id: usize,
         type_checker: &TypeChecker,
     ) -> Result<(String, Vec<(String, EnvSlot)>, Option<String>), CodegenError> {
-        // Validate subscribed types: i32 scalars only. A decl-form watcher
-        // on a container variable means REBINDING watch, which needs a
-        // variable-slot cell — unscheduled (Phase 3b adjudication A; same
-        // bucket as (assigned)obj and string watching). Content watching of
-        // containers is the expression form.
+        // Validate subscribed types. Phase 3e-β: containers watch fully —
+        // (changed)/(assigned) are slot subscriptions (rebinding-watch), the
+        // content modifiers subscribe the current value and FOLLOW rebinding
+        // via retargeting (audit §5 item 10b).
         for subscription in &watcher.subscriptions {
             let var_name = &subscription.variable_name;
             if let Some(var_type) = subscription.resolved_var_type.borrow().as_ref() {
@@ -7778,17 +7808,7 @@ impl CodeGenerator {
                     // Phase 3e-α: strings watch via the variable-slot cell —
                     // rebinding-watch, both modifiers.
                     crate::ast::Type::Primitive(crate::ast::PrimitiveType::String) => {}
-                    crate::ast::Type::DynamicArray(_) | crate::ast::Type::Object(_) => {
-                        // Phase 3e-α: (assigned) subscribes the SLOT — works.
-                        // Content-following ((changed) etc. retargeting on
-                        // rebinding) is Phase 3e-β.
-                        if !matches!(subscription.modifier, SubscriptionModifier::Assigned) {
-                            return Err(CodegenError::UnsupportedFeature {
-                                feature: format!("decl-form watcher on container-typed variable '{}'", var_name),
-                                phase: "a future phase — watching a container VARIABLE means rebinding-watch, which needs a variable-slot cell (lands in Phase 3e-β); use an expression-form watcher to observe content mutations".to_string(),
-                            });
-                        }
-                    }
+                    crate::ast::Type::DynamicArray(_) | crate::ast::Type::Object(_) => {}
                     other => {
                         return Err(CodegenError::UnsupportedFeature {
                             feature: format!("watching a scalar of type {:?}", other),
@@ -7804,19 +7824,27 @@ impl CodeGenerator {
             }
         }
 
-        // Validate all modifiers are supported (decl-form: changed/assigned)
+        // Validate modifier/type pairing. Content modifiers are legal on
+        // container-typed subscriptions only (typecheck already enforces
+        // this; defense-in-depth for the scalar kinds).
         for subscription in &watcher.subscriptions {
             match subscription.modifier {
                 SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
-                    // These are supported
+                    // Slot subscriptions — every watchable type.
                 }
                 SubscriptionModifier::Added |
                 SubscriptionModifier::Removed | SubscriptionModifier::Moved |
                 SubscriptionModifier::Deep => {
-                    return Err(CodegenError::UnsupportedFeature {
-                        feature: format!("watcher modifier {:?}", subscription.modifier),
-                        phase: "future phase: mutation-modifier semantics".to_string(),
-                    });
+                    let is_container = matches!(
+                        subscription.resolved_var_type.borrow().as_ref(),
+                        Some(crate::ast::Type::DynamicArray(_)) | Some(crate::ast::Type::Object(_))
+                    );
+                    if !is_container {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("watcher modifier {:?} on a non-container variable", subscription.modifier),
+                            phase: "content modifiers subscribe container values".to_string(),
+                        });
+                    }
                 }
             }
         }
@@ -7888,27 +7916,64 @@ impl CodeGenerator {
 
         // Subscribed names bind snapshot locals read at fire time (Phase
         // 3e-α: snapshot type follows the variable's type; refs BORROW).
+        // Uniform across both firing cells (Phase 3e-β): a content fire
+        // binds the fired container == the current payload, and a slot fire
+        // binds the new payload because retargeting completes before the
+        // slot fires. Deduplicated — one snapshot per variable however many
+        // subscriptions name it. Aliases on (added)/(removed)/(moved) bind
+        // the delta payload (the expression-form prologue's shape).
+        let mut bound_snapshots: Vec<String> = Vec::new();
         for subscription in &watcher.subscriptions {
             let var_name = &subscription.variable_name;
-            let param_name = subscription.alias.as_ref().unwrap_or(var_name);
             let sub_ty = subscription
                 .resolved_var_type
                 .borrow()
                 .as_ref()
                 .map(Type::from_ast_type)
                 .unwrap_or(Type::I32);
-            let (c_ty, getter) = match &sub_ty {
-                Type::String => ("HiLowArray*", "hl_scalar_get_str"),
-                Type::DynamicArray(_) => ("HiLowArray*", "hl_scalar_get_array_ref"),
-                Type::Object(_) => ("HiLowObject*", "hl_scalar_get_object_ref"),
-                _ => ("int32_t", "hl_scalar_get_i32"),
-            };
-            self.output.push_str(&format!(
-                "  {} {} = {}(env_cast->{});\n",
-                c_ty, param_name, getter, var_name
-            ));
-            self.variable_types.insert(param_name.clone(), sub_ty);
-            self.push_boxed_binding(param_name, false);
+            if !bound_snapshots.contains(var_name) {
+                bound_snapshots.push(var_name.clone());
+                let (c_ty, getter) = match &sub_ty {
+                    Type::String => ("HiLowArray*", "hl_scalar_get_str"),
+                    Type::DynamicArray(_) => ("HiLowArray*", "hl_scalar_get_array_ref"),
+                    Type::Object(_) => ("HiLowObject*", "hl_scalar_get_object_ref"),
+                    _ => ("int32_t", "hl_scalar_get_i32"),
+                };
+                self.output.push_str(&format!(
+                    "  {} {} = {}(env_cast->{});\n",
+                    c_ty, var_name, getter, var_name
+                ));
+                self.variable_types.insert(var_name.clone(), sub_ty);
+                self.push_boxed_binding(var_name, false);
+            }
+            if let Some(ref alias_name) = subscription.alias {
+                match subscription.modifier {
+                    SubscriptionModifier::Added | SubscriptionModifier::Removed => {
+                        if let Some(alias_type) = subscription.resolved_alias_type.borrow().as_ref() {
+                            let c_elem_type = self.ast_type_to_c(alias_type);
+                            self.output.push_str(&format!(
+                                "  {} {} = *({} *)delta->payload;\n",
+                                c_elem_type, alias_name, c_elem_type
+                            ));
+                            self.variable_types
+                                .insert(alias_name.clone(), Type::from_ast_type(alias_type));
+                            self.push_boxed_binding(alias_name, false);
+                        }
+                    }
+                    SubscriptionModifier::Moved => {
+                        self.output.push_str(&format!(
+                            "  HiLowMovedDelta {} = {{ ._0 = delta->from, ._1 = delta->to }};\n",
+                            alias_name
+                        ));
+                        self.variable_types.insert(
+                            alias_name.clone(),
+                            Type::Tuple(vec![Type::Usize, Type::Usize]),
+                        );
+                        self.push_boxed_binding(alias_name, false);
+                    }
+                    _ => {} // typecheck rejects aliases on other modifiers
+                }
+            }
         }
 
         // Captures go through the env as cells.
@@ -7973,15 +8038,53 @@ impl CodeGenerator {
             "hl_watcher_new_subscribed((void*){}, {}, {}",
             func_name, env_arg, env_dtor_name.unwrap_or("NULL")
         );
+        // Phase 3e-β: (changed)/(assigned) subscribe the SLOT (rebinding-
+        // watch, audit §5 item 10a); content modifiers subscribe the CURRENT
+        // value's cell (payload deref) and follow rebinding — each followed
+        // variable gets ONE HL_SLOT_FOLLOW marker node on its slot so
+        // hl_slot_retarget can find the watcher's nodes on rebinding.
         let mut n_subs = 0;
         let mut sub_args = String::new();
+        let mut followed_vars: Vec<String> = Vec::new();
         for subscription in &watcher.subscriptions {
-            let c_modifier = match subscription.modifier {
-                SubscriptionModifier::Assigned => "HL_SCALAR_ASSIGNED",
-                _ => "HL_ARR_CHANGED", // only changed/assigned pass validation
+            let slot_var = self.env_slot_rvalue(&subscription.variable_name);
+            let (c_modifier, is_content) = match subscription.modifier {
+                SubscriptionModifier::Assigned => ("HL_SCALAR_ASSIGNED", false),
+                SubscriptionModifier::Changed => ("HL_ARR_CHANGED", false),
+                SubscriptionModifier::Added => ("HL_ARR_ADDED", true),
+                SubscriptionModifier::Removed => ("HL_ARR_REMOVED", true),
+                SubscriptionModifier::Moved => ("HL_ARR_MOVED", true),
+                SubscriptionModifier::Deep => ("HL_ARR_DEEP", true),
             };
-            let cell_var = self.env_slot_rvalue(&subscription.variable_name);
+            let cell_var = if is_content {
+                let getter = match subscription.resolved_var_type.borrow().as_ref() {
+                    Some(crate::ast::Type::Object(_)) => "hl_scalar_get_object_ref",
+                    _ => "hl_scalar_get_array_ref",
+                };
+                if !followed_vars.contains(&subscription.variable_name) {
+                    followed_vars.push(subscription.variable_name.clone());
+                }
+                if matches!(subscription.modifier, SubscriptionModifier::Deep) {
+                    // (deep) marks the current subtree at construction (the
+                    // expression-form precedent); retargeting re-marks the
+                    // new subtree on rebinding.
+                    let mark_fn = match subscription.resolved_var_type.borrow().as_ref() {
+                        Some(crate::ast::Type::Object(_)) => "hl_object_mark_deep",
+                        _ => "hl_array_mark_deep",
+                    };
+                    self.output
+                        .push_str(&format!("  {}({}({}));\n", mark_fn, getter, slot_var));
+                }
+                format!("{}({})", getter, slot_var)
+            } else {
+                slot_var
+            };
             sub_args.push_str(&format!(", &{}->cell, {}", cell_var, c_modifier));
+            n_subs += 1;
+        }
+        for var_name in &followed_vars {
+            let slot_var = self.env_slot_rvalue(var_name);
+            sub_args.push_str(&format!(", &{}->cell, HL_SLOT_FOLLOW", slot_var));
             n_subs += 1;
         }
         call.push_str(&format!(", {}{})", n_subs, sub_args));

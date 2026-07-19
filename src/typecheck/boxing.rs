@@ -195,19 +195,31 @@ impl Analyzer {
 
     /// A subscription targets the declaration visible in the scope OUTSIDE
     /// the watcher (call before pushing the watcher scope).
-    fn mark_subscription(&mut self, sub: &Subscription) {
+    fn mark_subscription(&mut self, sub: &Subscription, decl_form: bool) {
         if let Some((decl_idx, _)) = self.resolve(&sub.variable_name) {
             self.mark(decl_idx, BoxReason::Subscribed);
             // Phase 3e-α: does this subscription require a SLOT cell?
             // (assigned) always does — it watches the variable, not the
             // value. Any subscription on a string does — strings have no
-            // subscribable value cell. The analysis runs post-typecheck, so
-            // the resolved type refcell is populated.
+            // subscribable value cell. Phase 3e-β: any DECL-FORM subscription
+            // on a container does — the watcher follows rebinding through the
+            // slot (content modifiers need the FOLLOW node; (changed) is a
+            // slot subscription — audit §5 item 10b). Expression-form
+            // container content subscriptions stay excluded (value
+            // subscriptions by identity). The analysis runs post-typecheck,
+            // so the resolved type refcell is populated.
             let is_string = matches!(
                 *sub.resolved_var_type.borrow(),
                 Some(Type::Primitive(PrimitiveType::String))
             );
-            if matches!(sub.modifier, SubscriptionModifier::Assigned) || is_string {
+            let is_container = matches!(
+                *sub.resolved_var_type.borrow(),
+                Some(Type::DynamicArray(_)) | Some(Type::Object(_))
+            );
+            if matches!(sub.modifier, SubscriptionModifier::Assigned)
+                || is_string
+                || (decl_form && is_container)
+            {
                 self.result.decisions[decl_idx].slot_required = true;
             }
         }
@@ -311,7 +323,7 @@ impl Analyzer {
     fn walk_decl_watcher(&mut self, w: &Watcher) {
         self.declare(&w.name, &w.position);
         for sub in &w.subscriptions {
-            self.mark_subscription(sub);
+            self.mark_subscription(sub, true);
         }
         self.push_scope();
         self.watcher_boundaries.push(self.scopes.len() - 1);
@@ -330,7 +342,7 @@ impl Analyzer {
 
     fn walk_watcher_expr(&mut self, w: &WatcherExpr) {
         for sub in &w.subscriptions {
-            self.mark_subscription(sub);
+            self.mark_subscription(sub, false);
         }
         self.push_scope();
         self.watcher_boundaries.push(self.scopes.len() - 1);
