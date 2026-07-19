@@ -1,0 +1,7 @@
+high program(): i32 {
+  function firstOf(xs: [i32]): i32 {
+    return xs[0]
+  }
+  print(firstOf([10, 20, 30]))
+  return 0
+}

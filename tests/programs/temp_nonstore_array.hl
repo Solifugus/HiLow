@@ -1,0 +1,5 @@
+high program(): i32 {
+  [1, 2, 3]
+  print(1)
+  return 0
+}

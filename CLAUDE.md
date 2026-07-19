@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**Current phase: 4a — temporaries: wire producers into `pending_statement_stmts` (the inert landing pad from `a21a6de`) — every heap temporary produced in an expression registers into a statement-local release list, released at statement end through the single cell-release function; retire `temp_owners`. Gate: full suite + string_concat/string_equality valgrind-clean (closes the string-operand-temporaries STATUS open question).**
+**Current phase: 5a — queues: per-thread notification queue type + safe-point drain hooks (allocation/syscall boundaries), single-threaded semantics preserved (same-thread fires may stay synchronous); deltas become queued values. Gate: full suite unchanged. (Phase 4a landed 2026-07-19: statement temporaries unified onto the single per-statement release list — the fresh-production forms fold into tracked temps and the store-site release path `needs_site_release_after_store` was deleted; see docs/STATUS.md.)**
 
 > Update this line when starting a new phase. The phase listed here governs what work is in scope for the session.
 

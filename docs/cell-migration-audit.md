@@ -113,8 +113,8 @@ Every codegen map/set keyed by lexical name, on `CodeGenerator`
 | `temp_watcher_expr_body_fn / _subscriptions / _captured_vars` | :172–176 | side-channel from `WatcherExpr` generation to the enclosing `let` handler (set 2754–2761, drained 1227–1231) | **deleted** — watcher construction becomes a single expression producing a runtime value |
 | `heap_owners: HashMap<String, (HeapType, usize)>` | :126 | general heap-ownership tracking; `std::mem::take` at fn boundary (653/691) fixes name-collision pollution | **survives** (not watcher-specific). Interacts with Phase 3: a boxed scalar becomes a heap value this map must track (`HeapType::Cell` or reuse). The `HeapType::Environment` arm of all three cleanup routines is deleted |
 | `transferred_vars: HashSet<String>` | :139 | ownership-transfer on return; take/restore 646/689 | **survives**; factory-pattern watchers become ordinary transferred heap values, so the watcher-specific escape analysis simplifies |
-| `temp_owners` (:129), `pending_statement_decls` (:133), `temp_counter` (:131) | | statement-end temporary cleanup (Phase 11a) | **replaced** in migration Phase 4 by per-statement release lists through the single cell-release function |
-| `pending_statement_stmts: Vec<String>` | :135 | inert landing pad (commit `a21a6de`): flushed at 1027–1032 before each statement body, **no producers yet** | groundwork for Phase 4 — producers get wired in then |
+| `temp_owners` (:129), `pending_statement_decls` (:133), `temp_counter` (:131) | | statement-end temporary cleanup (Phase 11a) | **replaced** in migration Phase 4 by per-statement release lists through the single cell-release function. *(4a, 2026-07-19: `temp_owners` became the sole temp mechanism — the store-site release path was folded in and deleted; dead `scope_depth` dropped. It survives as the per-statement release list, not literally removed. See §5 Phase 4.)* |
+| `pending_statement_stmts: Vec<String>` | :135 | inert landing pad (commit `a21a6de`): flushed at 1027–1032 before each statement body, **no producers yet** | groundwork for Phase 4 — producers get wired in then. *(4a, 2026-07-19: this landing pad is from the ARCHIVED compiler — `a21a6de` is not an ancestor of the fresh tree's HEAD and this field never existed here. The fresh tree realized 4a on `temp_owners` instead; see §5 Phase 4.)* |
 | `variable_types` (:110), `hoisted_variables` (:115) | | general symbol/type info and closure hoisting | **survive**; Phase 3's boxing pass adds a "boxed?" attribute alongside `variable_types` (or a parallel set) |
 
 The shadow-masking machinery (672–705 + 6946–7015) exists **only** to serve the
@@ -1005,6 +1005,36 @@ point of deleting-with-confidence.
   cell-release function. Retire `temp_owners`. *Gate: full suite + the
   string-operand leak tests (string_concat/string_equality valgrind-clean —
   closes the STATUS open question).*
+
+  **(4a landed 2026-07-19, owner-adjudicated premise reconciliation.** The
+  `pending_statement_stmts` landing pad from `a21a6de` is archived-compiler
+  groundwork — `a21a6de` is not an ancestor of the fresh tree's HEAD and the
+  field does not exist here; the audit's `:1xx`/`102x` line numbers are that
+  older codebase's. In the fresh tree, expression temporaries were ALREADY
+  released per-statement via `temp_owners` + `emit_temp_cleanup` (string_concat
+  / string_equality already valgrind-clean), so 4a's real content was
+  eliminating the SECOND temp mechanism: the store-site release path
+  `needs_site_release_after_store` (object/array/f-string/function-expr
+  literals and object/function-typed match, released at let/assign/push/insert/
+  property-set sites). Ruling (owner): "unify onto the temp list" — those five
+  fresh-production forms now mint statement-scoped tracked temps in Temporary
+  position (released at statement end through the single `emit_temp_release`
+  dispatcher, the codegen realization of "the single cell-release function"
+  — there is no value-dispatching runtime release, `hl_cell_release` being only
+  the header primitive), the retaining store keeps its +1, and
+  `needs_site_release_after_store` + its 11 call sites were deleted. This is
+  refcount-neutral (releases relocate from store sites to statement end) and
+  also closed a real leak class: a fresh literal in a bare statement or as a
+  borrowing call argument, covered by neither mechanism, leaked (pinned clean
+  by temp_nonstore_object/array/arg). Two dead, wrong classification predicates
+  (`expression_produces_heap_value`, `is_heap_allocating_expression`) were
+  deleted. The dead `scope_depth` component of the temp maps was dropped;
+  `temp_owners` + `enclosing_temp_frames` were kept as the cached-top +
+  unwind-stack form of the one mechanism (fusing them into a single vec was
+  judged to add error-prone break/continue/return index-shifting for no
+  behavioral gain — a disclosed deviation from the plan's "fuse" wording).
+  Zero-cost: all program outputs byte-identical corpus-wide vs the 3e-γ binary;
+  C-diffs confined to release-site placement + temp-declaration hoisting.)**
 
 ### Phase 5 — queues
 

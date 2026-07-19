@@ -5815,3 +5815,29 @@ fn test_watcher_decl_alias_sequential_rebinds() {
 fn test_watcher_decl_alias_deep() {
     run_3b_fixture("watcher_decl_alias_deep");
 }
+
+// ===== Phase 4a: statement temporaries — one per-statement release mechanism =====
+// Fresh heap productions (object/array/f-string/function-expr literals, and
+// object/function-typed match) in a NON-STORE position — a bare expression
+// statement or a borrowing call argument — were covered by neither the temp
+// list nor the deleted store-site release, so they leaked. Phase 4a mints them
+// as statement-scoped temps; these pin the fix valgrind-clean (the gate runs
+// each corpus program under valgrind).
+
+// Bare object-literal statement (leaked 236 bytes before 4a).
+#[test]
+fn test_temp_nonstore_object() {
+    run_3b_fixture("temp_nonstore_object");
+}
+
+// Bare array-literal statement (leaked before 4a).
+#[test]
+fn test_temp_nonstore_array() {
+    run_3b_fixture("temp_nonstore_array");
+}
+
+// Fresh array literal passed as a borrowing call argument (leaked before 4a).
+#[test]
+fn test_temp_nonstore_arg() {
+    run_3b_fixture("temp_nonstore_arg");
+}

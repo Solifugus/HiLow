@@ -144,8 +144,9 @@ pub struct CodeGenerator {
     /// Temp-owner frames of enclosing statements (Phase 1.5b): generate_statement
     /// pushes the outer statement's temp_owners here instead of a local, so
     /// return/break/continue can release temps whose statement-end cleanup
-    /// they jump past
-    enclosing_temp_frames: Vec<HashMap<String, (HeapType, usize)>>,
+    /// they jump past. Phase 4a: the dead scope_depth component was dropped —
+    /// a temp's release point is its owning statement's boundary, not a scope.
+    enclosing_temp_frames: Vec<HashMap<String, HeapType>>,
     /// Stack of enclosing loops for break/continue cleanup (Phase 1.5b)
     loop_frames: Vec<LoopFrame>,
     /// Current iteration value variable name for for-in loops
@@ -153,9 +154,12 @@ pub struct CodeGenerator {
     /// Phase 8a: Ownership tracking for heap allocations
     /// Maps variable name to (heap_type, scope_depth) where heap_type is the type of heap allocation
     heap_owners: HashMap<String, (HeapType, usize)>,
-    /// Phase 11a expression-temporary cleanup: Temporary heap values for statement-end cleanup
-    /// Maps temp variable name to (heap_type, scope_depth)
-    temp_owners: HashMap<String, (HeapType, usize)>,
+    /// Phase 11a expression-temporary cleanup: Temporary heap values for statement-end cleanup.
+    /// The per-statement release list — maps temp variable name to its heap type.
+    /// Phase 4a: this is the ONE temporary-lifetime mechanism (the store-site
+    /// release path, needs_site_release_after_store, was folded in and deleted);
+    /// the dead scope_depth component was dropped.
+    temp_owners: HashMap<String, HeapType>,
     /// Phase 11a expression-temporary cleanup: Counter for generating unique temporary variable names
     temp_counter: usize,
     /// Phase 11a expression-temporary cleanup: Pending C declarations to hoist to statement scope
@@ -2376,34 +2380,14 @@ impl CodeGenerator {
                     Expression::WeakRef(inner, _) => inner.as_ref(),
                     _ => unreachable!("is_weak_assignment checked above"),
                 };
-                if Self::needs_site_release_after_store(inner_expr, &value_type) {
-                    self.output.push_str("{ HiLowObject* __pv = ");
-                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str("; hl_object_set_object_weak(");
-                    self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str(&format!(", \"{}\", __pv); hl_object_release(__pv); }}\n", member_access.member));
-                } else {
-                    self.output.push_str("hl_object_set_object_weak(");
-                    self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str(&format!(", \"{}\", ", member_access.member));
-                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
-                    self.output.push_str(");\n");
-                }
-            } else if matches!(value_type, Type::Object(_) | Type::Function(_, _) | Type::String | Type::DynamicArray(_))
-                && Self::needs_site_release_after_store(&assign_stmt.value, &value_type)
-            {
-                let (c_type, setter, release) = match &value_type {
-                    Type::Object(_) => ("HiLowObject*", "hl_object_set_object", "hl_object_release"),
-                    Type::Function(_, _) => ("HiLowFunction*", "hl_object_set_function", "hl_function_release"),
-                    Type::String => ("HiLowArray*", "hl_object_set_str", "hl_array_release"),
-                    Type::DynamicArray(_) => ("HiLowArray*", "hl_object_set_array", "hl_array_release"),
-                    _ => unreachable!("matched above"),
-                };
-                self.output.push_str(&format!("{{ {} __pv = ", c_type));
-                self.generate_expression(&assign_stmt.value, type_checker, ExprContext::Temporary)?;
-                self.output.push_str(&format!("; {}(", setter));
+                // Phase 4a: weak store (no retain); the value's +1 is disposed
+                // by the one temp mechanism — see the object-literal note at the
+                // object-construction property-set site.
+                self.output.push_str("hl_object_set_object_weak(");
                 self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
-                self.output.push_str(&format!(", \"{}\", __pv); {}(__pv); }}\n", member_access.member, release));
+                self.output.push_str(&format!(", \"{}\", ", member_access.member));
+                self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
+                self.output.push_str(");\n");
             } else {
                 match value_type {
                     Type::I32 => self.output.push_str("hl_object_set_i32("),
@@ -2476,18 +2460,10 @@ impl CodeGenerator {
                 self.output.push_str(", ");
                 self.generate_expression(&index_access.index, type_checker, ExprContext::Temporary)?;
                 self.output.push_str(&format!(", &{});\n", temp_var));
-
-                if managed && Self::needs_site_release_after_store(&assign_stmt.value, elem_type) {
-                    match **elem_type {
-                        Type::Object(_) => {
-                            self.output.push_str(&format!("  hl_object_release({});\n", temp_var));
-                        }
-                        Type::DynamicArray(_) => {
-                            self.output.push_str(&format!("  hl_array_release({});\n", temp_var));
-                        }
-                        _ => unreachable!("managed checked above"),
-                    }
-                }
+                // Phase 4a: hl_array_set retained on store; the value's own +1
+                // is disposed by the one temp mechanism (fresh productions mint
+                // statement-scoped temps; borrows are scope-owned), no site
+                // release here.
             }
         } else {
             // Regular assignment to variables
@@ -2701,6 +2677,31 @@ impl CodeGenerator {
     }
 
     fn generate_expression(&mut self, expression: &Expression, type_checker: &TypeChecker, context: ExprContext) -> Result<(), CodegenError> {
+        // Phase 4a: fresh heap productions (object/array/f-string/function-expr
+        // literals and object/function-typed match) in Temporary position mint
+        // a statement-scoped tracked temp, released at statement end — the ONE
+        // temporary-lifetime mechanism. This subsumes the old store-site
+        // release path (needs_site_release_after_store, now deleted) and closes
+        // the non-store leak (a fresh literal in a bare statement or as a
+        // borrowing call argument). Owned context (let/return) still binds
+        // directly into heap_owners. The construction is captured by
+        // recursing in Owned context (which emits the raw +1 production and
+        // never re-enters this arm); nested fresh productions inside it mint
+        // their own temps, hoisted before this one (pending_statement_decls is
+        // an ordered Vec) — the string-concat precedent generalized.
+        if context == ExprContext::Temporary {
+            if let Some((heap_type, c_type)) = self.fresh_production_temp_kind(expression) {
+                let temp_name = self.next_temp_name();
+                let saved = std::mem::take(&mut self.output);
+                self.generate_expression(expression, type_checker, ExprContext::Owned)?;
+                let construction = std::mem::replace(&mut self.output, saved);
+                self.pending_statement_decls
+                    .push(format!("{} {} = {};", c_type, temp_name, construction));
+                self.temp_owners.insert(temp_name.clone(), heap_type);
+                self.output.push_str(&temp_name);
+                return Ok(());
+            }
+        }
         match expression {
             Expression::IntLit(value, _) => {
                 self.output.push_str(&value.to_string());
@@ -2716,7 +2717,7 @@ impl CodeGenerator {
                 let str_var_name = if context == ExprContext::Temporary {
                     // Use tracked temporary name
                     let temp_name = self.next_temp_name();
-                    self.temp_owners.insert(temp_name.clone(), (HeapType::Array, self.scope_depth));
+                    self.temp_owners.insert(temp_name.clone(), HeapType::Array);
                     temp_name
                 } else {
                     // Use untracked name for owned context
@@ -3455,7 +3456,7 @@ impl CodeGenerator {
                     // end (which unsubscribes it) — hoist as a tracked
                     // temp, mirroring the optional-member pattern.
                     let temp_name = self.next_temp_name();
-                    self.temp_owners.insert(temp_name.clone(), (HeapType::Watcher, self.scope_depth));
+                    self.temp_owners.insert(temp_name.clone(), HeapType::Watcher);
                     self.pending_statement_decls.push(format!("HiLowWatcher* {} = {};", temp_name, call));
                     self.output.push_str(&temp_name);
                 } else {
@@ -3493,29 +3494,12 @@ impl CodeGenerator {
                     self.output.push_str(&format!("; hl_array_push(__arr, &__e{});\n", i));
                 }
 
-                // Phase 1.5c: hl_array_push retained each element for the
-                // array. Dispose only of untracked fresh +1 productions here —
-                // a borrowed local's reference belongs to its scope cleanup,
-                // and tracked temps are released at statement end.
-                match &elem_type {
-                    Type::Object(_) => {
-                        for (i, element) in elements.iter().enumerate() {
-                            if Self::needs_site_release_after_store(element, &elem_type) {
-                                self.output.push_str(&format!("     hl_object_release(__e{});\n", i));
-                            }
-                        }
-                    },
-                    Type::DynamicArray(_) => {
-                        for (i, element) in elements.iter().enumerate() {
-                            if Self::needs_site_release_after_store(element, &elem_type) {
-                                self.output.push_str(&format!("     hl_array_release(__e{});\n", i));
-                            }
-                        }
-                    },
-                    _ => {
-                        // Primitive types don't need release
-                    }
-                }
+                // Phase 4a: hl_array_push retained each element for the array.
+                // The element's own +1 is disposed by the ONE temp mechanism —
+                // fresh-production elements (object/array literals, etc.) mint
+                // statement-scoped temps released at statement end; borrowed
+                // locals belong to their scope cleanup; tracked temps release
+                // at statement end. No site release here.
 
                 self.output.push_str("     __arr; })");
             }
@@ -3982,7 +3966,7 @@ impl CodeGenerator {
                     self.pending_statement_decls.push(decl);
 
                     // Track for statement-end cleanup
-                    self.temp_owners.insert(temp_name.clone(), (HeapType::Array, self.scope_depth));
+                    self.temp_owners.insert(temp_name.clone(), HeapType::Array);
 
                     // Emit just the reference
                     self.output.push_str(&temp_name);
@@ -4132,22 +4116,10 @@ impl CodeGenerator {
                         self.output.push_str("    hl_array_push(");
                         self.generate_expression(&member_access.object, type_checker, ExprContext::Temporary)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
-
-                        // Phase 1.5c: hl_array_push retained for the array;
-                        // dispose only of an untracked fresh +1 argument here
-                        if Self::needs_site_release_after_store(&call.args[0], &elem_type) {
-                            match elem_type.as_ref() {
-                                Type::Object(_) => {
-                                    self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
-                                },
-                                Type::DynamicArray(_) => {
-                                    self.output.push_str(&format!("    hl_array_release({});\n", temp_var));
-                                },
-                                _ => {
-                                    // Primitive types don't need release
-                                }
-                            }
-                        }
+                        // Phase 4a: hl_array_push retained for the array; the
+                        // argument's own +1 is disposed by the one temp
+                        // mechanism (fresh productions mint statement-scoped
+                        // temps; borrows are scope-owned), no site release.
 
                         self.output.push_str("}");
                         return Ok(());
@@ -4212,20 +4184,9 @@ impl CodeGenerator {
                         self.output.push_str(", ");
                         self.generate_expression(&call.args[0], type_checker, ExprContext::Temporary)?;
                         self.output.push_str(&format!(", &{});\n", temp_var));
-
-                        // Phase 1.5c: hl_array_insert retained for the array;
-                        // dispose only of an untracked fresh +1 element here
-                        if Self::needs_site_release_after_store(&call.args[1], &elem_type) {
-                            match elem_type.as_ref() {
-                                Type::Object(_) => {
-                                    self.output.push_str(&format!("    hl_object_release({});\n", temp_var));
-                                },
-                                Type::DynamicArray(_) => {
-                                    self.output.push_str(&format!("    hl_array_release({});\n", temp_var));
-                                },
-                                _ => {}
-                            }
-                        }
+                        // Phase 4a: hl_array_insert retained for the array; the
+                        // element's own +1 is disposed by the one temp
+                        // mechanism, no site release.
 
                         self.output.push_str("}");
                         return Ok(());
@@ -4325,7 +4286,7 @@ impl CodeGenerator {
             };
 
             // Register temp for cleanup
-            self.temp_owners.insert(temp_name.clone(), (heap_type, self.scope_depth));
+            self.temp_owners.insert(temp_name.clone(), heap_type);
 
             // Get C type for the temp declaration
             let temp_c_type = self.hilow_type_to_c(return_type.as_ref().unwrap());
@@ -4481,27 +4442,19 @@ impl CodeGenerator {
             }
         };
 
-        // Phase 8a: Handle f-string cleanup for inline usage
-        if matches!(arg, Expression::FString(_)) {
-            // F-string used inline in print - need to free buffer after use
-            self.output.push_str("({ HiLowArray* __inline_fstr = ");
-            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
-            self.output.push_str("; ");
-            self.output.push_str(runtime_func);
-            self.output.push_str("(__inline_fstr); hl_array_release(__inline_fstr); })");
-        } else {
-            // Regular argument - no special cleanup needed
-            self.output.push_str(runtime_func);
-            self.output.push_str("(");
+        // Phase 4a: f-strings (like all fresh productions) mint a
+        // statement-scoped temp in Temporary context, released at statement
+        // end — no special inline cleanup here (that would double-free).
+        self.output.push_str(runtime_func);
+        self.output.push_str("(");
 
-            // Special case: Usize needs to be cast to uint32_t for print_u32
-            if matches!(arg_type, Type::Usize) {
-                self.output.push_str("(uint32_t)");
-            }
-
-            self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
-            self.output.push_str(")");
+        // Special case: Usize needs to be cast to uint32_t for print_u32
+        if matches!(arg_type, Type::Usize) {
+            self.output.push_str("(uint32_t)");
         }
+
+        self.generate_expression(arg, type_checker, ExprContext::Temporary)?;
+        self.output.push_str(")");
 
         Ok(())
     }
@@ -4944,25 +4897,6 @@ impl CodeGenerator {
         name
     }
 
-    /// Check if an expression produces a heap value that needs cleanup
-    fn expression_produces_heap_value(&self, expression: &Expression) -> Option<HeapType> {
-        match expression {
-            Expression::StringLit(_, _) => Some(HeapType::Array),
-            Expression::BinaryOp(binary_op) => {
-                let lhs_type = self.infer_expression_type_for_codegen(&binary_op.lhs);
-                let rhs_type = self.infer_expression_type_for_codegen(&binary_op.rhs);
-                match (&lhs_type, &rhs_type, &binary_op.op) {
-                    (Type::String, Type::String, BinaryOpKind::Add) => Some(HeapType::Array), // String concatenation
-                    _ => None,
-                }
-            }
-            Expression::Call(_) => {
-                // Some function calls might return heap values, but we'll handle this more specifically later
-                None
-            }
-            _ => None,
-        }
-    }
 
     fn mangle_function_name(&self, name: &str) -> String {
         // Phase 6a-fixup: Simple mangling for nested functions to avoid C keyword conflicts
@@ -6021,19 +5955,14 @@ impl CodeGenerator {
             if let Expression::WeakRef(inner_expr, _) = prop_expr {
                 if matches!(expr_type, Type::Object(_)) {
                     // Weak property store: no retain, no release; the slot is
-                    // nulled when the target dies.
-                    if Self::needs_site_release_after_store(inner_expr, &expr_type) {
-                        self.output.push_str("    { HiLowObject* __pv = ");
-                        self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(&format!(
-                            "; hl_object_set_object_weak(obj, \"{}\", __pv); hl_object_release(__pv); }}\n",
-                            prop_name
-                        ));
-                    } else {
-                        self.output.push_str(&format!("    hl_object_set_object_weak(obj, \"{}\", ", prop_name));
-                        self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(");\n");
-                    }
+                    // nulled when the target dies. Phase 4a: a fresh-production
+                    // value mints a statement-scoped temp released at
+                    // statement end (the one mechanism); if nothing else owns
+                    // it, it dies then and the weak slot nulls — before any
+                    // later statement could read it, matching prior behavior.
+                    self.output.push_str(&format!("    hl_object_set_object_weak(obj, \"{}\", ", prop_name));
+                    self.generate_expression(inner_expr, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(");\n");
                     if matches!(prop_expr, Expression::FunctionExpr(_)) {
                         self.method_receiver_type = old_receiver_type.clone();
                     }
@@ -6042,39 +5971,23 @@ impl CodeGenerator {
             }
             match &expr_type {
                 Type::Object(_) => {
-                    // The store retains (Phase 1.5c axiom); dispose of an
-                    // untracked fresh +1 here. Borrowed locals and tracked
-                    // temps are released by their own owners.
-                    if Self::needs_site_release_after_store(prop_expr, &expr_type) {
-                        self.output.push_str("    { HiLowObject* __pv = ");
-                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(&format!(
-                            "; hl_object_set_object(obj, \"{}\", __pv); hl_object_release(__pv); }}\n",
-                            prop_name
-                        ));
-                    } else {
-                        self.output.push_str(&format!("    hl_object_set_object(obj, \"{}\", ", prop_name));
-                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(");\n");
-                    }
+                    // The store retains (Phase 1.5c axiom). Phase 4a: the
+                    // value's own +1 is disposed by the one temp mechanism —
+                    // fresh productions mint statement-scoped temps, borrows
+                    // belong to their scope, tracked temps release at statement
+                    // end; no site release.
+                    self.output.push_str(&format!("    hl_object_set_object(obj, \"{}\", ", prop_name));
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(");\n");
                     if matches!(prop_expr, Expression::FunctionExpr(_)) {
                         self.method_receiver_type = old_receiver_type.clone();
                     }
                     continue;
                 }
                 Type::Function(_, _) => {
-                    if Self::needs_site_release_after_store(prop_expr, &expr_type) {
-                        self.output.push_str("    { HiLowFunction* __pv = ");
-                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(&format!(
-                            "; hl_object_set_function(obj, \"{}\", __pv); hl_function_release(__pv); }}\n",
-                            prop_name
-                        ));
-                    } else {
-                        self.output.push_str(&format!("    hl_object_set_function(obj, \"{}\", ", prop_name));
-                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(");\n");
-                    }
+                    self.output.push_str(&format!("    hl_object_set_function(obj, \"{}\", ", prop_name));
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(");\n");
                     if matches!(prop_expr, Expression::FunctionExpr(_)) {
                         self.method_receiver_type = old_receiver_type.clone();
                     }
@@ -6082,20 +5995,10 @@ impl CodeGenerator {
                 }
                 Type::DynamicArray(_) => {
                     // Phase 2e: array-valued properties — same ownership shape
-                    // as objects (store retains; site releases untracked fresh
-                    // +1 productions like array literals)
-                    if Self::needs_site_release_after_store(prop_expr, &expr_type) {
-                        self.output.push_str("    { HiLowArray* __pv = ");
-                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(&format!(
-                            "; hl_object_set_array(obj, \"{}\", __pv); hl_array_release(__pv); }}\n",
-                            prop_name
-                        ));
-                    } else {
-                        self.output.push_str(&format!("    hl_object_set_array(obj, \"{}\", ", prop_name));
-                        self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
-                        self.output.push_str(");\n");
-                    }
+                    // as objects (store retains). Phase 4a: no site release.
+                    self.output.push_str(&format!("    hl_object_set_array(obj, \"{}\", ", prop_name));
+                    self.generate_expression(prop_expr, type_checker, ExprContext::Temporary)?;
+                    self.output.push_str(");\n");
                     continue;
                 }
                 _ => {}
@@ -6369,7 +6272,7 @@ impl CodeGenerator {
 
                     if context == ExprContext::Temporary {
                         let temp_name = self.next_temp_name();
-                        self.temp_owners.insert(temp_name.clone(), (HeapType::Array, self.scope_depth));
+                        self.temp_owners.insert(temp_name.clone(), HeapType::Array);
                         self.pending_statement_decls.push(format!("HiLowArray* {} = {};", temp_name, call_expr));
                         self.output.push_str(&temp_name);
                     } else {
@@ -6412,7 +6315,7 @@ impl CodeGenerator {
             let heap_type = HeapType::Array;
 
             // Register temp for cleanup
-            self.temp_owners.insert(temp_name.clone(), (heap_type, self.scope_depth));
+            self.temp_owners.insert(temp_name.clone(), heap_type);
 
             let getter_func = "hl_object_get_str";
             let temp_type = "HiLowArray*";
@@ -6502,7 +6405,7 @@ impl CodeGenerator {
 
         if context == ExprContext::Temporary {
             let temp_name = self.next_temp_name();
-            self.temp_owners.insert(temp_name.clone(), (HeapType::Optional, self.scope_depth));
+            self.temp_owners.insert(temp_name.clone(), HeapType::Optional);
             self.pending_statement_decls.push(format!("HiLowOptional* {} = {};", temp_name, call_expr));
             self.output.push_str(&temp_name);
         } else {
@@ -6727,7 +6630,7 @@ impl CodeGenerator {
                 if context == ExprContext::Temporary {
                     // time.parse() returns optional, which is heap-allocated - track as temp
                     let temp_name = self.next_temp_name();
-                    self.temp_owners.insert(temp_name.clone(), (HeapType::Optional, self.scope_depth));
+                    self.temp_owners.insert(temp_name.clone(), HeapType::Optional);
 
                     // Build declaration with hl_time_parse call
                     let mut decl = format!("HiLowOptional* {} = hl_time_parse(", temp_name);
@@ -7301,24 +7204,27 @@ impl CodeGenerator {
         }
     }
 
-    /// Phase 1.5c: for a heap-typed value expression generated in
-    /// ExprContext::Temporary and passed to a retaining store (property set,
-    /// array push/insert/set), does the STORE SITE have to release the fresh
-    /// +1 the expression produced? Tracked temps (string literals, concats,
-    /// calls, string member reads) are released by statement-end cleanup;
-    /// borrows are owned elsewhere. Only untracked fresh productions remain:
-    /// object literals, function expressions, f-strings, array literals, and
-    /// object/function-typed match expressions (whose arms are normalized to
-    /// produce +1).
-    fn needs_site_release_after_store(expr: &Expression, ty: &Type) -> bool {
+
+    /// Phase 4a: if this expression is a fresh heap production that must be
+    /// minted as a statement-scoped temp in Temporary context, return its
+    /// (HeapType, C type). None for borrows and for the forms that already
+    /// mint their own temps in their generate_expression arm (StringLit,
+    /// string-concat, heap-returning calls, string/optional member reads).
+    /// This is the exact set the deleted needs_site_release_after_store named:
+    /// object/function/f-string/array literals and object/function-typed match.
+    fn fresh_production_temp_kind(&self, expr: &Expression) -> Option<(HeapType, &'static str)> {
         match expr {
-            Expression::TypeAscription(inner, _, _) => Self::needs_site_release_after_store(inner, ty),
-            Expression::ObjectLiteral(_) => true,
-            Expression::FunctionExpr(_) => true,
-            Expression::FString(_) => true,
-            Expression::ArrayLit(_, _) => true,
-            Expression::Match(_) => matches!(ty, Type::Object(_) | Type::Function(_, _)),
-            _ => false,
+            Expression::ObjectLiteral(_) => Some((HeapType::Object, "HiLowObject*")),
+            Expression::ArrayLit(_, _) => Some((HeapType::Array, "HiLowArray*")),
+            Expression::FString(_) => Some((HeapType::Array, "HiLowArray*")),
+            Expression::FunctionExpr(_) => Some((HeapType::Function, "HiLowFunction*")),
+            Expression::Match(_) => match self.infer_expression_type_for_codegen(expr) {
+                Type::Object(_) => Some((HeapType::Object, "HiLowObject*")),
+                Type::Function(_, _) => Some((HeapType::Function, "HiLowFunction*")),
+                _ => None,
+            },
+            Expression::TypeAscription(inner, _, _) => self.fresh_production_temp_kind(inner),
+            _ => None,
         }
     }
 
@@ -7473,7 +7379,7 @@ impl CodeGenerator {
         // Collect all temporary variables for release
         let mut temps_to_release: Vec<(String, HeapType)> = Vec::new();
 
-        for (temp_name, (heap_type, _scope_depth)) in &self.temp_owners {
+        for (temp_name, heap_type) in &self.temp_owners {
             temps_to_release.push((temp_name.clone(), heap_type.clone()));
         }
 
@@ -7505,7 +7411,7 @@ impl CodeGenerator {
             .flat_map(|frame| {
                 let mut entries: Vec<(String, HeapType)> = frame
                     .iter()
-                    .map(|(name, (heap_type, _))| (name.clone(), heap_type.clone()))
+                    .map(|(name, heap_type)| (name.clone(), heap_type.clone()))
                     .collect();
                 entries.sort_by(|a, b| a.0.cmp(&b.0));
                 entries
@@ -7656,28 +7562,6 @@ impl CodeGenerator {
         Ok(())
     }
 
-
-    /// Phase 8a: Check if an expression creates a heap allocation
-    fn is_heap_allocating_expression(&self, expr: &Expression) -> bool {
-        match expr {
-            Expression::FunctionExpr(_) => true,
-            Expression::ObjectLiteral(_) => true,
-            Expression::FString(_) => true,
-            Expression::Call(call_expr) => {
-                // Check if this is a function call that returns a heap value
-                if let Expression::Ident { name: func_name, .. } = call_expr.callee.as_ref() {
-                    if let Some(return_type) = self.functions.get(func_name) {
-                        matches!(return_type, Type::Object(_) | Type::Function(_, _))
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        }
-    }
 
     /// Generate an expression without applying type refinements
     /// Used for contexts like 'is unknown' checks where we need the original variable
