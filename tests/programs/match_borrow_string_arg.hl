@@ -1,0 +1,7 @@
+high program(args: [string]): i32 {
+    let a = "world"
+    let n = 1
+    print(match n { 1 => a  _ => "other" })
+    print(a)
+    return 0
+}

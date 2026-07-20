@@ -5841,3 +5841,48 @@ fn test_temp_nonstore_array() {
 fn test_temp_nonstore_arg() {
     run_3b_fixture("temp_nonstore_arg");
 }
+
+// ===== Phase 4b: match-arm ownership — borrowed arm into Owned context =====
+// A match whose result type is a heap type other than Object/Function (String,
+// DynamicArray) with a BORROWED arm value bound in Owned context (a let) handed
+// out a borrow that the binding's scope-exit release then over-freed —
+// use-after-free in hl_cell_release (found by the Phase-5 preflight; predated
+// 4a). generate_match_expression's ref_wrap now retains such arms with
+// hl_array_ref, mirroring the Object/Function case. These pin the CLASS: the two
+// Owned-context borrow cases (the fix targets) plus three controls that were
+// already clean and must stay clean (Temporary bare statement, Temporary
+// borrowing argument, and a fresh-literal arm — the fix must not over-retain).
+// The gate runs each program under valgrind.
+
+// String-typed match, borrowed arm, Owned (let): both the binding and the
+// borrowed source survive (was a double-free before 4b).
+#[test]
+fn test_match_borrow_string_owned() {
+    run_3b_fixture("match_borrow_string_owned");
+}
+
+// DynamicArray-typed match, borrowed arm, Owned (let).
+#[test]
+fn test_match_borrow_array_owned() {
+    run_3b_fixture("match_borrow_array_owned");
+}
+
+// Control: borrowed arm in Temporary context (bare statement) — an untracked
+// borrow, never released; already clean, must stay clean (no wrap in Temporary).
+#[test]
+fn test_match_borrow_string_bare() {
+    run_3b_fixture("match_borrow_string_bare");
+}
+
+// Control: borrowed arm in Temporary context (borrowing call argument).
+#[test]
+fn test_match_borrow_string_arg() {
+    run_3b_fixture("match_borrow_string_arg");
+}
+
+// Control: fresh-literal arm in Owned context — already a +1; the fix must not
+// double-retain it.
+#[test]
+fn test_match_fresh_arm_owned() {
+    run_3b_fixture("match_fresh_arm_owned");
+}

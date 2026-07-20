@@ -7074,6 +7074,27 @@ impl CodeGenerator {
                                     None
                                 }
                             }
+                            // Phase 4b: string/array-typed match results obey the
+                            // same 1.5c axiom as object/function — a borrowed arm
+                            // handed into Owned context must be retained (+1) so
+                            // the consumer's scope-exit release is balanced (the
+                            // let-match track_heap_owner arm records the binding as
+                            // an Array owner). Without this a borrowed arm bound in
+                            // Owned context is double-released (use-after-free in
+                            // hl_cell_release). Temporary context is already
+                            // correct — a borrowed arm stays an untracked borrow and
+                            // a fresh-literal arm self-mints a statement-end-released
+                            // temp — so no wrap there. (Object/function-typed match
+                            // never reaches Temporary here: 4a's
+                            // fresh_production_temp_kind interception re-enters it as
+                            // Owned; string/array match is not intercepted, so this
+                            // arm is reached in both contexts and must gate on Owned.)
+                            Type::String | Type::DynamicArray(_)
+                                if context == ExprContext::Owned
+                                    && Self::expr_is_borrowed_ref(expr) =>
+                            {
+                                Some("hl_array_ref")
+                            }
                             _ => None,
                         };
                         self.output.push_str("        __match_result = ");

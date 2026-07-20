@@ -1,0 +1,6 @@
+high program(args: [string]): i32 {
+    let n = 2
+    let s = match n { 1 => "yes"  _ => "no" }
+    print(s)
+    return 0
+}

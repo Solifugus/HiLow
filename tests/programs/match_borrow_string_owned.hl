@@ -1,0 +1,8 @@
+high program(args: [string]): i32 {
+    let a = "hello"
+    let n = 1
+    let s = match n { 1 => a  _ => "other" }
+    print(s)
+    print(a)
+    return 0
+}

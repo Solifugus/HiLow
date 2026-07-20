@@ -105,13 +105,29 @@ it **predates 4a**. The control case (fresh-literal arms `1 => "yes" _ => "no"`)
 is **valgrind-clean (0 errors)**, precisely bounding the seam to a *borrowed*
 arm value in `Owned` context.
 
-This is a **finding for the doc, not a 4a defect** — 4a's scope was the five
+This was a **finding for the doc, not a 4a defect** — 4a's scope was the five
 fresh-production forms, all correctly folded in, and the census is a complete and
-correct projection *for what it covers*. The seam is a pre-existing
+correct projection *for what it covers*. The seam was a pre-existing
 non-obj/fn-typed-`match` ownership gap (a 1.5c-era retain-on-store concern the
-`ref_wrap` never extended past object/function results). Recorded here as a
-Phase-5-adjacent bug to fix in its own session; not touched here (read-only
-preflight).
+`ref_wrap` never extended past object/function results).
+
+**EXTINGUISHED in Phase 4b** (commit follows this doc): `generate_match_expression`'s
+`ref_wrap` (`mod.rs:7060`) now retains a borrowed arm of a `String`/`DynamicArray`
+result in Owned context with `hl_array_ref`, mirroring the Object/Function case —
+so every heap-typed match now hands a `+1` into Owned context. Reachability was
+bounded by probe: only `String` and `DynamicArray` are affected (Optional-typed
+match is untracked and never over-releases; `Unknown` values are not
+constructible as bare arms; Object/Function were already retained). See the
+extinct-classes table (§D.2) for the pinning tests.
+
+**Census (post-4b), one sentence:** the temporary census is unchanged —
+`fresh_production_temp_kind` still mints only Object/Function-typed match (∪ the
+eight self-minting arms) as a tracked temp; every *other* heap-typed match
+(String/DynamicArray) is accounted at the arm instead (borrowed arms retained via
+`hl_array_ref` in Owned context; fresh-literal arms self-mint a
+statement-end-released temp; Temporary-context borrows stay untracked borrows), so
+match in all result types is now ownership-accounted without routing through the
+temp mechanism.
 
 ### A.2 The 49-vs-50 diffing-program count
 
@@ -349,6 +365,7 @@ memory-bug lists, class by class:
 | unreachable scope-exit deactivation under early returns | 3c | `watcher_early_return_scalar`, `watcher_early_return_array` |
 | non-reentrant static delta buffers | 2c (both `temp_buffer`s deleted; `HiLowDelta` heap value) | the valgrind gate as a whole; `watcher_reentrant_deferred` (synchronous today, valgrind-clean) |
 | ad-hoc handling of expression temporaries | 4a (unification) | `temp_nonstore_object`, `temp_nonstore_array`, `temp_nonstore_arg`; `string_concat`, `string_equality` (string-operand clean) |
+| non-obj/fn-typed `match` with a borrowed arm in Owned context — use-after-free | 4b (`ref_wrap` extended to `hl_array_ref`) | fix targets `match_borrow_string_owned`, `match_borrow_array_owned`; controls `match_borrow_string_bare`, `match_borrow_string_arg`, `match_fresh_arm_owned` |
 | object double-release (17 programs — gate's original `KNOWN_MEMORY_BUGS`) | 1.5c | `KNOWN_MEMORY_BUGS` is now EMPTY (`valgrind_gate.rs:62`; comment lines 55–61) |
 | §3.4(b)/(c)/(d) env-keying bugs | 2a | gate comment `valgrind_gate.rs:57` |
 | §3.4(a) `.move` 2-arg env-dropping casts | 2c | gate comment `valgrind_gate.rs:59` |
