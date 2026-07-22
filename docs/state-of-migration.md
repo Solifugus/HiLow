@@ -473,3 +473,52 @@ Phase-5 notification queue must retain the queued watcher.
 + safe-point drain hooks (allocation/syscall boundaries), single-threaded
 semantics preserved (same-thread fires may stay synchronous); deltas become
 queued values. Gate: full suite unchanged.
+
+---
+
+## Part E — Phase 5a landed (2026-07-21): what was built + adjudications
+
+Runtime-support-only (`src/runtime/runtime.{c,h}` + one `main.rs` cc flag); **no
+`src/codegen/mod.rs` change**, so program-logic codegen is byte-identical by
+construction and the single-threaded corpus is byte-identical (326/0/2, gate
+green). The queue path has no HiLow-source surface until 5b, so it is proven by
+C-level unit tests (`tests/inbox_unit_harness.c` via `tests/inbox_unit.rs`).
+
+### E.1 Delivered
+- The four §B.5 statics are now `_Thread_local` (`hl_stealth_depth` stays a named
+  `extern _Thread_local` global — codegen emits it; the other three are
+  `static _Thread_local`).
+- `HiLowThreadContext` + mutex-guarded global registry, lazily created per thread
+  (`hl_current_ctx`); holds the MPSC mutex-guarded `HiLowInbox`.
+- Coalescing enqueue (`hl_inbox_enqueue`) keyed by watcher identity with mandatory
+  delta accumulation (R3); watcher retained (R6), cell retained (axiom 5), delta
+  ownership taken.
+- `HiLowWatcher.owner_ctx`; routing in `hl_cell_notify` via `hl_notify_deliver`
+  (same-thread → synchronous, byte-identical; else enqueue).
+- Drain (`hl_thread_drain_inbox`, detach-under-lock-then-fire; ended watchers drop
+  without firing, R5), safe-point hook (`hl_thread_safepoint` at `hl_object_new` /
+  `hl_array_new` / `print_str`; dormant single-threaded), teardown
+  (`hl_thread_final_drain`, axiom 6). `cc` gained `-pthread`.
+
+### E.2 Adjudications / deviations (binding record)
+| # | Deviation | Rationale |
+|---|-----------|-----------|
+| 5a-i | The four statics are `_Thread_local` **file-scope globals**, not `HiLowThreadContext` fields (the brief said "migrate into it"). | The per-thread invariant is what matters and it holds; `hl_stealth_depth` MUST stay a named global (generated C emits `hl_stealth_depth++`), so a struct field would force a codegen change. The context holds the inbox + registry — the parts that actually need cross-thread discovery. |
+| 5a-ii | The inbox owns `+1` on the entry's cell via `hl_cell_retain`/`hl_cell_release`, but `hl_cell_release`-at-0 does only cell-header teardown (the typed container release frees the struct), so the inbox must not be the cell's **sole** owner at drain. | UNREACHABLE in single-threaded 5a (the inbox is dormant — no real program enqueues). Resolved in 5c: the only cross-thread cells are typed `shared` scalars, so the entry will carry the scalar's typed release and can free a solely-owned container. Not a reachable 5a bug (KNOWN_MEMORY_BUGS stays empty). |
+| 5a-iii | The inbox entry snapshots `body_fn`/`env`/`cell`/`event` beyond the brief's `(watcher, delta, pending)` triple. | The body ABI is `body(env, cell, delta)`; the fire needs all three plus the event. `env` is the retained watcher's env (valid while retained, R6). |
+| 5a-iv | Drain points are **runtime safe points** (allocation/syscall), not codegen-emitted statement boundaries. | Owner AskUserQuestion ruling: the CLAUDE.md phase line ("allocation/syscall boundaries") and the brief §5a ("statement boundaries") disagreed, and statement-boundary drains would require emitting `hl_safepoint()` per statement — a program-logic codegen diff that 5a's own expected-diff forbids. Runtime safe points keep codegen byte-identical. |
+
+### E.3 Ordering non-guarantee (documented boundary, brief §5a)
+Per drain pass: one cell's watchers fire in declaration order; one producer's
+entries are observed in an order consistent with that producer's mutation order
+under coalescing. There is **no global order across producer threads** — stated
+here so it is a documented boundary, not a discovered surprise.
+
+### E.4 Forward to 5b/5c
+- 5b activates `test_watcher_reentrant_deferred` (ignored 2 → 1) and adds the first
+  cross-thread fixtures (order-insensitive invariants only); threaded runtime mode
+  (atomic refcounts iff `async`/`shared`) keeps the single-threaded corpus
+  byte-identical.
+- 5c resolves 5a-ii (typed `shared` scalars) and lands the `docs/hilow-design.md`
+  keyword-unification edit (R4); shared containers and `(deep)` across `shared` are
+  explicitly rejected.

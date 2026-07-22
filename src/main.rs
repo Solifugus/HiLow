@@ -126,6 +126,7 @@ fn invoke_cc(c_code: String, output_path: &str) -> Result<(), Box<dyn std::error
 
     // Compile with cc, using the unique temp directory for includes
     let status = Command::new("cc")
+        .arg("-pthread") // Phase 5a: thread-local statics + (5b) async pthreads
         .arg("-o")
         .arg(output_path)
         .arg(&temp_c_file)

@@ -249,7 +249,44 @@ typedef struct HiLowWatcher {
                            // soundness); the generated dtor releases each
                            // cell. The runtime frees the env itself either
                            // way; NULL means no cells to release.
+    struct HiLowThreadContext* owner_ctx; // Phase 5a: the thread context that
+                           // created this watcher. hl_cell_notify routes a fire
+                           // to owner_ctx: same as the mutating thread's context
+                           // → synchronous (exact, R1); different → enqueue into
+                           // owner_ctx's inbox (cross-context path, R6).
 } HiLowWatcher;
+
+// ===================== Phase 5a: notification queue =====================
+// A per-thread inbox owned by its declaring thread (MPSC, mutex-guarded). It is
+// EXCLUSIVELY the cross-context delivery path — same-thread delivery stays
+// synchronous and exact (R1). Opaque here; defined in runtime.c. This API is
+// scaffolding-grade but permanent (the queue's contract, §4 of the brief).
+typedef struct HiLowThreadContext HiLowThreadContext;
+
+// The calling thread's context, lazily created and registered on first use.
+HiLowThreadContext* hl_current_ctx(void);
+
+// Enqueue one cross-context fire into `owner`'s inbox. Retains `w` (+1, dropped
+// at drain — R6) and `cell`; takes ownership of `delta` (may be NULL for a bare
+// (changed)/(assigned) fire). Coalesces by watcher identity: a watcher already
+// pending accumulates this delta rather than appending a second entry (R3).
+void hl_inbox_enqueue(HiLowThreadContext* owner, HiLowWatcher* w, HiLowCell* cell,
+                      void* body_fn, void* env, int event, HiLowDelta* delta);
+
+// Drain the calling thread's inbox: fire (or skip ended watchers — R5) each
+// pending entry on this, the declaring, thread, then drop its retained refs.
+// Legal only at hl_notify_depth == 0 (never inside a body). Returns the number
+// of bodies fired. hl_thread_safepoint() is the cheap guarded form called at
+// runtime allocation/syscall safe points.
+size_t hl_thread_drain_inbox(void);
+void   hl_thread_safepoint(void);
+
+// Thread teardown: a final drain, then the inbox must be empty; end-of-world
+// residue is released without firing. Also tears down the context/registry.
+void hl_thread_final_drain(void);
+
+// Test-only introspection (used by the 5a inbox unit tests).
+size_t hl_inbox_pending_count(HiLowThreadContext* ctx);
 
 // Object support (Phase 7a)
 // Tagged union for all HiLow values that can be stored as object properties
@@ -666,8 +703,8 @@ bool hl_money_gt(HiLowMoney lhs, HiLowMoney rhs);
 bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs);
 
 // Phase 10a-stealth: watcher suppression depth.
-// Becomes thread-local in Phase 10b when async is added.
-extern int hl_stealth_depth;
+// Phase 5a: thread-local (producer-side suppression, per mutating thread).
+extern _Thread_local int hl_stealth_depth;
 
 // String operations (Managed Strings Sub-phase 1)
 bool hl_string_eq(HiLowArray* lhs, HiLowArray* rhs);

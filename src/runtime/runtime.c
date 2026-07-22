@@ -2,6 +2,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdarg.h>
+#include <pthread.h>     // Phase 5a: per-thread inbox mutex + thread-id
+#include <stdatomic.h>   // Phase 5a: inbox-nonempty flag (racy safe-point read)
 #include "runtime.h"
 
 void print_i32(int32_t value) {
@@ -33,6 +35,7 @@ void print_bool(bool value) {
 }
 
 void print_str(const char *value) {
+    hl_thread_safepoint();  // Phase 5a: syscall/output safe point (dormant single-threaded)
     printf("%s\n", value);
 }
 
@@ -44,13 +47,20 @@ void print_nothing(void) {
 }
 
 // Phase 10a-stealth: watcher suppression depth.
-// Becomes thread-local in Phase 10b when async is added.
-int hl_stealth_depth = 0;
+// Phase 5a: thread-local. Stealth is producer-side — a write made during a
+// stealth block on one thread suppresses notification everywhere (same-thread
+// fire and cross-thread enqueue), so the depth is per-mutating-thread. Stays a
+// named global symbol (not a context-struct field) because generated code emits
+// `hl_stealth_depth++/--` directly (codegen byte-identical).
+_Thread_local int hl_stealth_depth = 0;
 
 // Phase 2d: deep-walk epoch. Each parent walk takes a fresh epoch and stamps
 // visited cells' version fields — diamonds (and any future cycles) collapse
 // to one visit per cell per walk.
-static uint64_t hl_deep_epoch = 0;
+// Phase 5a: thread-local. Cross-thread visibility flows only through `shared`
+// values (5c), so deep walks over non-shared structure are declaring-thread-only
+// by construction; each thread owns its epoch counter.
+static _Thread_local uint64_t hl_deep_epoch = 0;
 
 // Phase 2d containment-bookkeeping helpers (defined with the array mutators).
 static void array_element_stored(HiLowArray* arr, void* slot);
@@ -332,6 +342,7 @@ HiLowArray* hl_format_center(HiLowArray* value, int width) {
 static HiLowObject* hl_object_get_proto(HiLowObject* obj);
 
 HiLowObject* hl_object_new(void) {
+    hl_thread_safepoint();  // Phase 5a: allocation safe point (dormant single-threaded)
     HiLowObject* obj = malloc(sizeof(HiLowObject));
     hl_alloc_count++;
 
@@ -1047,16 +1058,20 @@ void hl_delta_release(HiLowDelta* d) {
 // the body's borrowed snapshot of the old value — must outlive it. The
 // deferred list drains when the outermost walk completes; releases never
 // notify, so draining cannot recurse into a walk.
-static int hl_notify_depth = 0;
+// Phase 5a: thread-local (per-execution-context by nature — a notify walk runs
+// entirely on one thread).
+static _Thread_local int hl_notify_depth = 0;
 
 typedef void (*hl_deferred_release_fn)(void*);
 typedef struct {
     hl_deferred_release_fn fn;
     void* ptr;
 } HiLowDeferredRelease;
-static HiLowDeferredRelease* hl_deferred_releases = NULL;
-static size_t hl_deferred_len = 0;
-static size_t hl_deferred_cap = 0;
+// Phase 5a: thread-local. Deferred releases are freed by the thread that
+// deferred them; cross-thread frees are precisely what this design avoids.
+static _Thread_local HiLowDeferredRelease* hl_deferred_releases = NULL;
+static _Thread_local size_t hl_deferred_len = 0;
+static _Thread_local size_t hl_deferred_cap = 0;
 
 static void hl_release_array_voidp(void* p) { hl_array_release((HiLowArray*)p); }
 static void hl_release_object_voidp(void* p) { hl_object_release((HiLowObject*)p); }
@@ -1083,6 +1098,206 @@ static void hl_drain_deferred_releases(void) {
         hl_deferred_releases[i].fn(hl_deferred_releases[i].ptr);
     }
     hl_deferred_len = 0;
+}
+
+// ===================== Phase 5a: notification queue =====================
+// Same-thread delivery stays synchronous and exact (R1); this inbox is the
+// EXCLUSIVELY cross-thread path. Through Phase 5a only one thread exists, so no
+// watcher is ever owned by a thread other than the mutating one — hl_cell_notify
+// always takes the synchronous branch and this machinery is exercised only by
+// the inbox unit tests (tests/inbox_unit_harness.c). The single-threaded corpus
+// stays byte-identical: the routing check, the safe-point drains, and the
+// owner_ctx stamp are all no-ops or same-thread on one thread.
+
+// One accumulated delta in an entry (R3: deltas are never dropped on coalesce;
+// HiLowDelta carries no link of its own, so wrap it).
+typedef struct HiLowInboxDelta {
+    HiLowDelta* delta;
+    struct HiLowInboxDelta* next;
+} HiLowInboxDelta;
+
+// One coalescing entry, keyed by watcher identity (§4 axioms 1-2).
+typedef struct HiLowInboxEntry {
+    HiLowWatcher* watcher;      // retained +1 at enqueue, dropped at drain (R6)
+    HiLowCell* cell;            // retained (container refcount); the body's cell arg
+    void* body_fn;              // snapshot of the subscription's fire closure
+    void* env;                  // == watcher->env; valid while the watcher is retained
+    int event;                  // event for a collapsed bare-(changed) fire
+    HiLowInboxDelta* deltas;    // accumulated payload deltas, OWNED (fired in order)
+    HiLowInboxDelta* deltas_tail;
+    bool pending;               // at-least-once: fire even with no payload delta
+    struct HiLowInboxEntry* next;
+} HiLowInboxEntry;
+
+typedef struct HiLowInbox {
+    pthread_mutex_t lock;
+    HiLowInboxEntry* head;      // MPSC: producers push under lock, owner drains
+    atomic_int nonempty;        // cheap racy flag the owner tests at safe points
+} HiLowInbox;
+
+struct HiLowThreadContext {
+    HiLowInbox inbox;
+    uint64_t thread_id;                  // owner comparison / documented ordering
+    struct HiLowThreadContext* reg_next; // global registry link
+};
+
+// Global thread registry (mutex-guarded; off the hot path). Threads self-register
+// on first hl_current_ctx() and unregister at hl_thread_final_drain.
+static pthread_mutex_t hl_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+static HiLowThreadContext* hl_registry = NULL;
+static uint64_t hl_next_thread_id = 0;
+
+static _Thread_local HiLowThreadContext* hl_tls_ctx = NULL;
+
+HiLowThreadContext* hl_current_ctx(void) {
+    if (hl_tls_ctx) return hl_tls_ctx;
+    HiLowThreadContext* ctx = calloc(1, sizeof(HiLowThreadContext));
+    pthread_mutex_init(&ctx->inbox.lock, NULL);
+    ctx->inbox.head = NULL;
+    atomic_init(&ctx->inbox.nonempty, 0);
+    pthread_mutex_lock(&hl_registry_lock);
+    ctx->thread_id = hl_next_thread_id++;
+    ctx->reg_next = hl_registry;
+    hl_registry = ctx;
+    pthread_mutex_unlock(&hl_registry_lock);
+    hl_tls_ctx = ctx;
+    return ctx;
+}
+
+// Accumulate one delta into an entry (transfers ownership). A NULL delta (a bare
+// (changed)/(assigned) fire) adds no node but marks the entry pending (R3: the
+// changed-collapse; the payload deltas below always accumulate).
+static void hl_inbox_accumulate(HiLowInboxEntry* e, HiLowDelta* delta) {
+    e->pending = true;
+    if (!delta) return;
+    HiLowInboxDelta* node = malloc(sizeof(HiLowInboxDelta));
+    node->delta = delta;
+    node->next = NULL;
+    if (e->deltas_tail) e->deltas_tail->next = node; else e->deltas = node;
+    e->deltas_tail = node;
+}
+
+// Copy a borrowed notify delta into a queue-owned one. The delta reaching
+// hl_cell_notify is borrowed (the mutator releases it after notify returns), so
+// the cross-thread branch cannot adopt it — it copies. In all of Phase 5 the
+// only cross-thread fires are scalar `shared` assignments (HL_SCALAR_ASSIGNED,
+// NULL delta) — shared containers are rejected in 5c, so an object-payload delta
+// never reaches this path; the object branch is a documented 5b/5c wiring point
+// (delta-ownership transfer from the mutator), never hit in Phase 5, never a
+// silent drop of a reachable delta.
+static HiLowDelta* hl_delta_copy_for_queue(const HiLowDelta* d) {
+    if (!d) return NULL;
+    if (d->event == HL_ARR_MOVED) return hl_delta_new_moved(d->from, d->to);
+    if (d->payload_release != NULL) return NULL; // object payload: unreachable in Phase 5
+    return hl_delta_new_elem(d->event, d->payload, d->payload_size, NULL, NULL);
+}
+
+void hl_inbox_enqueue(HiLowThreadContext* owner, HiLowWatcher* w, HiLowCell* cell,
+                      void* body_fn, void* env, int event, HiLowDelta* delta) {
+    pthread_mutex_lock(&owner->inbox.lock);
+    HiLowInboxEntry* e = owner->inbox.head;
+    while (e && e->watcher != w) e = e->next;   // coalesce by watcher identity
+    if (e) {
+        hl_inbox_accumulate(e, delta);          // R3: merge, never append/drop
+    } else {
+        e = malloc(sizeof(HiLowInboxEntry));
+        hl_watcher_retain(w);                   // R6: env/body_fn valid across gap
+        hl_cell_retain(cell);                   // own the cell across the gap (axiom 5)
+        e->watcher = w; e->cell = cell;
+        e->body_fn = body_fn; e->env = env; e->event = event;
+        e->deltas = NULL; e->deltas_tail = NULL; e->pending = false;
+        hl_inbox_accumulate(e, delta);
+        e->next = owner->inbox.head;
+        owner->inbox.head = e;
+    }
+    atomic_store(&owner->inbox.nonempty, 1);
+    pthread_mutex_unlock(&owner->inbox.lock);
+}
+
+size_t hl_inbox_pending_count(HiLowThreadContext* ctx) {
+    size_t n = 0;
+    pthread_mutex_lock(&ctx->inbox.lock);
+    for (HiLowInboxEntry* e = ctx->inbox.head; e; e = e->next) n++;
+    pthread_mutex_unlock(&ctx->inbox.lock);
+    return n;
+}
+
+// Fire one drained entry on the declaring (calling) thread, then free it. Ended
+// watchers drop WITHOUT firing (R5; the 3e-β dead-watcher ruling extended across
+// the enqueue/drain gap). Owned resources are released either way (axioms 1,2,4).
+static bool hl_inbox_fire_entry(HiLowInboxEntry* e) {
+    HiLowWatcher* w = e->watcher;
+    bool live = w && w->active && !w->ended;
+    if (live) {
+        if (e->deltas) {
+            for (HiLowInboxDelta* d = e->deltas; d; d = d->next) {
+                ((HiLowWatcherBody)e->body_fn)(e->env, e->cell, d->delta);
+            }
+        } else if (e->pending) {
+            ((HiLowWatcherBody)e->body_fn)(e->env, e->cell, NULL);
+        }
+    }
+    for (HiLowInboxDelta* d = e->deltas; d; ) {
+        HiLowInboxDelta* next = d->next;
+        hl_delta_release(d->delta);
+        free(d);
+        d = next;
+    }
+    hl_cell_release(e->cell);
+    hl_watcher_release(w);
+    free(e);
+    return live;
+}
+
+size_t hl_thread_drain_inbox(void) {
+    HiLowThreadContext* ctx = hl_current_ctx();
+    // Detach the whole list under the lock, then fire outside it so a body may
+    // enqueue (same- or cross-thread) without deadlocking and same-thread
+    // synchronous fires inside a body are unaffected.
+    pthread_mutex_lock(&ctx->inbox.lock);
+    HiLowInboxEntry* list = ctx->inbox.head;
+    ctx->inbox.head = NULL;
+    atomic_store(&ctx->inbox.nonempty, 0);
+    pthread_mutex_unlock(&ctx->inbox.lock);
+
+    size_t fired = 0;
+    while (list) {
+        HiLowInboxEntry* next = list->next;
+        if (hl_inbox_fire_entry(list)) fired++;
+        list = next;
+    }
+    return fired;
+}
+
+void hl_thread_safepoint(void) {
+    // A drain is legal only at hl_notify_depth == 0 (never inside a body). Do NOT
+    // create a context here: a thread that never watches keeps NULL and pays
+    // nothing. The nonempty flag is a cheap racy read — a false negative is
+    // corrected at the next safe point, a false positive just locks and finds
+    // nothing. Single-threaded: no cross-thread producer, so always nonempty==0.
+    if (hl_notify_depth != 0) return;
+    HiLowThreadContext* ctx = hl_tls_ctx;
+    if (!ctx) return;
+    if (atomic_load(&ctx->inbox.nonempty) == 0) return;
+    hl_thread_drain_inbox();
+}
+
+// Thread teardown: a final drain (axiom 6 — after this the inbox is empty), then
+// unregister and destroy the context. In 5a nothing calls this on the main
+// thread (no thread teardown hook yet — that is 5b's join path); it is exercised
+// by the unit tests and is the permanent contract.
+void hl_thread_final_drain(void) {
+    HiLowThreadContext* ctx = hl_tls_ctx;
+    if (!ctx) return;
+    hl_thread_drain_inbox();
+    pthread_mutex_lock(&hl_registry_lock);
+    HiLowThreadContext** pp = &hl_registry;
+    while (*pp && *pp != ctx) pp = &(*pp)->reg_next;
+    if (*pp) *pp = ctx->reg_next;
+    pthread_mutex_unlock(&hl_registry_lock);
+    pthread_mutex_destroy(&ctx->inbox.lock);
+    free(ctx);
+    hl_tls_ctx = NULL;
 }
 
 // Phase 2d: recursively collect the not-yet-visited ancestors of c into a
@@ -1154,9 +1369,26 @@ static size_t snapshot_cell_nodes(HiLowCell* c, HiLowNodeSnap inline_buf[], HiLo
     return n;
 }
 
+// Deliver one fire to a subscriber: synchronous on the owning thread (R1, exact
+// same-thread semantics), or enqueued into the owner's inbox when the owner is a
+// different thread (R6). Single-threaded: owner is always `self`, so every fire
+// takes the synchronous branch and generated behavior is byte-identical.
+static void hl_notify_deliver(HiLowThreadContext* self, HiLowWatcher* state,
+                              void* body_fn, void* env, HiLowCell* cell,
+                              int event, const HiLowDelta* delta) {
+    HiLowThreadContext* owner = state->owner_ctx;
+    if (owner == NULL || owner == self) {
+        ((HiLowWatcherBody)body_fn)(env, cell, delta);
+    } else {
+        hl_inbox_enqueue(owner, state, cell, body_fn, env, event,
+                         hl_delta_copy_for_queue(delta));
+    }
+}
+
 void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
     if (hl_stealth_depth != 0) return;
     hl_notify_depth++;
+    HiLowThreadContext* self = hl_current_ctx();
 
     // Collect-then-fire (Phase 3e-β): the traversal is atomic with respect
     // to body execution — the same discipline the deep walk below has had
@@ -1174,7 +1406,7 @@ void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
         if (snap[i].modifier == event
             || (snap[i].modifier == HL_ARR_CHANGED && event != HL_SCALAR_ASSIGNED)
             || (snap[i].modifier == HL_ARR_DEEP && event != HL_SCALAR_ASSIGNED)) {
-            ((HiLowWatcherBody)snap[i].body_fn)(snap[i].env, c, delta);
+            hl_notify_deliver(self, state, snap[i].body_fn, snap[i].env, c, event, delta);
         }
     }
     if (snap != inline_buf) free(snap);
@@ -1196,7 +1428,8 @@ void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
                 HiLowWatcher* state = a_snap[j].watcher;
                 if (state == NULL || !state->active || state->ended) continue;
                 if (a_snap[j].modifier == HL_ARR_DEEP) {
-                    ((HiLowWatcherBody)a_snap[j].body_fn)(a_snap[j].env, ancestors[i], delta);
+                    hl_notify_deliver(self, state, a_snap[j].body_fn, a_snap[j].env,
+                                      ancestors[i], event, delta);
                 }
             }
             if (a_snap != a_inline) free(a_snap);
@@ -1220,6 +1453,10 @@ HiLowWatcher* hl_watcher_new(void) {
     w->subs = NULL;            // No subscriptions yet (Phase 2a)
     w->env = NULL;             // No owned env (Phase 2b)
     w->env_dtor = NULL;        // No retained env cells (Phase 3b)
+    w->owner_ctx = hl_current_ctx();  // Phase 5a: the declaring thread's context;
+                               // hl_cell_notify routes a fire here. Single-thread:
+                               // this is the main context, always == the mutating
+                               // thread's, so delivery stays synchronous (R1).
     return w;
 }
 
@@ -2688,6 +2925,7 @@ bool hl_money_ge(HiLowMoney lhs, HiLowMoney rhs) {
 // Array support (Array Phase A)
 
 HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn retain_fn, hl_elem_fn release_fn) {
+    hl_thread_safepoint();  // Phase 5a: allocation safe point (dormant single-threaded)
     HiLowArray* arr = malloc(sizeof(HiLowArray));
     hl_alloc_count++;
 
