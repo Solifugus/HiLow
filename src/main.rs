@@ -65,7 +65,7 @@ fn compile_single_file(mut ast: TopLevel, output_path: &str) -> Result<(), Box<d
     let c_code = codegen.generate(&ast, &type_checker)
         .map_err(|e| format!("Code generation error: {}", e))?;
 
-    invoke_cc(c_code, output_path)
+    invoke_cc(c_code, output_path, codegen.uses_async())
 }
 
 fn compile_graph(abs_entry_path: &Path, entry_ast: TopLevel, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -97,10 +97,10 @@ fn compile_graph(abs_entry_path: &Path, entry_ast: TopLevel, output_path: &str) 
     let mut codegen = codegen::CodeGenerator::new();
     let c_code = codegen.generate_graph(&graph, &type_checker, abs_entry_path)?;
 
-    invoke_cc(c_code, output_path)
+    invoke_cc(c_code, output_path, codegen.uses_async())
 }
 
-fn invoke_cc(c_code: String, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn invoke_cc(c_code: String, output_path: &str, threaded: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Create a unique temporary directory per process to avoid race conditions
     let pid = std::process::id();
     let temp_dir = format!("/tmp/hilow_{}", pid);
@@ -125,8 +125,16 @@ fn invoke_cc(c_code: String, output_path: &str) -> Result<(), Box<dyn std::error
         .map_err(|e| format!("Failed to write runtime.c: {}", e))?;
 
     // Compile with cc, using the unique temp directory for includes
-    let status = Command::new("cc")
-        .arg("-pthread") // Phase 5a: thread-local statics + (5b) async pthreads
+    let mut cmd = Command::new("cc");
+    cmd.arg("-pthread"); // Phase 5a: thread-local statics + (5b) async pthreads
+    // Phase 5b: threaded runtime mode — atomic refcounts in BOTH main.c and
+    // runtime.c (one cc invocation, one -D). Only for programs that use async;
+    // a single-threaded program gets no -D, so the runtime's refcount macros
+    // expand to the exact plain ++/-- and behavior is unchanged.
+    if threaded {
+        cmd.arg("-DHILOW_THREADED");
+    }
+    let status = cmd
         .arg("-o")
         .arg(output_path)
         .arg(&temp_c_file)

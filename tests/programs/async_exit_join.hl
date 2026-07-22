@@ -1,0 +1,16 @@
+// Phase 5b fixture 5: the program-exit join path. Main does NOT loop-drain, so
+// the producer's notification is still in flight when main's body completes.
+// At exit the runtime joins the async thread (the synchronization edge that
+// makes its enqueue visible), then main drains last, delivering the residual
+// entry — the watcher fires exactly once. Proves the join-then-drain exit
+// semantics deliver an in-flight entry rather than dropping it.
+high program(): i32 {
+    let x = 0
+    let w = watcher((changed)x) {
+        print("delivered")
+    }
+    async {
+        x = 7
+    }
+    return 0
+}

@@ -1,0 +1,22 @@
+// Phase 5b fixture 2: three async producers, each mutating its own watched
+// scalar, all enqueuing onto main's single inbox (MPSC). Main blocks until all
+// three watchers have fired (`seen` reaches 3, set on the main thread during
+// drains), proving every producer's notification was delivered. Disjoint cells
+// → no data race on the watched state; the conservation invariant (seen == 3)
+// is scheduling-independent.
+high program(): i32 {
+    let a = 0
+    let b = 0
+    let c = 0
+    let seen = 0
+    let wa = watcher((changed)a) { seen += 1 }
+    let wb = watcher((changed)b) { seen += 1 }
+    let wc = watcher((changed)c) { seen += 1 }
+    async { a = 1 }
+    async { b = 1 }
+    async { c = 1 }
+    while (seen < 3) { }
+    print("all delivered")
+    print(seen)
+    return 0
+}

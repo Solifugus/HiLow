@@ -340,6 +340,24 @@ impl Analyzer {
         self.pop_scope();
     }
 
+    /// Phase 5b: an `async` block is a capture boundary like a watcher — any
+    /// outer variable it references (read OR write) must box so the spawned
+    /// thread reaches it as a heap cell (a program-scope static), atomically
+    /// refcounted. Reuses the watcher-boundary machinery; the recorded reason
+    /// is `WatcherCaptured` (async has no separate env struct — the body
+    /// references program-scope statics directly, so the capture list under
+    /// this key is unused). This boundary only exists in `async`-containing
+    /// (threaded) programs, so the single-threaded corpus is untouched.
+    fn walk_async(&mut self, body: &Block, pos: &Position) {
+        self.push_scope();
+        self.watcher_boundaries.push(self.scopes.len() - 1);
+        self.watcher_keys.push((pos.line, pos.column));
+        self.walk_items(&body.items);
+        self.watcher_keys.pop();
+        self.watcher_boundaries.pop();
+        self.pop_scope();
+    }
+
     fn walk_watcher_expr(&mut self, w: &WatcherExpr) {
         for sub in &w.subscriptions {
             self.mark_subscription(sub, false);
@@ -423,6 +441,7 @@ impl Analyzer {
                 }
             }
             Statement::StealthBlock(b, _) => self.walk_block(b),
+            Statement::Async(b, pos) => self.walk_async(b, pos),
             Statement::ExprStatement(e) => self.walk_expression(e),
         }
     }

@@ -208,6 +208,18 @@ pub struct CodeGenerator {
     /// PROGRAM-scope variables — nested named functions subscribe/capture
     /// them by cell identity (emitted right after the includes).
     boxed_scalar_statics: String,
+    /// Phase 5b: emitted C bodies for `async { }` blocks (each a
+    /// `void* fn(void*)` pthread entry), concatenated after watcher_bodies and
+    /// before main().
+    async_bodies: String,
+    /// Phase 5b: true iff the program contains an `async` block (threaded
+    /// runtime mode). Set by a pre-scan at the top of generate/generate_graph.
+    /// Gates loop-backedge safe points, the exit join/drain, and -DHILOW_THREADED
+    /// — so a program without `async` emits byte-identical C (mode switch, not
+    /// hope).
+    uses_async: bool,
+    /// Phase 5b: counter for unique async body function names.
+    async_counter: usize,
 }
 
 impl CodeGenerator {
@@ -251,7 +263,65 @@ impl CodeGenerator {
             boxed_bindings: Vec::new(),
             boxed_hoisted: HashSet::new(),
             boxed_scalar_statics: String::new(),
+            async_bodies: String::new(),
+            uses_async: false,
+            async_counter: 0,
         }
+    }
+
+    /// Phase 5b: expose whether the generated program uses `async` (threaded
+    /// runtime mode). main.rs reads this after generate() to pass
+    /// -DHILOW_THREADED to cc for both main.c and runtime.c.
+    pub fn uses_async(&self) -> bool {
+        self.uses_async
+    }
+
+    /// Phase 5b: recursively scan a block for an `async` statement. Runs once
+    /// before codegen so loop-backedge safe points know the mode before any
+    /// loop (which may textually precede the async block) is emitted.
+    fn block_has_async(block: &crate::ast::Block) -> bool {
+        block.items.iter().any(|item| match item {
+            crate::ast::BlockItem::Statement(s) => Self::stmt_has_async(s),
+            crate::ast::BlockItem::Function(f) => f
+                .body
+                .as_ref()
+                .map_or(false, |b| Self::block_has_async(b)),
+            crate::ast::BlockItem::Watcher(w) => Self::block_has_async(&w.body),
+        })
+    }
+
+    fn stmt_has_async(s: &Statement) -> bool {
+        match s {
+            Statement::Async(..) => true,
+            Statement::StealthBlock(b, _) => Self::block_has_async(b),
+            Statement::If(i) => {
+                Self::block_has_async(&i.then_block)
+                    || i.else_block.as_ref().map_or(false, |b| Self::block_has_async(b))
+            }
+            Statement::While(w) => Self::block_has_async(&w.body),
+            Statement::Loop(l) => Self::block_has_async(&l.body),
+            Statement::ForIn(f) => Self::block_has_async(&f.body),
+            Statement::Switch(sw) => {
+                sw.cases.iter().any(|c| c.body.iter().any(Self::stmt_has_async))
+                    || sw
+                        .default
+                        .as_ref()
+                        .map_or(false, |d| d.iter().any(Self::stmt_has_async))
+            }
+            _ => false,
+        }
+    }
+
+    /// Phase 5b: does this program body contain an `async` block?
+    fn program_body_has_async(body: &ProgramBody) -> bool {
+        body.items.iter().any(|item| match item {
+            BlockItem::Statement(s) => Self::stmt_has_async(s),
+            BlockItem::Function(f) => f
+                .body
+                .as_ref()
+                .map_or(false, |b| Self::block_has_async(b)),
+            BlockItem::Watcher(w) => Self::block_has_async(&w.body),
+        })
     }
 
     /// Phase 3b: does the 3a analysis box the declaration at (name, pos)?
@@ -351,6 +421,15 @@ impl CodeGenerator {
         // consults it at every scalar declaration, read, and assignment.
         self.boxing = Some(crate::typecheck::boxing::analyze(top_level));
 
+        // Phase 5b: detect threaded runtime mode BEFORE emitting any code — a
+        // loop may textually precede the async block that puts the program in
+        // threaded mode, and its back-edge safe point must know.
+        if let TopLevel::Program(p) = top_level {
+            if let Some(body) = &p.body {
+                self.uses_async = Self::program_body_has_async(body);
+            }
+        }
+
         // Build the final output in the correct order:
         // 1. Includes
         // 2. Environment struct definitions (from closures)
@@ -400,6 +479,9 @@ impl CodeGenerator {
 
         // Add watcher bodies (Phase 10-γ)
         final_output.push_str(&self.watcher_bodies);
+
+        // Add async block bodies (Phase 5b) — pthread entry functions, before main
+        final_output.push_str(&self.async_bodies);
 
         // Add main program code
         final_output.push_str(&self.output);
@@ -499,6 +581,12 @@ impl CodeGenerator {
                 TopLevel::Program(program) => {
                     // This should be the entry program - process last
                     if abs_path == &entry_abs_path.to_string_lossy().to_string() {
+                        // Phase 5b: threaded mode iff the entry program uses async
+                        // (imported modules are library functions; async is a
+                        // program-body feature).
+                        if let Some(body) = &program.body {
+                            self.uses_async = Self::program_body_has_async(body);
+                        }
                         // Generate the main program
                         self.generate_main_function(program, type_checker)?;
                     }
@@ -527,6 +615,9 @@ impl CodeGenerator {
 
         // Add watcher bodies (Phase 10-γ)
         final_output.push_str(&self.watcher_bodies);
+
+        // Add async block bodies (Phase 5b)
+        final_output.push_str(&self.async_bodies);
 
         // Add main program code
         final_output.push_str(&self.output);
@@ -863,6 +954,157 @@ impl CodeGenerator {
         self.current_function_return_type = None;
 
         self.output.push_str("}\n\n");
+        Ok(())
+    }
+
+    /// Phase 5b: emit an `async { }` block. The body becomes a
+    /// `void* fn(void*)` pthread entry (into async_bodies, before main); the
+    /// statement site spawns it via hl_async_spawn. Outer variables the body
+    /// references are captured into a heap env struct (the boxing async
+    /// boundary recorded them), packed with a retained reference at the spawn
+    /// site and released when the thread's body finishes — the same env
+    /// machinery watcher bodies use. A boxed program-scope scalar is reachable
+    /// as its file-scope static, but a program-scope container is a main-local,
+    /// so the env is the uniform path for both. Mutating a watched cell from
+    /// the spawned thread routes through hl_cell_notify → the declaring
+    /// thread's inbox (the phase's whole point). The body ends by releasing its
+    /// env and calling hl_thread_final_drain() to tear down this producer
+    /// thread's (empty) inbox/context.
+    fn generate_async_block(
+        &mut self,
+        block: &Block,
+        position: &Position,
+        type_checker: &TypeChecker,
+    ) -> Result<(), CodegenError> {
+        let id = self.async_counter;
+        self.async_counter += 1;
+        let fn_name = format!("hilow_async_body_{}", id);
+        let env_struct_name = format!("hilow_async_env_{}", id);
+
+        // Captures recorded by the boxing async boundary (walk_async).
+        let analysis_captures: Vec<String> = self
+            .boxing
+            .as_ref()
+            .map(|b| b.captures_for(position).to_vec())
+            .unwrap_or_default();
+        let mut env_fields: Vec<(String, EnvSlot)> = Vec::new();
+        for var_name in &analysis_captures {
+            if env_fields.iter().any(|(n, _)| n == var_name) {
+                continue;
+            }
+            let slot = if self.current_binding_boxed(var_name) {
+                EnvSlot::Scalar
+            } else {
+                match self.variable_types.get(var_name) {
+                    Some(Type::DynamicArray(_)) | Some(Type::String) => EnvSlot::Array,
+                    Some(Type::Object(_)) => EnvSlot::Object,
+                    Some(Type::I32) => EnvSlot::Scalar,
+                    other => {
+                        return Err(CodegenError::UnsupportedFeature {
+                            feature: format!("async capture of '{}' with type {:?}", var_name, other),
+                            phase: "Phase 5b captures i32 (boxed)/string/array/object program-scope variables".to_string(),
+                        });
+                    }
+                }
+            };
+            env_fields.push((var_name.clone(), slot));
+        }
+
+        let env_dtor_name = if env_fields.is_empty() {
+            None
+        } else {
+            Some(self.emit_watcher_env_struct(&env_struct_name, &env_fields))
+        };
+
+        // --- generate the body into a fresh buffer, in a nested-function
+        // context (references to captures resolve to env_cast->field; the
+        // body's own owners/temps/loops/scope are local — the generate_function
+        // save/restore, minus params).
+        let saved_output = std::mem::take(&mut self.output);
+        let saved_transferred = std::mem::take(&mut self.transferred_vars);
+        let saved_heap_owners = std::mem::take(&mut self.heap_owners);
+        let saved_temp_frames = std::mem::take(&mut self.enclosing_temp_frames);
+        let saved_loop_frames = std::mem::take(&mut self.loop_frames);
+        let saved_temp_owners = std::mem::take(&mut self.temp_owners);
+        let saved_pending_decls = std::mem::take(&mut self.pending_statement_decls);
+        let saved_in_c_switch = self.in_c_switch;
+        let saved_in_string_switch = self.in_string_switch;
+        let saved_in_main = self.in_main_program;
+        let saved_hoisted = self.hoisted_variables.clone();
+        let saved_boxed_hoisted = self.boxed_hoisted.clone();
+        let saved_current_env_var = self.current_env_var.clone();
+        let saved_return_type = self.current_function_return_type.take();
+        let saved_scope_depth = self.scope_depth;
+        self.in_c_switch = false;
+        self.in_string_switch = false;
+        self.in_main_program = false;
+        self.scope_depth = 0;
+        self.hoisted_variables.clear();
+        self.boxed_hoisted.clear();
+        self.current_env_var = None;
+
+        if !env_fields.is_empty() {
+            self.current_env_var = Some("env_cast".to_string());
+            for (var_name, slot) in &env_fields {
+                self.hoisted_variables
+                    .insert(var_name.clone(), ("env_cast".to_string(), env_struct_name.clone()));
+                if matches!(slot, EnvSlot::Scalar) {
+                    self.boxed_hoisted.insert(var_name.clone());
+                }
+            }
+            self.output.push_str(&format!(
+                "  {}* env_cast = ({}*)__hl_async_arg;\n",
+                env_struct_name, env_struct_name
+            ));
+        }
+
+        self.generate_block(block, type_checker)?;
+
+        // Release the captured env (dtor releases each retained field), free it.
+        if let Some(dtor) = &env_dtor_name {
+            self.output.push_str(&format!("  {}(env_cast);\n", dtor));
+            self.output.push_str("  free(env_cast); hl_free_count++;\n");
+        }
+        self.output.push_str("  hl_thread_final_drain();\n  return NULL;\n");
+        let body_c = std::mem::take(&mut self.output);
+
+        // Restore the enclosing (main) context.
+        self.output = saved_output;
+        self.transferred_vars = saved_transferred;
+        self.heap_owners = saved_heap_owners;
+        self.enclosing_temp_frames = saved_temp_frames;
+        self.loop_frames = saved_loop_frames;
+        self.temp_owners = saved_temp_owners;
+        self.pending_statement_decls = saved_pending_decls;
+        self.in_c_switch = saved_in_c_switch;
+        self.in_string_switch = saved_in_string_switch;
+        self.in_main_program = saved_in_main;
+        self.hoisted_variables = saved_hoisted;
+        self.boxed_hoisted = saved_boxed_hoisted;
+        self.current_env_var = saved_current_env_var;
+        self.current_function_return_type = saved_return_type;
+        self.scope_depth = saved_scope_depth;
+
+        // Emit the thread entry function (before main).
+        self.async_bodies
+            .push_str(&format!("static void* {}(void* __hl_async_arg) {{\n", fn_name));
+        if env_fields.is_empty() {
+            self.async_bodies.push_str("  (void)__hl_async_arg;\n");
+        }
+        self.async_bodies.push_str(&body_c);
+        self.async_bodies.push_str("}\n\n");
+
+        // Spawn at the statement site (in main), packing the env first.
+        if env_fields.is_empty() {
+            self.output
+                .push_str(&format!("  hl_async_spawn(&{}, NULL);\n", fn_name));
+        } else {
+            let env_var = format!("__hl_async_env_{}", id);
+            let pack = self.watcher_env_pack_decl(&env_struct_name, &env_var, &env_fields);
+            self.output.push_str(&format!("  {}\n", pack));
+            self.output
+                .push_str(&format!("  hl_async_spawn(&{}, (void*){});\n", fn_name, env_var));
+        }
         Ok(())
     }
 
@@ -1246,6 +1488,9 @@ impl CodeGenerator {
             }
             Statement::StealthBlock(block, position) => {
                 self.generate_stealth_block(block, position, type_checker)?;
+            }
+            Statement::Async(block, position) => {
+                self.generate_async_block(block, position, type_checker)?;
             }
         }
 
@@ -1889,6 +2134,16 @@ impl CodeGenerator {
             self.emit_temp_cleanup();
             self.emit_enclosing_temp_releases(0);
 
+            // Phase 5b: an explicit `return` in main is a program-exit path — the
+            // fall-through join/drain in emit_main_function would be dead code
+            // after it. Join async threads then drain last here too, before the
+            // scope cleanup releases the watched program-scope cells. (Only one
+            // main-exit path runs at a time, so emitting on both is safe.)
+            if self.uses_async {
+                self.output.push_str("  hl_async_join_all();\n");
+                self.output.push_str("  hl_thread_final_drain();\n");
+            }
+
             // Phase 9b fix: Emit cleanup for all scopes before returning
             for scope in (1..=self.scope_depth).rev() {
                 self.emit_early_return_cleanup(scope);
@@ -2054,10 +2309,23 @@ impl CodeGenerator {
         self.loop_frames.pop();
     }
 
+    /// Phase 5b: in threaded runtime mode, emit a loop back-edge drain check at
+    /// the top of a loop body (brief §5b amendment). Reading the inbox-nonempty
+    /// flag each iteration lets a pure-compute `loop { }` event loop drain its
+    /// inbox (runtime-entry safe points alone never fire in a loop that does not
+    /// allocate). Emits NOTHING when the program has no `async` block, so the
+    /// single-threaded corpus is byte-identical.
+    fn emit_loop_safepoint(&mut self) {
+        if self.uses_async {
+            self.output.push_str("    hl_thread_safepoint();\n");
+        }
+    }
+
     fn generate_while_statement(&mut self, while_stmt: &WhileStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         self.output.push_str("  while (");
         self.generate_condition(&while_stmt.condition, type_checker)?;
         self.output.push_str(") {\n");
+        self.emit_loop_safepoint();
 
         let saved_flags = self.enter_loop_body(Vec::new());
         let result = self.generate_block(&while_stmt.body, type_checker);
@@ -2070,6 +2338,7 @@ impl CodeGenerator {
 
     fn generate_loop_statement(&mut self, loop_stmt: &LoopStmt, type_checker: &TypeChecker) -> Result<(), CodegenError> {
         self.output.push_str("  while (1) {\n");
+        self.emit_loop_safepoint();
 
         let saved_flags = self.enter_loop_body(Vec::new());
         let result = self.generate_block(&loop_stmt.body, type_checker);
@@ -2111,6 +2380,7 @@ impl CodeGenerator {
 
                 // Generate the iteration loop
                 self.output.push_str("    for (size_t __iter_i = 0; __iter_i < __iter_count; __iter_i++) {\n");
+                self.emit_loop_safepoint();
 
                 // Get key and type for current iteration. The key is a managed
                 // string wrapping the object's internal char* key, released at
@@ -2166,6 +2436,7 @@ impl CodeGenerator {
                 // Generate the iteration loop with live length re-read (allows mutation during iteration)
                 self.output.push_str(&format!("    for (size_t {} = 0; {} < hl_array_len(__iter_arr); {}++) {{\n",
                     for_in_stmt.key_name, for_in_stmt.key_name, for_in_stmt.key_name));
+                self.emit_loop_safepoint();
 
                 // Get the element value for current iteration
                 self.output.push_str(&format!("      {} {} = *({}*)hl_array_get(__iter_arr, {});\n",
@@ -7560,6 +7831,19 @@ impl CodeGenerator {
             self.generate_program_body_statements(body, type_checker)?;
 
             self.in_main_program = false;
+
+            // Phase 5b: program-exit thread barrier. Join every spawned async
+            // thread (each performed its own final drain), THEN the main thread
+            // drains its inbox last — the join is the synchronization edge, so
+            // all producers' cross-thread enqueues have happened-before this
+            // drain. Placed BEFORE scope cleanup so residual watcher fires still
+            // see their subscribed program-scope cells alive. Emitted only in
+            // threaded mode (uses_async), so the single-threaded corpus is
+            // byte-identical.
+            if self.uses_async {
+                self.output.push_str("  hl_async_join_all();\n");
+                self.output.push_str("  hl_thread_final_drain();\n");
+            }
 
             // Phase 9c fix: Final cleanup for any remaining Optional variables
             for var_name in &self.main_program_optionals.clone() {

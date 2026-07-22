@@ -1,0 +1,27 @@
+// Phase 5b fixture 3: one async producer pushes five distinct values onto a
+// watched array with an (added) alias. The coalesced inbox entry accumulates
+// EVERY (added) delta (R3 mandatory accumulation), so when main drains, all
+// five values are delivered in push order. Main blocks until it has seen five
+// adds; the conservation invariant (count == 5, sum == 15) proves the merge,
+// not merely the coalescing flag. Single producer → no container data race.
+high program(): i32 {
+    let xs = [0]
+    let seen = 0
+    let sum = 0
+    let w = watcher((v=added)xs) {
+        seen += 1
+        sum += v
+    }
+    async {
+        let i = 1
+        while (i <= 5) {
+            xs.push(i)
+            i += 1
+        }
+    }
+    while (seen < 5) { }
+    print("all added")
+    print(seen)
+    print(sum)
+    return 0
+}

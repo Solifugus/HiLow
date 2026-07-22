@@ -1,0 +1,21 @@
+// Phase 5b fixture 4: an ended watcher racing cross-thread delivery. Two
+// watchers subscribe (changed)x; one is ended before the async producer runs.
+// The producer's write enqueues for the live watcher and (drops at drain
+// without firing / is skipped) for the ended one (R5). Main blocks until the
+// LIVE watcher fires (`live_fires`, a main-thread flag → visibility-safe), then
+// asserts the ended watcher never fired. Must be valgrind-clean (the ended
+// entry's retained refs are released without firing).
+high program(): i32 {
+    let x = 0
+    let dead_fires = 0
+    let live_fires = 0
+    let wdead = watcher((changed)x) { dead_fires += 1 }
+    let wlive = watcher((changed)x) { live_fires += 1 }
+    wdead.end()
+    async { x = 5 }
+    while (live_fires < 1) { }
+    print("done")
+    print(dead_fires)
+    print(live_fires)
+    return 0
+}

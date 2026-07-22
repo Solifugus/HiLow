@@ -6,6 +6,27 @@
 #include <stdatomic.h>   // Phase 5a: inbox-nonempty flag (racy safe-point read)
 #include "runtime.h"
 
+// Phase 5b: threaded runtime mode. When the compiled program uses `async`
+// (or, later, `shared`), the compiler defines HILOW_THREADED for BOTH this
+// runtime and the generated main.c (one `cc` invocation, one -D). In threaded
+// mode every reference-count inc/dec is a single atomic RMW so a value shared
+// across the async thread and its declaring thread is refcounted without a
+// data race (memory safety carried by atomics, not scheduling luck — brief
+// §5b). Single-threaded programs get no -D, so these expand to the exact plain
+// `++`/`--` the runtime always used and behavior is unchanged; the fields stay
+// plain `int` (the pointer-cast-to-_Atomic idiom, lock-free for int on the
+// supported targets). HL_RC_DEC returns the NEW (post-decrement) value, matching
+// the `x--; if (x <= 0)` shape it replaces.
+#ifdef HILOW_THREADED
+  #define HL_RC_INC(field) \
+      ((void)atomic_fetch_add_explicit((_Atomic int*)&(field), 1, memory_order_relaxed))
+  #define HL_RC_DEC(field) \
+      (atomic_fetch_sub_explicit((_Atomic int*)&(field), 1, memory_order_acq_rel) - 1)
+#else
+  #define HL_RC_INC(field) ((void)((field)++))
+  #define HL_RC_DEC(field) (--(field))
+#endif
+
 void print_i32(int32_t value) {
     printf("%d\n", value);
 }
@@ -122,14 +143,13 @@ HiLowUnknown* hl_unknown_new_with_options(HiLowArray* reason, const char** optio
 
 void hl_unknown_retain(HiLowUnknown* unknown) {
     if (unknown) {
-        unknown->refcount++;
+        HL_RC_INC(unknown->refcount);
     }
 }
 
 void hl_unknown_release(HiLowUnknown* unknown) {
     if (unknown) {
-        unknown->refcount--;
-        if (unknown->refcount <= 0) {
+        if (HL_RC_DEC(unknown->refcount) <= 0) {
             // Free the reason string
             free((void*)unknown->reason);
 
@@ -232,14 +252,13 @@ HiLowOptional* hl_optional_new_money(HiLowMoney m) {
 
 void hl_optional_retain(HiLowOptional* opt) {
     if (opt) {
-        opt->refcount++;
+        HL_RC_INC(opt->refcount);
     }
 }
 
 void hl_optional_release(HiLowOptional* opt) {
     if (opt) {
-        opt->refcount--;
-        if (opt->refcount <= 0) {
+        if (HL_RC_DEC(opt->refcount) <= 0) {
             // Release the inner value if applicable
             if (opt->kind == HL_OPT_UNKNOWN && opt->payload.unk_val) {
                 hl_unknown_release(opt->payload.unk_val);
@@ -877,7 +896,7 @@ HiLowFunction* hl_function_new_with_env_dtor(void* fn_ptr, void* env, void (*env
 
 void hl_cell_retain(HiLowCell* c) {
     if (c) {
-        c->refcount++;
+        HL_RC_INC(c->refcount);
     }
 }
 
@@ -899,8 +918,7 @@ static void watcher_drop_backref(HiLowWatcher* w, HiLowCell* cell) {
 
 bool hl_cell_release(HiLowCell* c) {
     if (!c) return false;
-    c->refcount--;
-    if (c->refcount > 0) return false;
+    if (HL_RC_DEC(c->refcount) > 0) return false;
 
     // Subscription-list teardown: unlink each node's backref from its
     // watcher (the watcher value itself is owned by its binding, not us).
@@ -1300,6 +1318,54 @@ void hl_thread_final_drain(void) {
     hl_tls_ctx = NULL;
 }
 
+// Phase 5b: async-thread registry. Every `async { }` block spawns a pthread
+// via hl_async_spawn; the program joins them all at exit via hl_async_join_all
+// (no detached threads). The list is a growable array guarded by a mutex so
+// nested `async` (an async body that itself spawns) is safe. Only reachable in
+// threaded programs; the single-threaded corpus never calls these.
+static pthread_mutex_t hl_async_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t* hl_async_threads = NULL;
+static size_t hl_async_count = 0;
+static size_t hl_async_cap = 0;
+
+void hl_async_spawn(void* (*body)(void*), void* arg) {
+    pthread_t t;
+    pthread_create(&t, NULL, body, arg);
+    pthread_mutex_lock(&hl_async_lock);
+    if (hl_async_count == hl_async_cap) {
+        size_t ncap = hl_async_cap ? hl_async_cap * 2 : 8;
+        hl_async_threads = realloc(hl_async_threads, ncap * sizeof(pthread_t));
+        hl_async_cap = ncap;
+    }
+    hl_async_threads[hl_async_count++] = t;
+    pthread_mutex_unlock(&hl_async_lock);
+}
+
+void hl_async_join_all(void) {
+    // Snapshot under the lock, join outside it. A joined thread performed its
+    // own final drain before returning, so after this returns every producer's
+    // cross-thread enqueues onto THIS thread's inbox have happened-before (the
+    // join is the synchronization edge); the caller drains last.
+    pthread_mutex_lock(&hl_async_lock);
+    size_t n = hl_async_count;
+    pthread_mutex_unlock(&hl_async_lock);
+    for (size_t i = 0; i < n; i++) {
+        pthread_join(hl_async_threads[i], NULL);
+    }
+    pthread_mutex_lock(&hl_async_lock);
+    // Only free once every spawned thread has been joined (nested spawns during
+    // join would have grown the list; join those too on a second pass is not
+    // needed in 5b — async bodies are producers, not spawners — but keep the
+    // free guarded so a re-entrant caller doesn't free a live array).
+    if (hl_async_count == n) {
+        free(hl_async_threads);
+        hl_async_threads = NULL;
+        hl_async_count = 0;
+        hl_async_cap = 0;
+    }
+    pthread_mutex_unlock(&hl_async_lock);
+}
+
 // Phase 2d: recursively collect the not-yet-visited ancestors of c into a
 // growable list, stamping each with the current epoch on first visit.
 static void deep_collect_ancestors(HiLowCell* c, HiLowCell*** list, size_t* len, size_t* cap) {
@@ -1502,14 +1568,13 @@ HiLowWatcher* hl_watcher_new_subscribed_origins(void* body_fn, void* env, void (
 
 void hl_watcher_retain(HiLowWatcher* w) {
     if (w != NULL) {
-        w->refcount++;
+        HL_RC_INC(w->refcount);
     }
 }
 
 void hl_watcher_release(HiLowWatcher* w) {
     if (w != NULL) {
-        w->refcount--;
-        if (w->refcount == 0) {
+        if (HL_RC_DEC(w->refcount) == 0) {
             // Unsubscribe from every cell first (Phase 2a): no cell node may
             // outlive the watcher it points at.
             while (w->subs) {
@@ -1954,8 +2019,19 @@ HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t ind
 }
 
 // Debug allocator implementation (Phase 8a)
+// Phase 5b: in threaded mode these are `_Atomic int` so the leak-check counters
+// (incremented from every thread via the unchanged generated `hl_alloc_count++`)
+// don't lose updates to a data race — `++` on an _Atomic object is an atomic RMW
+// (C11), so the generated main.c bytes are identical (`hl_alloc_count++` either
+// way) while the arithmetic becomes race-free. The final compare in main runs
+// after hl_async_join_all, so the values are consistent.
+#ifdef HILOW_THREADED
+_Atomic int hl_alloc_count = 0;
+_Atomic int hl_free_count = 0;
+#else
 int hl_alloc_count = 0;
 int hl_free_count = 0;
+#endif
 
 void hl_object_free(HiLowObject* obj) {
     if (obj) {
@@ -2051,14 +2127,13 @@ void hl_object_release(HiLowObject* obj) {
 
 void hl_function_retain(HiLowFunction* fn) {
     if (fn) {
-        fn->refcount++;
+        HL_RC_INC(fn->refcount);
     }
 }
 
 void hl_function_release(HiLowFunction* fn) {
     if (fn) {
-        fn->refcount--;
-        if (fn->refcount == 0) {
+        if (HL_RC_DEC(fn->refcount) == 0) {
             hl_function_free(fn);
         }
     }
@@ -2284,17 +2359,17 @@ HiLowOptional* hl_optional_member_object(HiLowOptional* opt, const char* key) {
 // Retain-and-return helpers for expression positions (Phase 1.5c): turn a
 // borrowed reference into an owned +1 inline.
 HiLowObject* hl_object_ref(HiLowObject* obj) {
-    if (obj) obj->cell.refcount++;
+    if (obj) HL_RC_INC(obj->cell.refcount);
     return obj;
 }
 
 HiLowFunction* hl_function_ref(HiLowFunction* fn) {
-    if (fn) fn->refcount++;
+    if (fn) HL_RC_INC(fn->refcount);
     return fn;
 }
 
 HiLowArray* hl_array_ref(HiLowArray* arr) {
-    if (arr) arr->cell.refcount++;
+    if (arr) HL_RC_INC(arr->cell.refcount);
     return arr;
 }
 

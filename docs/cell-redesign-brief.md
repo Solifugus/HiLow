@@ -114,4 +114,32 @@ Each phase must keep the full test suite green before the next begins.
   mutations skip the parent walk.
 - Runtime C grows; codegen shrinks. That trade is intentional — runtime is
   testable in isolation (valgrind), injected codegen paths are combinatorial.
-  
+
+## Phase-5b amendments (2026-07-21, recorded before implementation)
+
+Two clarifications to "Firing semantics across threads" as 5b lands minimal
+`async`:
+
+1. **Same-thread firing stays synchronous (R1).** The section above leaves
+   same-thread fires as "synchronous or via the queue; pick whichever
+   simplifies re-entrancy." 5b picks **synchronous** (nested within
+   `hl_notify_depth`): the inbox is the *cross-thread* path exclusively. Owner
+   ruling (AskUserQuestion, 2026-07-21). Consequence: the previously-`#[ignore]`d
+   `watcher_reentrant_deferred` fixture — which pinned a *deferred* same-thread
+   output written under the earlier reading — has its expected output rewritten
+   to the synchronous/nested result and the test is activated (renamed
+   `watcher_reentrant_sync`). No runtime behavior change; the existing
+   synchronous binary already produced this output.
+
+2. **Drain safe points gain a loop back-edge check in threaded mode.** 5a's
+   safe points are runtime-entry points (allocation/syscall). 5b adds, **in
+   threaded runtime mode only** (a program that uses `async`/`shared`), a
+   codegen-emitted safe-point check on loop back-edges (`for`, `while`,
+   `loop`). Rationale: with runtime-only safe points a pure-compute loop never
+   allocates and so never drains — the spec's own `loop { }` event-loop idiom
+   would starve its thread's inbox forever. The check is a read of the
+   inbox-nonempty flag (`hl_thread_safepoint()`), draining only at
+   `hl_notify_depth == 0`. Single-threaded mode emits **nothing** — the
+   corpus byte-identical invariant is preserved by the mode switch, not by
+   hope.
+

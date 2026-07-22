@@ -460,6 +460,7 @@ pub enum Statement {
     Assign(AssignStmt),
     QualifiedOp(QualifiedOp), // For qualified assignment operations
     StealthBlock(Block, Position),
+    Async(Block, Position),        // Phase 5b: async { ... } — body spawned on a pthread
     ExprStatement(Expression),
 }
 

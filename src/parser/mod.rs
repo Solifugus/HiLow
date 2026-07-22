@@ -970,6 +970,7 @@ impl Parser {
             TokenKind::Break => self.parse_break_statement(),
             TokenKind::Continue => self.parse_continue_statement(),
             TokenKind::Stealth => self.parse_stealth_statement(),
+            TokenKind::Async => self.parse_async_statement(),
             _ => {
                 // Try to parse assignment or expression statement
                 let checkpoint = self.current;
@@ -1112,6 +1113,15 @@ impl Parser {
         let position = self.advance()?.position;  // consume 'stealth'
         let block = self.parse_block()?;
         Ok(Statement::StealthBlock(block, position))
+    }
+
+    // Phase 5b: `async { ... }` — the block body runs on a spawned pthread.
+    // High-mode only; mode is enforced in the type checker (the parser has no
+    // mode context here).
+    fn parse_async_statement(&mut self) -> Result<Statement, ParseError> {
+        let position = self.advance()?.position;  // consume 'async'
+        let block = self.parse_block()?;
+        Ok(Statement::Async(block, position))
     }
 
     fn parse_for_in_statement(&mut self) -> Result<Statement, ParseError> {

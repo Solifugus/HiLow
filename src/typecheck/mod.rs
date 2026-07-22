@@ -925,6 +925,12 @@ impl TypeChecker {
             Statement::Assign(assign_stmt) => self.check_assign_statement(assign_stmt),
             Statement::QualifiedOp(qualified_op) => self.check_qualified_op(qualified_op),
             Statement::StealthBlock(block, _) => self.check_block(block),
+            // Phase 5b: async { ... } — check the body like any block. (Mode is
+            // parsed but not enforced anywhere in the checker; async is a
+            // High-mode feature by design, but a Low-mode gate would be new
+            // infrastructure with no precedent, deferred with the rest of mode
+            // enforcement.)
+            Statement::Async(block, _) => self.check_block(block),
             Statement::ExprStatement(expr) => {
                 self.check_expression(expr);
             }
@@ -2405,6 +2411,9 @@ impl TypeChecker {
             Statement::StealthBlock(block, _) => {
                 self.write_refinements_to_block(block);
             }
+            Statement::Async(block, _) => {
+                self.write_refinements_to_block(block);
+            }
             Statement::ExprStatement(expr) => {
                 self.write_refinements_to_expression(expr);
             }
@@ -3319,6 +3328,11 @@ impl TypeChecker {
                     self.check_for_captures_in_statement(stmt, outer_scope_depth);
                 }
             }
+            Statement::Async(block, _) => {
+                for stmt in block.statements_iter() {
+                    self.check_for_captures_in_statement(stmt, outer_scope_depth);
+                }
+            }
             Statement::Break(_) | Statement::Continue(_) => {
                 // No expressions to check
             }
@@ -3509,6 +3523,11 @@ impl TypeChecker {
                 }
             }
             Statement::StealthBlock(block, _) => {
+                for stmt in block.statements_iter() {
+                    self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
+                }
+            }
+            Statement::Async(block, _) => {
                 for stmt in block.statements_iter() {
                     self.collect_captures_in_statement(stmt, outer_scope_depth, captures);
                 }

@@ -288,6 +288,12 @@ void hl_thread_final_drain(void);
 // Test-only introspection (used by the 5a inbox unit tests).
 size_t hl_inbox_pending_count(HiLowThreadContext* ctx);
 
+// Phase 5b: async block support. hl_async_spawn runs `body` on a new pthread
+// (fire-and-forget); hl_async_join_all joins every spawned thread at program
+// exit (no detached threads). Only emitted for programs that use `async`.
+void hl_async_spawn(void* (*body)(void*), void* arg);
+void hl_async_join_all(void);
+
 // Object support (Phase 7a)
 // Tagged union for all HiLow values that can be stored as object properties
 typedef enum {
@@ -589,9 +595,16 @@ HiLowFunction* hl_object_property_value_function_at(HiLowObject* obj, size_t ind
 #define TYPE_FUNCTION 10
 #define TYPE_ARRAY 11    // Phase 2e: array-valued properties
 
-// Debug allocator (Phase 8a)
+// Debug allocator (Phase 8a). Phase 5b: `_Atomic int` in threaded mode so the
+// generated `hl_alloc_count++` (unchanged bytes) is a race-free atomic RMW.
+// `_Atomic` is a C11 keyword — no stdatomic.h needed in the generated main.c.
+#ifdef HILOW_THREADED
+extern _Atomic int hl_alloc_count;
+extern _Atomic int hl_free_count;
+#else
 extern int hl_alloc_count;
 extern int hl_free_count;
+#endif
 
 // Free helpers for heap-allocated types (Phase 8a)
 void hl_object_free(HiLowObject* obj);

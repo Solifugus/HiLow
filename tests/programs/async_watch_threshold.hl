@@ -1,0 +1,26 @@
+// Phase 5b fixture 1: an async producer mutates a cell watched by main; main
+// loop-drains (loop-backedge safe points) until the watcher signals a
+// threshold. Proves enqueue + cross-thread routing + backedge drain + watcher
+// retention. Order-insensitive: main blocks until the watcher (fired on the
+// main thread during a drain) sets `reached`, so the output is deterministic
+// regardless of how the producer's five increments interleave/coalesce.
+high program(): i32 {
+    let counter = 0
+    let reached = 0
+    let w = watcher((changed)counter) {
+        if (counter >= 5) {
+            reached = 1
+        }
+    }
+    async {
+        let i = 0
+        while (i < 5) {
+            counter += 1
+            i += 1
+        }
+    }
+    while (reached < 1) { }
+    print("threshold reached")
+    print(counter)
+    return 0
+}

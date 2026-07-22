@@ -5042,23 +5042,27 @@ fn test_stealth_return_rejected() {
 // works via the variable-slot cell — see test_watcher_string_changed_fires
 // and companions at the end of this file.)
 
-// §4.4 item 1, adjudicated: asserts DEFERRED (declaring-thread queue) firing
-// per docs/cell-redesign-brief.md — a mutation made inside a watcher body is
-// queued, so the second watcher fires AFTER the first body completes, and the
-// first body's delta alias survives the nested mutation. Current machinery
-// fires synchronously (nested) — legitimately different until Phase 5 lands
-// the notification queues.
+// §4.4 item 1, adjudicated in Phase 5b (owner AskUserQuestion 2026-07-21):
+// SAME-THREAD firing stays SYNCHRONOUS (R1) — the inbox is the cross-thread
+// path exclusively. A mutation made inside a watcher body fires the second
+// watcher NESTED, immediately (within hl_notify_depth), so `d` is printed,
+// then the nested ys watcher runs, then `d` again. The brief
+// (docs/cell-redesign-brief.md:63) permits either synchronous or deferred
+// same-thread firing; 5b picks synchronous, and this fixture — previously
+// #[ignore]d pinning a DEFERRED output — is activated with its expected output
+// rewritten to the synchronous/nested result (renamed from
+// watcher_reentrant_deferred). Cross-thread deferral is proven by the async
+// fixtures instead.
 #[test]
-#[ignore = "asserts deferred (declaring-thread queue) firing per the redesign brief; current firing is synchronous — flips live in Phase 5 (queues)"]
-fn test_watcher_reentrant_deferred_integration() {
-    let executable = compile_program("tests/programs/watcher_reentrant_deferred.hl")
-        .expect("Failed to compile watcher_reentrant_deferred.hl");
+fn test_watcher_reentrant_sync_integration() {
+    let executable = compile_program("tests/programs/watcher_reentrant_sync.hl")
+        .expect("Failed to compile watcher_reentrant_sync.hl");
 
-    let expected_output = fs::read_to_string("tests/expected/watcher_reentrant_deferred.txt")
+    let expected_output = fs::read_to_string("tests/expected/watcher_reentrant_sync.txt")
         .expect("Failed to read expected output file");
 
     let (stdout, stderr, exit_code) = run_program(&executable)
-        .expect("Failed to run watcher_reentrant_deferred");
+        .expect("Failed to run watcher_reentrant_sync");
 
     assert_eq!(exit_code, 0, "Program should exit with code 0");
     assert!(stderr.is_empty(), "No stderr output expected, got: {}", stderr);
@@ -5885,4 +5889,75 @@ fn test_match_borrow_string_arg() {
 #[test]
 fn test_match_fresh_arm_owned() {
     run_3b_fixture("match_fresh_arm_owned");
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5b: minimal `async` — cross-thread fixtures. Each asserts a
+// scheduling-independent invariant (final value, conservation count,
+// fired-at-least-once, ended-drops), never an interleaving or a fire count
+// that coalescing (R3) may change. The `.hl` programs block the main thread on
+// a main-thread-updated flag (set by a watcher during a drain), so their output
+// is deterministic despite the producer threads. All must be valgrind-clean
+// (they ride the valgrind_gate over tests/programs/). The producer threads are
+// joined at program exit (no detached threads).
+// ---------------------------------------------------------------------------
+
+/// Compile + run a Phase-5b async fixture, asserting exit 0, empty stderr, and
+/// exact stdout. Repeats the run so a scheduling-dependent (defective) fixture
+/// is caught rather than passing on a lucky interleaving.
+fn run_async_fixture(name: &str) {
+    let executable = compile_program(&format!("tests/programs/{}.hl", name))
+        .unwrap_or_else(|e| panic!("Failed to compile {}.hl: {:?}", name, e));
+    let expected_output = fs::read_to_string(format!("tests/expected/{}.txt", name))
+        .expect("Failed to read expected output file");
+    for run in 0..8 {
+        let (stdout, stderr, exit_code) =
+            run_program(&executable).unwrap_or_else(|e| panic!("Failed to run {}: {:?}", name, e));
+        assert_eq!(exit_code, 0, "{} run {} should exit 0 (stderr: {})", name, run, stderr);
+        assert!(stderr.is_empty(), "{} run {}: no stderr expected, got: {}", name, run, stderr);
+        assert_eq!(
+            stdout.trim(),
+            expected_output.trim(),
+            "{} run {}: stdout should match expected (scheduling-independent invariant)",
+            name,
+            run
+        );
+    }
+    let _ = fs::remove_file(&executable);
+}
+
+// Fixture 1: enqueue + cross-thread routing + loop-backedge drain + watcher
+// retention. One producer drives a watched counter to a threshold; main
+// loop-drains until the watcher signals.
+#[test]
+fn test_async_watch_threshold_integration() {
+    run_async_fixture("async_watch_threshold");
+}
+
+// Fixture 2: MPSC — three producers enqueue concurrently onto main's single
+// inbox; main blocks until all three deliveries fire (conservation: seen == 3).
+#[test]
+fn test_async_multi_producer_integration() {
+    run_async_fixture("async_multi_producer");
+}
+
+// Fixture 3: R3 mandatory accumulation — coalesced (added) deltas all appear;
+// conservation (count == 5, sum == 15) proves the merge, not just the flag.
+#[test]
+fn test_async_added_accumulate_integration() {
+    run_async_fixture("async_added_accumulate");
+}
+
+// Fixture 4: R5 — an ended watcher drops (without firing) even across the
+// enqueue/drain gap; a co-subscribed live watcher still fires. Valgrind-clean.
+#[test]
+fn test_async_ended_watcher_integration() {
+    run_async_fixture("async_ended_watcher");
+}
+
+// Fixture 5: program-exit join path — an entry still in flight at body
+// completion is delivered by the exit join-then-drain, not dropped.
+#[test]
+fn test_async_exit_join_integration() {
+    run_async_fixture("async_exit_join");
 }
