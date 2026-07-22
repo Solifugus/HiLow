@@ -1,0 +1,13 @@
+// Phase 5c fixture 5: a `shared` scalar in a single-threaded program (no async).
+// It still engages threaded runtime mode (uses_threaded via `shared`), so
+// refcounts/counters are atomic and the payload is accessed atomically — but with
+// one thread the behavior is identical to a plain boxed scalar. Same-thread
+// watcher firing is synchronous (R1). Proves shared compiles + behaves in
+// threaded mode without async; valgrind-clean.
+high program(): i32 {
+    shared let x: i32 = 5
+    let w = watcher((changed)x) { print("x changed") }
+    x = 10
+    print(x)
+    return 0
+}

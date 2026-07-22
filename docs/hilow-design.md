@@ -1269,9 +1269,10 @@ manual let graph = alloc(size_of<Graph>)
 defer graph
 // freed when defer runs
 
-// Refcounted: opt-in shared ownership
+// Refcounted, atomic, and cross-context watchable: opt-in shared ownership
 shared let resource = rc_alloc<Connection>()
-// freed when last reference drops
+// freed when last reference drops; safe to read/write and watch across
+// threads (see "Concurrency Safety" and "Cross-Process Watchers")
 
 // Arena: bulk allocation, freed all at once
 arena {
@@ -1289,7 +1290,15 @@ The five forms cover the full spectrum:
 - **`let` (scope)**: single owner, automatic cleanup, no overhead
 - **`stack` / `heap` (Low only)**: same ownership as `let`, but explicit about storage location
 - **`manual`**: explicit control, for unusual lifetimes
-- **`shared` (refcount)**: shared ownership when needed, opt-in cost
+- **`shared` (refcount + atomic + watchable)**: `shared` has one unified
+  meaning across the language. A `shared` variable is refcounted (shared
+  ownership, freed when the last reference drops), its scalar payload is
+  accessed **atomically** by default, and it is **watchable across contexts**
+  (threads and, via the process tier, processes) — the runtime routes a write
+  on one context to watchers on the declaring context. The same keyword that
+  opts into shared ownership in Low mode is the keyword that makes state safe
+  to observe concurrently; there is not a separate concurrency-only `shared`.
+  See "Concurrency Safety" and "Cross-Process Watchers". Opt-in cost.
 - **`arena`**: bulk allocation for batched work
 
 ### Pointers (Low mode only)

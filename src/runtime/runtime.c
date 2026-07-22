@@ -367,6 +367,8 @@ HiLowObject* hl_object_new(void) {
 
     // Cell header (Phase 2e — mirrors hl_array_new)
     obj->cell.refcount = 1;
+    obj->cell.kind = HL_CELL_OBJECT;  // Phase 5c: typed-teardown dispatch
+    obj->cell.sub_lock = NULL;        // Phase 5c: not shared
     obj->cell.watchers = NULL;
     obj->cell.parents = NULL;
     obj->cell.version = 0;
@@ -940,7 +942,45 @@ bool hl_cell_release(HiLowCell* c) {
     }
     c->parents = NULL;
 
+    // Phase 5c: a shared cell owns its subscriber mutex — destroy and free it.
+    if (c->sub_lock) {
+        pthread_mutex_destroy(c->sub_lock);
+        free(c->sub_lock);
+        c->sub_lock = NULL;
+    }
+
     return true;  // caller does its type-specific teardown and free
+}
+
+// Phase 5c (deviation 5a-ii graduation): the per-type teardown that each typed
+// release runs after hl_cell_release returns true, factored out so
+// hl_cell_release_full can invoke it by kind. Defined with their releases below.
+static void hl_scalar_finalize(HiLowScalar* s);
+static void hl_array_finalize(HiLowArray* arr);
+static void hl_object_finalize(HiLowObject* obj);
+
+bool hl_cell_release_full(HiLowCell* c) {
+    if (!c) return false;
+    if (!hl_cell_release(c)) return false;  // refcount + header teardown; false unless 0
+    // Last reference gone: do the full TYPED teardown here, from whatever thread
+    // landed the final release (the inbox may be the sole owner at drain — 5a-ii).
+    switch (c->kind) {
+        case HL_CELL_SCALAR: hl_scalar_finalize((HiLowScalar*)c); break;
+        case HL_CELL_ARRAY:  hl_array_finalize((HiLowArray*)c); break;
+        case HL_CELL_OBJECT: hl_object_finalize((HiLowObject*)c); break;
+        default: break;  // untagged: header-only teardown already done (unreachable)
+    }
+    return true;
+}
+
+// Phase 5c: guard the subscriber list of a SHARED cell against concurrent
+// add/remove (declaring thread) vs notify snapshot (producer threads). NULL
+// sub_lock ⟺ non-shared → these are no-ops and the fast path is unchanged.
+static inline void hl_cell_sub_lock(HiLowCell* c) {
+    if (c->sub_lock) pthread_mutex_lock(c->sub_lock);
+}
+static inline void hl_cell_sub_unlock(HiLowCell* c) {
+    if (c->sub_lock) pthread_mutex_unlock(c->sub_lock);
 }
 
 void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiLowWatcher* w, HiLowCell* origin) {
@@ -953,6 +993,7 @@ void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiL
     // Phase 3b: APPEND — subscribers fire in subscription order (the legacy
     // firing block's order: earlier-declared watchers fire first).
     node->next = NULL;
+    hl_cell_sub_lock(c);   // Phase 5c: shared-cell list mutation under the lock
     HiLowCellWatcher** tail = &c->watchers;
     while (*tail) {
         tail = &(*tail)->next;
@@ -965,10 +1006,12 @@ void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiL
         sub->next = w->subs;
         w->subs = sub;
     }
+    hl_cell_sub_unlock(c);
 }
 
 void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
     if (!c || !w) return;
+    hl_cell_sub_lock(c);   // Phase 5c: shared-cell list mutation under the lock
     HiLowCellWatcher** cur = &c->watchers;
     while (*cur) {
         if ((*cur)->watcher == w) {
@@ -981,6 +1024,7 @@ void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
             cur = &(*cur)->next;
         }
     }
+    hl_cell_sub_unlock(c);
 }
 
 // Phase 3e-γ: origin-filtered removal for retargeting — only w's nodes
@@ -990,7 +1034,8 @@ void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
 // hl_cell_subscribe establishes).
 void hl_cell_unsubscribe_watcher_origin(HiLowCell* c, HiLowWatcher* w, HiLowCell* origin) {
     if (!c || !w) return;
-    HiLowCellWatcher** cur = &c->watchers;
+    hl_cell_sub_lock(c);   // Phase 5c: no-op for non-shared (retargeting is
+    HiLowCellWatcher** cur = &c->watchers;   // container-only; shared is scalar)
     while (*cur) {
         if ((*cur)->watcher == w && (*cur)->origin == origin) {
             HiLowCellWatcher* dead = *cur;
@@ -1001,6 +1046,7 @@ void hl_cell_unsubscribe_watcher_origin(HiLowCell* c, HiLowWatcher* w, HiLowCell
             cur = &(*cur)->next;
         }
     }
+    hl_cell_sub_unlock(c);
 }
 
 // Containment backrefs (Phase 2d). One NON-OWNING entry per containment;
@@ -1261,7 +1307,11 @@ static bool hl_inbox_fire_entry(HiLowInboxEntry* e) {
         free(d);
         d = next;
     }
-    hl_cell_release(e->cell);
+    // Phase 5c (5a-ii): the inbox may be the SOLE owner of the cell at drain
+    // (a shared scalar whose declaring binding was released while an entry was
+    // in flight). hl_cell_release_full does the full typed teardown at zero
+    // from this — possibly the producer — thread, instead of leaking the struct.
+    hl_cell_release_full(e->cell);
     hl_watcher_release(w);
     free(e);
     return live;
@@ -1463,7 +1513,15 @@ void hl_cell_notify(HiLowCell* c, int event, const HiLowDelta* delta) {
     // mid-walk does not.
     HiLowNodeSnap inline_buf[HL_NODE_SNAP_INLINE];
     HiLowNodeSnap* snap;
+    // Phase 5c: for a SHARED cell the subscriber list may be concurrently
+    // mutated by the declaring thread (watch declared, watcher ended), so take
+    // the subscriber lock ONLY around the snapshot, then release it and fire the
+    // snapshot with the lock NOT held (a body may re-subscribe or notify without
+    // deadlock; enqueueing never touches this lock). Non-shared: no lock (the
+    // snapshot is single-threaded), fast path unchanged.
+    hl_cell_sub_lock(c);
     size_t n = snapshot_cell_nodes(c, inline_buf, &snap);
+    hl_cell_sub_unlock(c);
     for (size_t i = 0; i < n; i++) {
         HiLowWatcher* state = snap[i].watcher;
         if (state == NULL || !state->active || state->ended) continue;
@@ -1640,6 +1698,8 @@ HiLowScalar* hl_scalar_new_i32(int32_t v) {
     HiLowScalar* s = malloc(sizeof(HiLowScalar));
     hl_alloc_count++;
     s->cell.refcount = 1;
+    s->cell.kind = HL_CELL_SCALAR;  // Phase 5c: typed-teardown dispatch
+    s->cell.sub_lock = NULL;        // Phase 5c: not shared (overridden by hl_scalar_new_i32_shared)
     s->cell.watchers = NULL;
     s->cell.parents = NULL;
     s->cell.version = 0;
@@ -1649,37 +1709,60 @@ HiLowScalar* hl_scalar_new_i32(int32_t v) {
     return s;
 }
 
+// Phase 5c: a `shared` i32 scalar. Identical to hl_scalar_new_i32 except the
+// cell gets a subscriber mutex (sub_lock), which marks it shared: payload
+// access is atomic (hl_scalar_get_i32 / hl_cell_set_i32 branch on sub_lock) and
+// the subscriber list is guarded across producer threads. Only emitted for
+// `shared let` (a threaded-mode program).
+HiLowScalar* hl_scalar_new_i32_shared(int32_t v) {
+    HiLowScalar* s = hl_scalar_new_i32(v);
+    s->cell.sub_lock = malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(s->cell.sub_lock, NULL);
+    return s;
+}
+
 void hl_scalar_retain(HiLowScalar* s) {
     if (s != NULL) {
         hl_cell_retain(&s->cell);
     }
 }
 
+// Phase 5c: the scalar teardown after the last cell release — reachable via
+// hl_scalar_release (same-owner) OR hl_cell_release_full (cross-thread inbox).
+static void hl_scalar_finalize(HiLowScalar* s) {
+    // Phase 3e: reference payloads own one retained reference — release it
+    // before the free. Scalar payloads are POD (no teardown).
+    switch (s->value.type) {
+        case HL_VALUE_STR:
+            hl_array_release(s->value.value.str_val);
+            break;
+        case HL_VALUE_ARRAY:
+            hl_array_release(s->value.value.arr_val);
+            break;
+        case HL_VALUE_OBJECT:
+            hl_object_release(s->value.value.obj_val);
+            break;
+        default:
+            break;
+    }
+    free(s);
+    hl_free_count++;
+}
+
 void hl_scalar_release(HiLowScalar* s) {
     if (s == NULL) return;
     // hl_cell_release tears down the subscription and parent lists at zero.
-    // Phase 3e: reference payloads own one retained reference — release it
-    // before the free. Scalar payloads are POD (no teardown).
-    if (hl_cell_release(&s->cell)) {
-        switch (s->value.type) {
-            case HL_VALUE_STR:
-                hl_array_release(s->value.value.str_val);
-                break;
-            case HL_VALUE_ARRAY:
-                hl_array_release(s->value.value.arr_val);
-                break;
-            case HL_VALUE_OBJECT:
-                hl_object_release(s->value.value.obj_val);
-                break;
-            default:
-                break;
-        }
-        free(s);
-        hl_free_count++;
-    }
+    if (hl_cell_release(&s->cell)) hl_scalar_finalize(s);
 }
 
 int32_t hl_scalar_get_i32(HiLowScalar* s) {
+    // Phase 5c: a shared cell's payload is read atomically (cross-thread
+    // visibility + no torn reads). Non-shared: plain load, byte-identical to
+    // pre-5c. hl_scalar_get_i32 is an out-of-line runtime call, so even a plain
+    // load inside a caller's loop is re-read each iteration (no register hoist).
+    if (s->cell.sub_lock) {
+        return atomic_load_explicit((_Atomic int32_t*)&s->value.value.i32_val, memory_order_seq_cst);
+    }
     return s->value.value.i32_val;
 }
 
@@ -1690,6 +1773,8 @@ static HiLowScalar* hl_scalar_new_ref(HiLowValueType kind) {
     HiLowScalar* s = malloc(sizeof(HiLowScalar));
     hl_alloc_count++;
     s->cell.refcount = 1;
+    s->cell.kind = HL_CELL_SCALAR;  // Phase 5c: typed-teardown dispatch
+    s->cell.sub_lock = NULL;        // Phase 5c: not shared (overridden by hl_scalar_new_i32_shared)
     s->cell.watchers = NULL;
     s->cell.parents = NULL;
     s->cell.version = 0;
@@ -1826,9 +1911,22 @@ static void hl_slot_retarget(HiLowScalar* s, HiLowCell* old_cell) {
 // HL_SCALAR_ASSIGNED on every call — changed subscribers before assigned
 // subscribers, the legacy firing block's order.
 void hl_cell_set_i32(HiLowScalar* s, int32_t v) {
-    bool changed = s->value.value.i32_val != v;
-    s->value.value.i32_val = v;
-    if (hl_stealth_depth == 0 && cell_has_audience(&s->cell)) {
+    // Phase 5c: a shared cell stores atomically and returns the prior value
+    // (racy RMW for `x += 1` is two atomic ops — the prover's future warning,
+    // not an error). Non-shared: plain load-then-store, byte-identical to pre-5c.
+    // Shared cells skip the cell_has_audience fast path (racy read of the
+    // subscriber list) and always route through hl_cell_notify, which takes the
+    // subscriber lock and snapshots safely (empty list → fires nothing, cheap).
+    int32_t old;
+    bool shared = (s->cell.sub_lock != NULL);
+    if (shared) {
+        old = atomic_exchange_explicit((_Atomic int32_t*)&s->value.value.i32_val, v, memory_order_seq_cst);
+    } else {
+        old = s->value.value.i32_val;
+        s->value.value.i32_val = v;
+    }
+    bool changed = old != v;
+    if (hl_stealth_depth == 0 && (shared || cell_has_audience(&s->cell))) {
         if (changed) {
             hl_cell_notify(&s->cell, HL_ARR_CHANGED, NULL);
         }
@@ -2081,47 +2179,51 @@ void hl_object_retain(HiLowObject* obj) {
     }
 }
 
+// Phase 5c: the object teardown after the last cell release — reachable via
+// hl_object_release (same-owner) OR hl_cell_release_full (cross-thread).
+static void hl_object_finalize(HiLowObject* obj) {
+    // Step 1: Handle weak properties first - unregister from targets, no release
+    for (size_t i = 0; i < obj->property_count; i++) {
+        if (obj->properties[i].is_weak && obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
+            hl_object_weak_unregister(obj->properties[i].value.value.obj_val, obj, i);
+        }
+    }
+
+    // Step 2: Release strong properties normally. Phase 2e: holder
+    // death drops its containments' backrefs (symmetric unlink)
+    // before releasing each container value.
+    for (size_t i = 0; i < obj->property_count; i++) {
+        if (!obj->properties[i].is_weak) {
+            object_property_removed(obj, &obj->properties[i].value);
+            if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
+                hl_object_release(obj->properties[i].value.value.obj_val);
+            } else if (obj->properties[i].value.type == HL_VALUE_FUNCTION && obj->properties[i].value.value.fn_val) {
+                hl_function_release(obj->properties[i].value.value.fn_val);
+            } else if (obj->properties[i].value.type == HL_VALUE_ARRAY && obj->properties[i].value.value.arr_val) {
+                hl_array_release(obj->properties[i].value.value.arr_val);
+            }
+        }
+    }
+
+    // Step 3: Null out every weak property that points at this object.
+    // WeakRef records (holder, property index) — stable across the
+    // holder's property-array reallocs, unlike a raw slot address.
+    WeakRef* current = obj->weak_refs;
+    while (current) {
+        current->holder->properties[current->prop_index].value.value.obj_val = NULL;
+        WeakRef* next = current->next;
+        free(current);
+        hl_free_count++;
+        current = next;
+    }
+
+    // Step 4: Free the object
+    hl_object_free(obj);
+}
+
 void hl_object_release(HiLowObject* obj) {
     if (obj) {
-        if (hl_cell_release(&obj->cell)) {
-            // Step 1: Handle weak properties first - unregister from targets, no release
-            for (size_t i = 0; i < obj->property_count; i++) {
-                if (obj->properties[i].is_weak && obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
-                    hl_object_weak_unregister(obj->properties[i].value.value.obj_val, obj, i);
-                }
-            }
-
-            // Step 2: Release strong properties normally. Phase 2e: holder
-            // death drops its containments' backrefs (symmetric unlink)
-            // before releasing each container value.
-            for (size_t i = 0; i < obj->property_count; i++) {
-                if (!obj->properties[i].is_weak) {
-                    object_property_removed(obj, &obj->properties[i].value);
-                    if (obj->properties[i].value.type == HL_VALUE_OBJECT && obj->properties[i].value.value.obj_val) {
-                        hl_object_release(obj->properties[i].value.value.obj_val);
-                    } else if (obj->properties[i].value.type == HL_VALUE_FUNCTION && obj->properties[i].value.value.fn_val) {
-                        hl_function_release(obj->properties[i].value.value.fn_val);
-                    } else if (obj->properties[i].value.type == HL_VALUE_ARRAY && obj->properties[i].value.value.arr_val) {
-                        hl_array_release(obj->properties[i].value.value.arr_val);
-                    }
-                }
-            }
-
-            // Step 3: Null out every weak property that points at this object.
-            // WeakRef records (holder, property index) — stable across the
-            // holder's property-array reallocs, unlike a raw slot address.
-            WeakRef* current = obj->weak_refs;
-            while (current) {
-                current->holder->properties[current->prop_index].value.value.obj_val = NULL;
-                WeakRef* next = current->next;
-                free(current);
-                hl_free_count++;
-                current = next;
-            }
-
-            // Step 4: Free the object
-            hl_object_free(obj);
-        }
+        if (hl_cell_release(&obj->cell)) hl_object_finalize(obj);
     }
 }
 
@@ -3006,6 +3108,8 @@ HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn r
 
     // Cell header (Phase 2a)
     arr->cell.refcount = 1;
+    arr->cell.kind = HL_CELL_ARRAY;  // Phase 5c: typed-teardown dispatch
+    arr->cell.sub_lock = NULL;       // Phase 5c: not shared
     arr->cell.watchers = NULL;
     arr->cell.parents = NULL;      // dead until 2d
     arr->cell.version = 0;         // dead until later phases
@@ -3027,26 +3131,30 @@ void hl_array_retain(HiLowArray* arr) {
     }
 }
 
+// Phase 5c: the array teardown after the last cell release — reachable via
+// hl_array_release (same-owner) OR hl_cell_release_full (cross-thread).
+static void hl_array_finalize(HiLowArray* arr) {
+    // Release all elements if this is an object array
+    if (arr->release_fn != NULL) {
+        for (size_t i = 0; i < arr->length; i++) {
+            void* slot = (char*)arr->data + (i * arr->elem_size);
+            // Phase 2d: parent death drops its containments' backrefs
+            // (symmetric unlink), before releasing the element
+            array_element_removed(arr, slot);
+            arr->release_fn(*(void**)slot);
+        }
+    }
+    free(arr->data);
+    free(arr);
+    hl_free_count++;
+}
+
 void hl_array_release(HiLowArray* arr) {
     if (!arr) return;
 
     // hl_cell_release handles refcount + subscription/parent list teardown
     // (unlinking watcher backrefs); we do the array-specific teardown on zero.
-    if (hl_cell_release(&arr->cell)) {
-        // Release all elements if this is an object array
-        if (arr->release_fn != NULL) {
-            for (size_t i = 0; i < arr->length; i++) {
-                void* slot = (char*)arr->data + (i * arr->elem_size);
-                // Phase 2d: parent death drops its containments' backrefs
-                // (symmetric unlink), before releasing the element
-                array_element_removed(arr, slot);
-                arr->release_fn(*(void**)slot);
-            }
-        }
-        free(arr->data);
-        free(arr);
-        hl_free_count++;
-    }
+    if (hl_cell_release(&arr->cell)) hl_array_finalize(arr);
 }
 
 // Phase 2d helpers (generalized to object elements in Phase 2e). Element

@@ -44,6 +44,8 @@ const REJECTION_FIXTURES: &[&str] = &[
     "watcher_decl_name_return_rejected.hl",          // is_err test test_watcher_decl_name_return_rejected — Phase 3c adjudication A: decl-form watcher names are not first-class values
     "watcher_decl_name_alias_rejected.hl",           // is_err test test_watcher_decl_name_alias_rejected — same adjudication
     "modules/watcher_in_module/app.hl",              // is_err test test_module_level_watcher_rejected — Phase 3c: module initialization semantics unspecified (STATUS.md open question)
+    "shared_container_rejected.hl",                  // is_err test test_shared_container_rejected — Phase 5c scope fence: `shared` is scalar-only (i32); shared containers rejected
+    "shared_deep_rejected.hl",                       // is_err test test_shared_deep_rejected — Phase 5c scope fence: `(deep)` across `shared` (shared is scalar-only → deep-on-scalar, rejected by typecheck)
 ];
 
 /// Programs with a KNOWN, adjudicated memory bug: they compile and run, but

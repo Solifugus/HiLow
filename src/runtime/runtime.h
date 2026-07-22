@@ -6,6 +6,11 @@
 #include <stdlib.h>  // for malloc
 #include <string.h>  // for strcat
 #include <stdio.h>   // for sprintf
+#include <pthread.h> // Phase 5c: pthread_mutex_t* sub_lock in HiLowCell (a
+                     // pointer field; the generated main.c #includes this header
+                     // but never touches the field — its source bytes are
+                     // unchanged, only the preprocessed translation unit gains
+                     // the pthread declarations)
 
 // Forward declarations
 typedef struct HiLowArray HiLowArray;
@@ -216,6 +221,13 @@ typedef struct HiLowCellParent {
     struct HiLowCellParent* next;
 } HiLowCellParent;
 
+// Phase 5c: cell kind tag — lets hl_cell_release_full do the full TYPED
+// teardown from any thread when the last release lands (deviation 5a-ii
+// graduation). Set at construction (all four cell constructors).
+#define HL_CELL_SCALAR 1
+#define HL_CELL_ARRAY  2
+#define HL_CELL_OBJECT 3
+
 typedef struct HiLowCell {
     int refcount;
     HiLowCellWatcher* watchers;      // subscription list (live as of Phase 2a)
@@ -226,6 +238,14 @@ typedef struct HiLowCell {
                                      // (deep) subscriber (Phase 2d); stale-true
                                      // after unsubscribe is allowed (wasted
                                      // walk, never a wrong fire)
+    uint8_t kind;                    // Phase 5c: HL_CELL_* — dispatch for
+                                     // hl_cell_release_full's typed teardown
+    pthread_mutex_t* sub_lock;       // Phase 5c: non-NULL IFF this is a `shared`
+                                     // cell. Guards the subscriber list against
+                                     // concurrent add/remove vs notify snapshot,
+                                     // and marks the payload as atomic-access.
+                                     // NULL for every non-shared cell (fast path
+                                     // unchanged, no lock, no atomics).
 } HiLowCell;
 
 // Watcher value support (Phase 10-δ-α; subscription backrefs added Phase 2a)
@@ -414,6 +434,13 @@ void hl_cell_retain(HiLowCell* c);
 // subscription list (unlinking each node's backref from its watcher) and the
 // parent list.
 bool hl_cell_release(HiLowCell* c);
+// Phase 5c (deviation 5a-ii graduation): release one reference AND, when this
+// is the last one, do the full TYPED teardown (payload + struct free) by
+// dispatching on c->kind — so a cross-thread last-release of a shared cell
+// (e.g. the inbox as sole owner at drain) frees the container correctly from
+// any thread. Behaviourally identical to the matching typed release; the
+// typed releases and hl_cell_release itself are unchanged.
+bool hl_cell_release_full(HiLowCell* c);
 // Subscribe w to c for one modifier: appends a node AND records the backref
 // in w->subs. Runtime-internal (called from hl_watcher_new_subscribed[_origins]
 // and hl_slot_retarget — never emitted by codegen). origin is the slot cell
@@ -470,6 +497,7 @@ typedef struct HiLowScalar {
 } HiLowScalar;
 
 HiLowScalar* hl_scalar_new_i32(int32_t v);
+HiLowScalar* hl_scalar_new_i32_shared(int32_t v);  // Phase 5c: `shared let` i32
 void hl_scalar_retain(HiLowScalar* s);
 void hl_scalar_release(HiLowScalar* s);
 int32_t hl_scalar_get_i32(HiLowScalar* s);

@@ -220,6 +220,14 @@ pub struct CodeGenerator {
     uses_async: bool,
     /// Phase 5b: counter for unique async body function names.
     async_counter: usize,
+    /// Phase 5c: true iff the program contains a `shared let` (also engages
+    /// threaded runtime mode — verified: a shared-using program with no async
+    /// still trips threaded_mode()). Set by a pre-scan alongside uses_async.
+    uses_shared: bool,
+    /// Phase 5c: program-scope `shared` variable names — the boxed-scalar
+    /// construction uses the shared (atomic + subscriber-locked) constructor
+    /// for these, and (deep)-on-shared is rejected for them.
+    shared_vars: HashSet<String>,
 }
 
 impl CodeGenerator {
@@ -266,14 +274,16 @@ impl CodeGenerator {
             async_bodies: String::new(),
             uses_async: false,
             async_counter: 0,
+            uses_shared: false,
+            shared_vars: HashSet::new(),
         }
     }
 
-    /// Phase 5b: expose whether the generated program uses `async` (threaded
-    /// runtime mode). main.rs reads this after generate() to pass
-    /// -DHILOW_THREADED to cc for both main.c and runtime.c.
-    pub fn uses_async(&self) -> bool {
-        self.uses_async
+    /// Phase 5b/5c: threaded runtime mode is engaged by `async` OR `shared`.
+    /// main.rs reads this after generate() to pass -DHILOW_THREADED to cc for
+    /// both main.c and runtime.c (atomic refcounts + atomic leak counters).
+    pub fn threaded_mode(&self) -> bool {
+        self.uses_async || self.uses_shared
     }
 
     /// Phase 5b: recursively scan a block for an `async` statement. Runs once
@@ -321,6 +331,14 @@ impl CodeGenerator {
                 .as_ref()
                 .map_or(false, |b| Self::block_has_async(b)),
             BlockItem::Watcher(w) => Self::block_has_async(&w.body),
+        })
+    }
+
+    /// Phase 5c: does this program body declare a `shared let`? (Program-scope
+    /// only — the 5c scope; matches where shared_vars is populated.)
+    fn program_body_has_shared(body: &ProgramBody) -> bool {
+        body.items.iter().any(|item| {
+            matches!(item, BlockItem::Statement(Statement::Let(l)) if l.is_shared)
         })
     }
 
@@ -427,6 +445,7 @@ impl CodeGenerator {
         if let TopLevel::Program(p) = top_level {
             if let Some(body) = &p.body {
                 self.uses_async = Self::program_body_has_async(body);
+                self.uses_shared = Self::program_body_has_shared(body);
             }
         }
 
@@ -1258,6 +1277,14 @@ impl CodeGenerator {
         // as the (static-hoisted) cell.
         for item in &body.items {
             if let BlockItem::Statement(Statement::Let(let_decl)) = item {
+                // Phase 5c: record program-scope shared vars BEFORE any statement
+                // or watcher generates, so the construction picks the atomic
+                // constructor and (deep)-on-shared is rejected regardless of order.
+                if let_decl.is_shared {
+                    if let LetPattern::Identifier(name, _) = &let_decl.pattern {
+                        self.shared_vars.insert(name.clone());
+                    }
+                }
                 // Add variable type to variable_types so watchers can reference it
                 match &let_decl.pattern {
                     LetPattern::Identifier(name, Some(ty)) => {
@@ -1542,6 +1569,24 @@ impl CodeGenerator {
     }
 
     fn generate_identifier_let_statement(&mut self, name: &str, ty: Option<&crate::ast::Type>, initializer: &Option<Expression>, position: &crate::lexer::Position, type_checker: &TypeChecker) -> Result<(), CodegenError> {
+        // Phase 5c scope fence: `shared` is limited to i32 scalars. Reject a
+        // shared container (or any non-i32 shared scalar) with a clear diagnostic
+        // — a subscription that can't be atomic/watchable is a trap, not silence.
+        if self.shared_vars.contains(name) {
+            let resolved = if let Some(t) = ty {
+                Type::from_ast_type(t)
+            } else if let Some(init) = initializer {
+                self.infer_expression_type_for_codegen(init)
+            } else {
+                Type::Unknown
+            };
+            if !matches!(resolved, Type::I32) {
+                return Err(CodegenError::UnsupportedFeature {
+                    feature: format!("`shared` on '{}' of type {:?}: shared containers and non-i32 shared scalars are not supported", name, resolved),
+                    phase: "Phase 5c limits `shared` to i32 scalars — shared containers are explicitly rejected (the atomic payload matrix is i32 today, as in Phase 3b)".to_string(),
+                });
+            }
+        }
         // Determine the type
         let var_type = if let Some(ty) = ty {
             Type::from_ast_type(ty)
@@ -1602,14 +1647,24 @@ impl CodeGenerator {
                         });
                     }
                     let c_var_name = self.mangle_variable_name(name);
+                    // Phase 5c: a `shared` scalar constructs the cell with a
+                    // subscriber mutex (atomic payload + cross-thread-safe
+                    // subscriber list); everything else about a shared i32 is a
+                    // normal boxed scalar (reads/writes are auto-atomic in the
+                    // runtime when sub_lock is set).
+                    let ctor = if self.shared_vars.contains(name) {
+                        "hl_scalar_new_i32_shared"
+                    } else {
+                        "hl_scalar_new_i32"
+                    };
                     if self.in_main_program {
                         // Program-scope cells are file-scope statics so
                         // nested functions can subscribe and capture them
                         // (cell identity is what makes this sound).
                         self.boxed_scalar_statics.push_str(&format!("static HiLowScalar* {} = NULL;\n", c_var_name));
-                        self.output.push_str(&format!("  {} = hl_scalar_new_i32(", c_var_name));
+                        self.output.push_str(&format!("  {} = {}(", c_var_name, ctor));
                     } else {
-                        self.output.push_str(&format!("  HiLowScalar* {} = hl_scalar_new_i32(", c_var_name));
+                        self.output.push_str(&format!("  HiLowScalar* {} = {}(", c_var_name, ctor));
                     }
                     if let Some(ref initializer) = initializer {
                         let old_context = self.function_expr_context.clone();
@@ -8017,6 +8072,14 @@ impl CodeGenerator {
         // container-typed subscriptions only (typecheck already enforces
         // this; defense-in-depth for the scalar kinds).
         for subscription in &watcher.subscriptions {
+            // Phase 5c scope fence: `(deep)` watching across `shared` is rejected
+            // at compile time. Because `shared` is scalar-only (shared containers
+            // are themselves rejected above/at the let), `(deep)` on a shared
+            // variable is definitionally `(deep)` on a scalar, which the type
+            // checker already rejects ("(deep) modifier requires an array or
+            // object type") BEFORE codegen — so the rejection is explicit and
+            // pinned there (test_shared_deep_rejected). No separate codegen
+            // check is added: it would be unreachable dead code.
             match subscription.modifier {
                 SubscriptionModifier::Changed | SubscriptionModifier::Assigned => {
                     // Slot subscriptions — every watchable type.

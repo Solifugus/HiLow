@@ -42,6 +42,8 @@ pub enum BoxReason {
     Subscribed,
     /// A watcher body references this declaration across the watcher boundary.
     WatcherCaptured,
+    /// Phase 5c: a `shared let` — always a cell (atomic + cross-context watchable).
+    Shared,
 }
 
 #[derive(Debug, Clone)]
@@ -296,7 +298,15 @@ impl Analyzer {
             self.walk_expression(init);
         }
         match &l.pattern {
-            LetPattern::Identifier(name, _) => self.declare(name, &l.position),
+            LetPattern::Identifier(name, _) => {
+                self.declare(name, &l.position);
+                // Phase 5c: a shared scalar is a cell (atomic + cross-context
+                // watchable), so it boxes whether or not it is watched.
+                if l.is_shared {
+                    let idx = self.result.decisions.len() - 1;
+                    self.mark(idx, BoxReason::Shared);
+                }
+            }
             LetPattern::Tuple(names) => {
                 for name in names {
                     self.declare(name, &l.position);

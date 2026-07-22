@@ -154,12 +154,62 @@ static void case_final_drain_empties(void) {
     printf("case_final_drain_empties OK\n");
 }
 
+// Case 6 (Phase 5c, deviation 5a-ii graduation): the inbox is the SOLE owner of
+// the cell at drain — the declaring binding released its ref while the entry was
+// in flight (reachable in 5c: a shared scalar's last release lands on a producer
+// thread via the inbox). The drain's hl_cell_release_full must do the full TYPED
+// teardown, not just header teardown, or the container leaks. Under valgrind this
+// case leaks (definite) with the pre-5c hl_cell_release; it is clean with the fix.
+// (a) array cell — HL_CELL_ARRAY dispatch.
+static void case_inbox_sole_owner_frees_array(void) {
+    HiLowThreadContext* self = hl_current_ctx();
+    FireLog log = {0};
+    HiLowWatcher* w = hl_watcher_new();
+    HiLowArray* arr; HiLowCell* cell = make_cell(&arr);   // owner refcount 1
+
+    hl_inbox_enqueue(self, w, cell, (void*)test_body, &log, HL_ARR_CHANGED, NULL);
+    // enqueue retained the cell → refcount 2 (owner + inbox).
+    hl_array_release(arr);                 // owner drops → refcount 1; NOT freed
+    assert(hl_inbox_pending_count(self) == 1);
+
+    size_t fired = hl_thread_drain_inbox(); // inbox releases last → full teardown frees arr
+    assert(fired == 1);
+    assert(log.fires == 1);
+    assert(hl_inbox_pending_count(self) == 0);
+
+    hl_watcher_release(w);
+    printf("case_inbox_sole_owner_frees_array OK\n");
+}
+
+// (b) scalar cell — HL_CELL_SCALAR dispatch (the 5c cross-thread case: shared
+// scalars are the only cross-thread cells).
+static void case_inbox_sole_owner_frees_scalar(void) {
+    HiLowThreadContext* self = hl_current_ctx();
+    FireLog log = {0};
+    HiLowWatcher* w = hl_watcher_new();
+    HiLowScalar* s = hl_scalar_new_i32(42);
+    HiLowCell* cell = (HiLowCell*)s;       // cell header is the first member
+
+    hl_inbox_enqueue(self, w, cell, (void*)test_body, &log, HL_ARR_CHANGED, NULL);
+    hl_scalar_release(s);                  // owner drops → refcount 1; NOT freed
+    assert(hl_inbox_pending_count(self) == 1);
+
+    size_t fired = hl_thread_drain_inbox(); // inbox last release → hl_scalar_finalize frees s
+    assert(fired == 1);
+    assert(log.fires == 1);
+
+    hl_watcher_release(w);
+    printf("case_inbox_sole_owner_frees_scalar OK\n");
+}
+
 int main(void) {
     case_enqueue_and_drain();
     case_coalesce_accumulates_deltas();
     case_distinct_watchers_dont_coalesce();
     case_ended_watcher_drops_without_firing();
     case_final_drain_empties();
+    case_inbox_sole_owner_frees_array();
+    case_inbox_sole_owner_frees_scalar();
     printf("ALL INBOX UNIT TESTS PASSED\n");
     return 0;
 }

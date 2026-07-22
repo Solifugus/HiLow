@@ -310,6 +310,7 @@ impl Parser {
             pattern,
             initializer,
             is_export,
+            is_shared: false,  // Phase 5c: module-level shared is out of scope
             position: start_pos,
         })
     }
@@ -971,6 +972,7 @@ impl Parser {
             TokenKind::Continue => self.parse_continue_statement(),
             TokenKind::Stealth => self.parse_stealth_statement(),
             TokenKind::Async => self.parse_async_statement(),
+            TokenKind::Shared => self.parse_shared_let_statement(),
             _ => {
                 // Try to parse assignment or expression statement
                 let checkpoint = self.current;
@@ -995,6 +997,24 @@ impl Parser {
     }
 
     fn parse_let_statement(&mut self) -> Result<Statement, ParseError> {
+        self.parse_let_statement_inner(false)
+    }
+
+    // Phase 5c: `shared let x: i32 = 0`. The memory-mode keyword `shared`
+    // prefixes a `let`; it makes the variable atomic + cross-context watchable.
+    fn parse_shared_let_statement(&mut self) -> Result<Statement, ParseError> {
+        let shared_pos = self.advance()?.position; // consume 'shared'
+        if !self.check(&TokenKind::Let) {
+            return Err(ParseError::UnexpectedToken {
+                expected: "'let' after 'shared'".to_string(),
+                found: self.peek()?.kind.clone(),
+                position: shared_pos,
+            });
+        }
+        self.parse_let_statement_inner(true)
+    }
+
+    fn parse_let_statement_inner(&mut self, is_shared: bool) -> Result<Statement, ParseError> {
         let start_pos = self.advance()?.position; // consume 'let'
 
         // Parse the let pattern using the shared method
@@ -1012,6 +1032,7 @@ impl Parser {
             pattern,
             initializer,
             is_export: false,  // Phase 11a-α: let statements in program body are never exported
+            is_shared,
             position: start_pos,
         }))
     }

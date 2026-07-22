@@ -1,0 +1,9 @@
+// Phase 5c scope fence: `(deep)` watching across `shared` is rejected. Because
+// `shared` is scalar-only, `(deep)` on a shared variable is `(deep)` on a scalar,
+// which the type checker rejects ((deep) requires a container).
+high program(): i32 {
+    shared let x: i32 = 0
+    let w = watcher((d=deep)x) { print(x) }
+    x = 1
+    return 0
+}

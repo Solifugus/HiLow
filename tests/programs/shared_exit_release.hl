@@ -1,0 +1,19 @@
+// Phase 5c fixture 4: cross-thread lifecycle of a shared cell through the
+// program-exit drain. Main does not loop-drain, so the producer's notification
+// is still in flight at body completion; at exit the async thread is joined and
+// main drains last, firing the watcher and releasing the inbox's retained
+// reference to the shared cell via hl_cell_release_full (the 5a-ii path) — the
+// whole shared-cell lifecycle is leak-clean. (The exact SOLE-owner-at-drain
+// teardown-at-zero is pinned directly by the C-harness case
+// case_inbox_sole_owner_frees_scalar; here the binding co-owns the cell, so this
+// pins the inbox-release path on a shared cell end-to-end, valgrind-clean.)
+high program(): i32 {
+    shared let counter: i32 = 0
+    let w = watcher((changed)counter) {
+        print("observed")
+    }
+    async {
+        counter = 42
+    }
+    return 0
+}

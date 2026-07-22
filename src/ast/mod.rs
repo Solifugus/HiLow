@@ -384,6 +384,7 @@ pub struct LetDecl {
     pub pattern: LetPattern,
     pub initializer: Option<Expression>,
     pub is_export: bool,            // Phase 11a-α: export modifier in module body
+    pub is_shared: bool,           // Phase 5c: `shared let` — atomic + cross-context watchable
     pub position: Position,
 }
 

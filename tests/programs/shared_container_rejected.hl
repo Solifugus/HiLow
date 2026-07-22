@@ -1,0 +1,6 @@
+// Phase 5c scope fence: `shared` on a container type is rejected (shared is
+// scalar-only in 5c; the atomic payload matrix is i32).
+high program(): i32 {
+    shared let xs = [1, 2, 3]
+    return 0
+}

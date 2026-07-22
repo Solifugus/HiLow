@@ -1,0 +1,24 @@
+// Phase 5c fixture 1: the spec's reactive counter. Three async workers increment
+// a `shared` counter under real contention; a main watcher observes it reach the
+// target. Each worker LOOPS until the target (racy RMW may lose updates, so a
+// fixed number of increments could fall short — looping-until-target guarantees
+// monotone reach of the threshold). Main blocks on `reached` (set on the main
+// thread by the watcher during a drain → visibility-safe), so the output is
+// deterministic despite the contention. Proves cross-thread shared mutation +
+// watching + the loop-backedge drain + inbox accumulation under contention.
+high program(): i32 {
+    shared let counter: i32 = 0
+    let reached = 0
+    let w = watcher((changed)counter) {
+        if (counter >= 20) {
+            reached = 1
+        }
+    }
+    async { while (counter < 20) { counter += 1 } }
+    async { while (counter < 20) { counter += 1 } }
+    async { while (counter < 20) { counter += 1 } }
+    while (reached < 1) { }
+    print("counter reached")
+    print(counter >= 20)
+    return 0
+}

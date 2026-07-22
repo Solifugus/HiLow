@@ -1,0 +1,22 @@
+// Phase 5c fixture 3: an ended watcher racing production on a SHARED (locked)
+// cell — the 5b ended-watcher race extended to the subscriber-locked path. Two
+// watchers subscribe (changed)counter; one is ended before production. The
+// producer notifies the locked cell; the ended watcher is skipped (R5), the live
+// one fires. Main blocks on the live watcher's flag, then stops the producer.
+// Asserts the ended watcher never fired; valgrind-clean.
+high program(): i32 {
+    shared let counter: i32 = 0
+    shared let stop: i32 = 0
+    let dead_fires = 0
+    let live_fires = 0
+    let wdead = watcher((changed)counter) { dead_fires += 1 }
+    let wlive = watcher((changed)counter) { live_fires += 1 }
+    wdead.end()
+    async { while (stop < 1) { counter += 1 } }
+    while (live_fires < 1) { }
+    stop = 1
+    print("done")
+    print(dead_fires)
+    print(live_fires >= 1)
+    return 0
+}

@@ -363,12 +363,13 @@ memory-bug lists, class by class:
 | name-keyed codegen maps leaking across function boundaries | 3d | the shadowing sentinels above + corpus-wide zero-diff C check |
 | env use-after-free (envs owned by declaring scope) | 2a/2b (watcher-owned env) + 3b (`env_dtor` retains cells) | `watcher_escape_capture_sound`, `watcher_escape_subscribed_local_sound` |
 | unreachable scope-exit deactivation under early returns | 3c | `watcher_early_return_scalar`, `watcher_early_return_array` |
-| non-reentrant static delta buffers | 2c (both `temp_buffer`s deleted; `HiLowDelta` heap value) | the valgrind gate as a whole; `watcher_reentrant_deferred` (synchronous today, valgrind-clean) |
+| non-reentrant static delta buffers | 2c (both `temp_buffer`s deleted; `HiLowDelta` heap value) | the valgrind gate as a whole; `watcher_reentrant_sync` (synchronous same-thread firing, valgrind-clean) |
 | ad-hoc handling of expression temporaries | 4a (unification) | `temp_nonstore_object`, `temp_nonstore_array`, `temp_nonstore_arg`; `string_concat`, `string_equality` (string-operand clean) |
 | non-obj/fn-typed `match` with a borrowed arm in Owned context — use-after-free | 4b (`ref_wrap` extended to `hl_array_ref`) | fix targets `match_borrow_string_owned`, `match_borrow_array_owned`; controls `match_borrow_string_bare`, `match_borrow_string_arg`, `match_fresh_arm_owned` |
 | object double-release (17 programs — gate's original `KNOWN_MEMORY_BUGS`) | 1.5c | `KNOWN_MEMORY_BUGS` is now EMPTY (`valgrind_gate.rs:62`; comment lines 55–61) |
 | §3.4(b)/(c)/(d) env-keying bugs | 2a | gate comment `valgrind_gate.rs:57` |
 | §3.4(a) `.move` 2-arg env-dropping casts | 2c | gate comment `valgrind_gate.rs:59` |
+| deviation 5a-ii: inbox sole-owner cross-thread last-release leaks the typed container (`hl_cell_release`-at-0 did only header teardown) | 5c (cell `kind` tag + `hl_cell_release_full` dispatches the typed `*_finalize` at refcount 0; inbox routes through it) | `case_inbox_sole_owner_frees_array`, `case_inbox_sole_owner_frees_scalar` (`tests/inbox_unit_harness.c` — each leaks 152B with pre-fix `hl_cell_release`, clean with the fix); HiLow-level `shared_exit_release` |
 
 ### D.3 Consolidated semantics adjudications since the brief
 
@@ -590,3 +591,95 @@ pre-existing module-order nondeterminism).
   (5c); multiple producers mutating the SAME cell race on the value (permitted,
   future prover warning). The 5b fixtures use single-producer-per-cell or
   disjoint-cell patterns accordingly.
+
+## Part G — Phase 5c amendments (recorded 2026-07-21, before implementation)
+
+Two additions this prompt makes to the brief, recorded here per the "record
+before implementation" rule (the brief permits either but does not specify
+these mechanisms):
+
+### G.1 Per-shared-cell subscriber lock (structural synchronization — the phase's real content)
+A shared cell's subscriber list may be mutated by its declaring context (a watch
+declared, a watcher `.end()`ed) while producer threads are concurrently
+`hl_cell_notify`ing it. WITHOUT a lock the 3e-β collect-then-fire snapshot races
+the list mutation (a `free`d node walked, a half-linked `next`). Amendment: each
+**shared** cell carries a mutex (`pthread_mutex_t* sub_lock`, non-NULL ⟺ shared,
+allocated at construction). `hl_cell_subscribe` / `hl_cell_unsubscribe_*` take it
+when the cell is shared; `hl_cell_notify` on a shared cell takes it, runs
+`snapshot_cell_nodes` under it, releases it, THEN walks the snapshot
+(fire/enqueue) with the lock NOT held (a body may re-subscribe or notify without
+deadlock). Non-shared cells: `sub_lock == NULL`, no lock taken, the notify/
+subscribe fast path is byte-for-byte the pre-5c path guarded by one predictable
+`if (c->sub_lock)` branch. Watchers snapshotted-then-ended before delivery drop
+at drain (R5) on the cross-thread path, and — pinned against the existing
+same-thread `.end()` semantics — fire at most once post-end only where the
+current same-thread behavior already does.
+
+### G.2 Graduation of deviation 5a-ii (cross-thread last-release of a typed cell)
+5a-ii: `hl_cell_release` at refcount 0 does only cell-header teardown; the typed
+struct/payload teardown lives caller-side in `hl_array_release` /
+`hl_object_release` / `hl_scalar_release`, so the inbox (which held a RAW cell
+`+1` via `hl_cell_retain`/`hl_cell_release`) leaked the container if it was the
+sole owner at drain. Reachable in 5c: a shared scalar's final release can land on
+the async (producer) thread via the inbox. FIX (release path only): `HiLowCell`
+gains a `kind` tag (`HL_CELL_SCALAR`/`ARRAY`/`OBJECT`, set at construction); each
+typed release's post-`hl_cell_release` teardown is factored into a `*_finalize`
+function; a new `hl_cell_release_full(HiLowCell*)` dispatches on `kind` at
+refcount 0; the inbox's cell release (`hl_inbox_fire_entry`) routes through
+`hl_cell_release_full`. The existing typed releases are unchanged in behavior
+(they call the same finalize). Proven by a C-harness case (`inbox_unit`) where
+the inbox is the SOLE owner at drain and the container is freed valgrind-clean.
+5a-ii moves to extinct (§D.2) on landing.
+
+## Part H — Phase 5c landed (2026-07-22): `shared` scalars; Phase 5 closure
+
+`shared let` i32 scalars: refcounted + atomic + cross-context watchable. Every
+threaded-mode emission is gated on `threaded_mode()` (= `uses_async || uses_shared`),
+so the single-threaded corpus is byte-identical (verified vs bc51de4: the only
+diffs are the new async/shared fixtures + `modules/diamond`'s pre-existing
+module-order nondeterminism).
+
+### H.1 Delivered
+- Parser/AST: `LetDecl.is_shared`; `shared let` parsed via a `TokenKind::Shared`
+  dispatch prefixing `let` (module-level shared is out of 5c scope).
+- Boxing: `shared` lets box (`BoxReason::Shared`) — a shared scalar is a cell
+  whether or not it is watched.
+- Runtime: `HiLowCell.sub_lock` (`pthread_mutex_t*`, non-NULL ⟺ shared);
+  `hl_scalar_new_i32_shared` allocates it. Payload access branches on it:
+  `hl_scalar_get_i32` atomic-loads, `hl_cell_set_i32` atomic-exchanges then
+  notifies (shared cells skip the racy `cell_has_audience` pre-check and always
+  route through `hl_cell_notify`). Subscriber lock: `hl_cell_subscribe` /
+  `hl_cell_unsubscribe_watcher[_origin]` take it; `hl_cell_notify` snapshots the
+  subscriber list under it then fires the snapshot unlocked. Non-shared cells:
+  NULL lock, fast path unchanged. `sub_lock` destroyed/freed in the cell's
+  header teardown.
+- Codegen: `uses_shared` pre-scan → `threaded_mode()`; `shared_vars` populated in
+  the program-body pre-pass; the boxed-i32 let uses `hl_scalar_new_i32_shared`
+  for shared vars (reads/writes need no codegen change — the runtime branches).
+  `-DHILOW_THREADED` now keyed on `threaded_mode()` (main.rs).
+- Spec R4 (`docs/hilow-design.md`): `shared` unified to one meaning (refcount +
+  atomic + cross-context watchable), reconciling the memory-mode text with the
+  concurrency text.
+
+### H.2 Adjudications / deviations (binding record)
+| # | Item | Resolution |
+|---|------|------------|
+| 5c-i | Atomic payload access: separate atomic accessors (codegen-selected) vs a runtime branch on `sub_lock`. | Runtime branch. `hl_scalar_get_i32`/`hl_cell_set_i32` are out-of-line calls (no register hoist across them, so even the plain path re-reads in a caller's loop); branching inside keeps the generated main.c byte-identical (same call names) and adds no cost to non-shared cells (a predictable NULL check). Only the construction differs (`_shared`). |
+| 5c-ii | `x += 1` on shared: atomic-add vs two atomic ops. | Two atomic ops (atomic load + atomic store), i.e. a racy RMW — the prover's future warning, not a 5c error. The `(atomic-add)=` family stays deferred (brief §6). The spec's `+= 1 // ✓ atomic` (design:2186) is aspirational for that family; 5c does not implement it. |
+| 5c-iii | `(deep)` across `shared`: dedicated diagnostic vs subsumption. | Subsumed. `shared` is scalar-only (shared containers rejected), so `(deep)` on a shared var is `(deep)` on a scalar, already rejected by the type checker ("(deep) modifier requires an array or object type"). No separate codegen check (it would be unreachable dead code); pinned by `test_shared_deep_rejected` against the typecheck message. The shared-container rejection has its own explicit codegen diagnostic (`test_shared_container_rejected`). |
+| 5c-iv | `shared` is a memory-mode keyword (High/Low); mode is unenforced. | Program-scope `shared let` scalar only in 5c (matches the fixtures and the i32 payload matrix). Function-scope and non-i32 shared are deferred; non-i32 shared is rejected at the let with a clear diagnostic. |
+| 5c-v | Cross-thread SOLE-owner-at-drain (async thread last-release) is hard to force from HiLow source (main joins async before its scope cleanup, so the binding co-owns the cell through the drain). | The exact teardown-at-zero is pinned by the C-harness (`case_inbox_sole_owner_frees_{array,scalar}`, each leaks 152B pre-fix). `shared_exit_release` pins the HiLow-level inbox-release path on a shared cell is leak-clean. |
+
+### H.3 Phase 5 closure (what the notification queue guarantees, and what it does not)
+- **Guarantees:** a write to a watched cell fires that cell's watchers on their
+  DECLARING thread — same-thread synchronously (nested, R1), cross-thread via
+  the declaring thread's coalescing MPSC inbox drained at safe points; a shared
+  scalar's payload is atomic and its subscriber list is safe against concurrent
+  declare/end vs notify; refcounting is atomic in threaded mode, so a cell is
+  freed exactly once from whichever thread lands the last release (5a-ii).
+- **Does NOT guarantee:** no global ordering across producer threads; on the
+  cross-context path rapid changes may COALESCE (a watcher may observe the
+  current value at fire time, not every intermediate — design:1782); `shared`
+  containers and `(deep)` across `shared` are deferred (rejected); plain
+  `+= 1` on shared is a racy RMW (future prover warning), and the
+  `(atomic-add)=` family is deferred.

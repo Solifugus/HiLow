@@ -5961,3 +5961,78 @@ fn test_async_ended_watcher_integration() {
 fn test_async_exit_join_integration() {
     run_async_fixture("async_exit_join");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 5c: `shared` scalars. Cross-thread fixtures reuse run_async_fixture
+// (compile, run 8×, assert exact output) since each blocks main on a
+// main-thread flag for deterministic output; all are valgrind-clean via the
+// gate. Two scope-fence rejections pin the boundary (shared containers,
+// (deep)-across-shared).
+// ---------------------------------------------------------------------------
+
+// Fixture 1: the spec's reactive counter — 3 async workers drive a shared
+// counter to a target under contention; a main watcher observes monotone reach.
+#[test]
+fn test_shared_reactive_counter_integration() {
+    run_async_fixture("shared_reactive_counter");
+}
+
+// Fixture 2: a watcher declared mid-stream while a producer is notifying —
+// proves the per-shared-cell subscriber lock (add races notify snapshot).
+#[test]
+fn test_shared_watch_during_production_integration() {
+    run_async_fixture("shared_watch_during_production");
+}
+
+// Fixture 3: an ended watcher racing production on a shared (locked) cell — the
+// ended watcher is skipped (R5), a live co-subscriber still fires.
+#[test]
+fn test_shared_ended_watcher_integration() {
+    run_async_fixture("shared_ended_watcher");
+}
+
+// Fixture 4: cross-thread lifecycle of a shared cell through the exit drain —
+// the inbox's retained reference is released via hl_cell_release_full (5a-ii),
+// leak-clean. (The sole-owner-at-drain teardown-at-zero is pinned by the
+// C-harness case_inbox_sole_owner_frees_scalar.)
+#[test]
+fn test_shared_exit_release_integration() {
+    run_async_fixture("shared_exit_release");
+}
+
+// Fixture 5: a shared scalar in a single-threaded program (no async) — still
+// threaded runtime mode (shared engages it), behaves identically, valgrind-clean.
+#[test]
+fn test_shared_single_thread_integration() {
+    run_async_fixture("shared_single_thread");
+}
+
+// Scope fence: `shared` on a container type is rejected (shared is scalar-only).
+#[test]
+fn test_shared_container_rejected() {
+    let result = compile_program("tests/programs/shared_container_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for `shared` on a container");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("shared containers")
+            && msg.contains("DynamicArray"),
+        "Expected the shared-container diagnostic, got: {}",
+        msg
+    );
+}
+
+// Scope fence: `(deep)` watching across `shared`. Because shared is scalar-only,
+// `(deep)` on a shared variable is `(deep)` on a scalar — rejected by the type
+// checker (the deep-requires-container rule), which is the explicit, pinned
+// rejection for deep-across-shared.
+#[test]
+fn test_shared_deep_rejected() {
+    let result = compile_program("tests/programs/shared_deep_rejected.hl");
+    assert!(result.is_err(), "Expected compilation to fail for `(deep)` on a shared scalar");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("(deep) modifier requires an array or object type"),
+        "Expected the deep-requires-container diagnostic, got: {}",
+        msg
+    );
+}

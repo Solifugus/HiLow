@@ -1,0 +1,19 @@
+// Phase 5c fixture 2: a watcher declared mid-stream, while a producer thread is
+// already notifying the shared cell. Subscribing (add to the subscriber list)
+// races the producer's notify (snapshot of the same list) — the per-shared-cell
+// subscriber lock serializes them. `stop` is also shared so the producer sees
+// main's stop signal atomically (guaranteed termination, no reliance on a racy
+// non-atomic store). Main blocks until the mid-stream watcher fires (`observed`,
+// a main-thread flag). Order-insensitive: asserts a fire was observed and the
+// run is crash/valgrind-clean.
+high program(): i32 {
+    shared let counter: i32 = 0
+    shared let stop: i32 = 0
+    let observed = 0
+    async { while (stop < 1) { counter += 1 } }
+    let w = watcher((changed)counter) { observed = 1 }
+    while (observed < 1) { }
+    stop = 1
+    print("watched mid-stream")
+    return 0
+}
