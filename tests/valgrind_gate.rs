@@ -63,6 +63,10 @@ const REJECTION_FIXTURES: &[&str] = &[
     "modules/watcher_in_module/app.hl",              // is_err test test_module_level_watcher_rejected — Phase 3c: module initialization semantics unspecified (STATUS.md open question)
     "shared_container_rejected.hl",                  // is_err test test_shared_container_rejected — Phase 5c scope fence: `shared` is scalar-only (i32); shared containers rejected
     "shared_deep_rejected.hl",                       // is_err test test_shared_deep_rejected — Phase 5c scope fence: `(deep)` across `shared` (shared is scalar-only → deep-on-scalar, rejected by typecheck)
+    "placed_container_rejected.hl",                  // is_err test test_placed_container_rejected — Phase 6a placeability fence: containers are pointer-bearing, not placeable
+    "placed_watcher_rejected.hl",                    // is_err test test_placed_watcher_rejected — Phase 6a placeability fence: watchers are address-identity, not placeable
+    "placed_bad_name_rejected.hl",                   // is_err test test_placed_bad_name_rejected — Phase 6a: invalid segment-name character
+    "placed_long_name_rejected.hl",                  // is_err test test_placed_long_name_rejected — Phase 6a: segment name over the 64-char limit
 ];
 
 /// Programs with a KNOWN, adjudicated memory bug: they compile and run, but

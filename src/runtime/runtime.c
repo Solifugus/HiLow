@@ -2,9 +2,23 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>      // Phase 6a: malloc/free/exit used by shm code below line 2640's includes
+#include <string.h>      // Phase 6a: memcpy/strlen for segment-name construction
 #include <pthread.h>     // Phase 5a: per-thread inbox mutex + thread-id
 #include <stdatomic.h>   // Phase 5a: inbox-nonempty flag (racy safe-point read)
+#include <stdint.h>      // Phase 6a: fixed-width header fields
+#include <errno.h>       // Phase 6a: EEXIST discrimination on shm_open
+#include <fcntl.h>       // Phase 6a: O_CREAT/O_EXCL/O_RDWR for shm_open
+#include <sys/mman.h>    // Phase 6a: shm_open/mmap/munmap
+#include <sys/stat.h>    // Phase 6a: fstat (attacher segment size), mode bits
+#include <unistd.h>      // Phase 6a: ftruncate/close, nanosleep companion
+#include <time.h>        // Phase 6a: nanosleep for the bounded init-wait backoff
 #include "runtime.h"
+
+// Phase 6a: forward decl — the placed-cell header teardown (hl_cell_release,
+// below) detaches the segment; the definition lives with the shm section next
+// to the scalar constructors. Only the opaque pointer type is needed here.
+static void hl_shm_detach(HiLowShmSegment* seg);
 
 // Phase 5b: threaded runtime mode. When the compiled program uses `async`
 // (or, later, `shared`), the compiler defines HILOW_THREADED for BOTH this
@@ -369,6 +383,7 @@ HiLowObject* hl_object_new(void) {
     obj->cell.refcount = 1;
     obj->cell.kind = HL_CELL_OBJECT;  // Phase 5c: typed-teardown dispatch
     obj->cell.sub_lock = NULL;        // Phase 5c: not shared
+    obj->cell.shm = NULL;             // Phase 6a: not placed (objects are never placeable)
     obj->cell.watchers = NULL;
     obj->cell.parents = NULL;
     obj->cell.version = 0;
@@ -947,6 +962,15 @@ bool hl_cell_release(HiLowCell* c) {
         pthread_mutex_destroy(c->sub_lock);
         free(c->sub_lock);
         c->sub_lock = NULL;
+    }
+
+    // Phase 6a: a placed cell owns its mapped segment — detach (munmap + close).
+    // No unlink: segments are persistent by default (they outlive any single
+    // process — the separately-launched-programs model). hl_shm_detach is
+    // declared just above the shm section; forward-declared here for teardown.
+    if (c->shm) {
+        hl_shm_detach(c->shm);
+        c->shm = NULL;
     }
 
     return true;  // caller does its type-specific teardown and free
@@ -1700,6 +1724,7 @@ HiLowScalar* hl_scalar_new_i32(int32_t v) {
     s->cell.refcount = 1;
     s->cell.kind = HL_CELL_SCALAR;  // Phase 5c: typed-teardown dispatch
     s->cell.sub_lock = NULL;        // Phase 5c: not shared (overridden by hl_scalar_new_i32_shared)
+    s->cell.shm = NULL;             // Phase 6a: not placed (overridden by hl_scalar_new_i32_placed)
     s->cell.watchers = NULL;
     s->cell.parents = NULL;
     s->cell.version = 0;
@@ -1720,6 +1745,257 @@ HiLowScalar* hl_scalar_new_i32_shared(int32_t v) {
     pthread_mutex_init(s->cell.sub_lock, NULL);
     return s;
 }
+
+// ==========================================================================
+// Phase 6a: process tier — cross-process `shared` by PLACEMENT
+// (docs/phase6-brief.md, rulings R-A–R-E). A `shared("name") let x: i32` binds
+// to a typed slot in a named POSIX shared-memory segment mapped by every
+// participant. Nothing is serialized or sent (R-A); a write publishes payload +
+// epoch (R-B, drained cross-process only in 6b). In 6a the write protocol is
+// complete (epoch bumped on every write) but nothing pulls it yet.
+// ==========================================================================
+
+// The versioned segment header (axiom 2). Atomic fields are plain integers
+// here and accessed via cast-to-_Atomic (the pre-5c idiom) so runtime.h — which
+// generated main.c includes — needs no _Atomic in any struct. The header is the
+// contract 6b/6c build on; version it from day one.
+#define HL_SHM_MAGIC          0x484C5348u  // "HLSH"
+#define HL_SHM_LAYOUT_VERSION 1u
+#define HL_SHM_ABI_VERSION    1u
+#define HL_SHM_TYPE_I32       1u
+#define HL_SHM_INIT_INCOMPLETE 0u
+#define HL_SHM_INIT_COMPLETE   1u
+// Bounded init-wait: an attacher waits this long for the creator to publish
+// init-complete, then fails as a startup error (so a creator that crashed
+// mid-init cannot hang attachers forever — R-D). ~2s at 200us/iter. Overridable
+// (#ifndef) so the shm unit harness can compile a fast-timeout runtime.
+#ifndef HL_SHM_INIT_WAIT_ITERS
+#define HL_SHM_INIT_WAIT_ITERS 10000
+#endif
+#define HL_SHM_INIT_WAIT_NS    200000L
+
+typedef struct HiLowShmHeader {
+    uint32_t magic;
+    uint32_t layout_version;
+    uint32_t abi_version;
+    uint32_t type_tag;
+    uint32_t payload_size;
+    uint32_t init_state;     // accessed atomically; release-published by creator
+    uint64_t epoch;          // accessed atomically; bumped (release) on every write
+    // payload follows at HL_SHM_PAYLOAD_OFFSET
+} HiLowShmHeader;
+
+// Payload aligned to 8 after the header (i32 needs 4; 8 is future-proof and
+// keeps the epoch's 8-byte alignment obvious).
+#define HL_SHM_PAYLOAD_OFFSET ((sizeof(HiLowShmHeader) + 7u) & ~((size_t)7u))
+
+struct HiLowShmSegment {
+    int   fd;
+    void* base;          // mmap'd region (header + payload)
+    size_t map_size;
+    char* shm_name;      // "/hilow.<name>", owned
+    HiLowShmHeader* header;
+    void* payload;       // base + HL_SHM_PAYLOAD_OFFSET
+};
+
+// Startup error: a placement precondition failed unrecoverably (name too long,
+// shm syscall failure, header mismatch, init timeout). Diagnostic to stderr,
+// exit(1) — matching the runtime's other unrecoverable diagnostics (property
+// type mismatch, etc.). Never a warning (R-D).
+static void hl_shm_startup_error(const char* seg_name, const char* what) {
+    fprintf(stderr,
+        "shared segment '%s': %s\n"
+        "  (a `shared(\"...\")` cross-process scalar could not be placed; "
+        "this is a startup error, not a warning)\n",
+        seg_name ? seg_name : "?", what);
+    exit(1);
+}
+
+static int32_t hl_shm_load_i32(HiLowShmSegment* seg) {
+    // Acquire-load the payload (axiom 3): pairs with the writer's release store.
+    return atomic_load_explicit((_Atomic int32_t*)seg->payload, memory_order_acquire);
+}
+
+// Store payload then bump the epoch, both release-ordered — the single
+// publication point (axiom 3). Returns the prior payload value (so the caller's
+// (changed) test works), like an exchange.
+static int32_t hl_shm_exchange_i32(HiLowShmSegment* seg, int32_t v) {
+    int32_t old = atomic_exchange_explicit((_Atomic int32_t*)seg->payload, v, memory_order_release);
+    atomic_fetch_add_explicit((_Atomic uint64_t*)&seg->header->epoch, 1, memory_order_release);
+    return old;
+}
+
+static void hl_shm_detach(HiLowShmSegment* seg) {
+    if (!seg) return;
+    if (seg->base && seg->base != MAP_FAILED) munmap(seg->base, seg->map_size);
+    if (seg->fd >= 0) close(seg->fd);
+    free(seg->shm_name);
+    free(seg);
+    // No shm_unlink — segments persist by default (cleanup policy is Phase 6c).
+}
+
+// Validate the user-facing name and build the shm object name "/hilow.<name>".
+// Charset/length are ALSO checked at compile time (codegen), so a reachable
+// program never trips these; they are defense-in-depth for the runtime call.
+// Returns a malloc'd string, or NULL on invalid (caller raises startup error).
+static char* hl_shm_object_name(const char* user_name) {
+    if (!user_name) return NULL;
+    size_t n = strlen(user_name);
+    if (n == 0 || n > 64) return NULL;
+    for (size_t i = 0; i < n; i++) {
+        char ch = user_name[i];
+        int ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                 (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
+        if (!ok) return NULL;
+    }
+    const char* prefix = "/hilow.";
+    size_t total = strlen(prefix) + n + 1;
+    char* out = malloc(total);
+    memcpy(out, prefix, strlen(prefix));
+    memcpy(out + strlen(prefix), user_name, n);
+    out[total - 1] = '\0';
+    return out;
+}
+
+// Create-or-attach a segment for an i32 (R-D). O_CREAT|O_EXCL winner
+// initializes and release-publishes init-complete; the loser attaches, waits
+// (bounded) for init-complete, verifies every header field, and observes the
+// current value — it does NOT run the initializer and fires nothing.
+static HiLowShmSegment* hl_shm_attach_i32(const char* user_name, int32_t init_value) {
+    char* name = hl_shm_object_name(user_name);
+    if (!name) hl_shm_startup_error(user_name, "invalid segment name (must be [A-Za-z0-9._-]+, 1–64 chars)");
+
+    HiLowShmSegment* seg = malloc(sizeof(HiLowShmSegment));
+    seg->fd = -1; seg->base = NULL; seg->map_size = 0;
+    seg->shm_name = name; seg->header = NULL; seg->payload = NULL;
+
+    size_t map_size = HL_SHM_PAYLOAD_OFFSET + sizeof(int32_t);
+    seg->map_size = map_size;
+
+    int fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (fd >= 0) {
+        // Creator: size, map, write header + payload, publish init-complete.
+        seg->fd = fd;
+        if (ftruncate(fd, (off_t)map_size) != 0)
+            hl_shm_startup_error(user_name, "ftruncate failed");
+        seg->base = mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (seg->base == MAP_FAILED) hl_shm_startup_error(user_name, "mmap failed (creator)");
+        seg->header = (HiLowShmHeader*)seg->base;
+        seg->payload = (char*)seg->base + HL_SHM_PAYLOAD_OFFSET;
+        seg->header->magic = HL_SHM_MAGIC;
+        seg->header->layout_version = HL_SHM_LAYOUT_VERSION;
+        seg->header->abi_version = HL_SHM_ABI_VERSION;
+        seg->header->type_tag = HL_SHM_TYPE_I32;
+        seg->header->payload_size = (uint32_t)sizeof(int32_t);
+        atomic_store_explicit((_Atomic uint64_t*)&seg->header->epoch, 0, memory_order_relaxed);
+        atomic_store_explicit((_Atomic int32_t*)seg->payload, init_value, memory_order_relaxed);
+        // Release-publish: an attacher that observes COMPLETE (acquire) sees all
+        // the header + payload writes above.
+        atomic_store_explicit((_Atomic uint32_t*)&seg->header->init_state,
+                              HL_SHM_INIT_COMPLETE, memory_order_release);
+        return seg;
+    }
+    if (errno != EEXIST) hl_shm_startup_error(user_name, "shm_open(O_CREAT|O_EXCL) failed");
+
+    // Attacher: open the existing object, map it, wait for init-complete.
+    fd = shm_open(name, O_RDWR, 0600);
+    if (fd < 0) hl_shm_startup_error(user_name, "shm_open (attach) failed");
+    seg->fd = fd;
+    struct stat st;
+    if (fstat(fd, &st) != 0) hl_shm_startup_error(user_name, "fstat (attach) failed");
+    if ((size_t)st.st_size < map_size)
+        hl_shm_startup_error(user_name, "segment smaller than the i32 layout (type/layout mismatch)");
+    seg->map_size = (size_t)st.st_size;
+    seg->base = mmap(NULL, seg->map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (seg->base == MAP_FAILED) hl_shm_startup_error(user_name, "mmap failed (attach)");
+    seg->header = (HiLowShmHeader*)seg->base;
+    seg->payload = (char*)seg->base + HL_SHM_PAYLOAD_OFFSET;
+
+    // Bounded wait for the creator to publish init-complete.
+    int ready = 0;
+    for (int i = 0; i < HL_SHM_INIT_WAIT_ITERS; i++) {
+        if (atomic_load_explicit((_Atomic uint32_t*)&seg->header->init_state,
+                                 memory_order_acquire) == HL_SHM_INIT_COMPLETE) {
+            ready = 1;
+            break;
+        }
+        struct timespec ts = { 0, HL_SHM_INIT_WAIT_NS };
+        nanosleep(&ts, NULL);
+    }
+    if (!ready) hl_shm_startup_error(user_name, "timed out waiting for segment initialization (creator crashed mid-init?)");
+
+    // Verify every header field (R-D): any mismatch is a startup error.
+    if (seg->header->magic != HL_SHM_MAGIC)
+        hl_shm_startup_error(user_name, "bad magic (not a HiLow segment)");
+    if (seg->header->layout_version != HL_SHM_LAYOUT_VERSION)
+        hl_shm_startup_error(user_name, "layout-version mismatch");
+    if (seg->header->abi_version != HL_SHM_ABI_VERSION)
+        hl_shm_startup_error(user_name, "ABI-version mismatch");
+    if (seg->header->type_tag != HL_SHM_TYPE_I32)
+        hl_shm_startup_error(user_name, "type-tag mismatch (segment holds a different type)");
+    if (seg->header->payload_size != (uint32_t)sizeof(int32_t))
+        hl_shm_startup_error(user_name, "payload-size mismatch");
+
+    // Attach observes the current value and fires nothing (construction never
+    // notifies). init_value is deliberately ignored — this is the one place
+    // `shared("n") let x = 5` does not mean what it locally appears to (R-D).
+    (void)init_value;
+    return seg;
+}
+
+// Phase 6a: a `shared("seg_name") let` i32 — a cross-process placed scalar.
+// It is a superset of a `shared` scalar: it gets the subscriber mutex (so the
+// in-process subscriber list stays cross-thread-safe, 5c machinery intact) AND
+// a mapped segment whose slot holds the payload. The accessors branch on
+// cell.shm; construction never notifies, so an attacher fires nothing.
+HiLowScalar* hl_scalar_new_i32_placed(const char* seg_name, int32_t init_value) {
+    HiLowScalar* s = hl_scalar_new_i32_shared(init_value);
+    s->cell.shm = hl_shm_attach_i32(seg_name, init_value);
+    return s;
+}
+
+#ifdef HL_SHM_TEST_SUPPORT
+// Test-only (compiled ONLY when the shm unit harness defines HL_SHM_TEST_SUPPORT
+// — zero footprint in any real binary). Forges a raw segment with a chosen
+// header so the harness can exercise the attacher's verification/timeout paths
+// that no i32-only HiLow program can reach (type-tag/magic mismatch, and — with
+// mark_complete=0 — the crashed-mid-init timeout). The header layout stays
+// encapsulated here (single source of truth); the harness only supplies the
+// knobs. Returns 0 on success, -1 on a shm failure.
+int hl_shm_test_forge(const char* user_name, uint32_t magic, uint32_t layout,
+                      uint32_t abi, uint32_t type_tag, uint32_t payload_size,
+                      int mark_complete) {
+    char* name = hl_shm_object_name(user_name);
+    if (!name) return -1;
+    size_t map_size = HL_SHM_PAYLOAD_OFFSET + sizeof(int32_t);
+    int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
+    free(name);
+    if (fd < 0) return -1;
+    if (ftruncate(fd, (off_t)map_size) != 0) { close(fd); return -1; }
+    void* base = mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (base == MAP_FAILED) { close(fd); return -1; }
+    HiLowShmHeader* h = (HiLowShmHeader*)base;
+    h->magic = magic;
+    h->layout_version = layout;
+    h->abi_version = abi;
+    h->type_tag = type_tag;
+    h->payload_size = payload_size;
+    atomic_store_explicit((_Atomic uint64_t*)&h->epoch, 0, memory_order_relaxed);
+    atomic_store_explicit((_Atomic int32_t*)((char*)base + HL_SHM_PAYLOAD_OFFSET), 0, memory_order_relaxed);
+    atomic_store_explicit((_Atomic uint32_t*)&h->init_state,
+        mark_complete ? HL_SHM_INIT_COMPLETE : HL_SHM_INIT_INCOMPLETE, memory_order_release);
+    munmap(base, map_size);
+    close(fd);
+    return 0;
+}
+
+// Test-only: the current header contract values, so the harness can forge a
+// header that differs in exactly one field.
+uint32_t hl_shm_test_magic(void)   { return HL_SHM_MAGIC; }
+uint32_t hl_shm_test_layout(void)  { return HL_SHM_LAYOUT_VERSION; }
+uint32_t hl_shm_test_abi(void)     { return HL_SHM_ABI_VERSION; }
+uint32_t hl_shm_test_type_i32(void){ return HL_SHM_TYPE_I32; }
+#endif
 
 void hl_scalar_retain(HiLowScalar* s) {
     if (s != NULL) {
@@ -1756,10 +2032,15 @@ void hl_scalar_release(HiLowScalar* s) {
 }
 
 int32_t hl_scalar_get_i32(HiLowScalar* s) {
-    // Phase 5c: a shared cell's payload is read atomically (cross-thread
-    // visibility + no torn reads). Non-shared: plain load, byte-identical to
-    // pre-5c. hl_scalar_get_i32 is an out-of-line runtime call, so even a plain
-    // load inside a caller's loop is re-read each iteration (no register hoist).
+    // Phase 6a: a placed (cross-process) cell reads its payload from the mapped
+    // segment slot (acquire — axiom 3). Phase 5c: a shared (in-process) cell's
+    // payload is read atomically (cross-thread visibility + no torn reads).
+    // Non-shared: plain load, byte-identical to pre-5c. hl_scalar_get_i32 is an
+    // out-of-line runtime call, so even a plain load inside a caller's loop is
+    // re-read each iteration (no register hoist).
+    if (s->cell.shm) {
+        return hl_shm_load_i32(s->cell.shm);
+    }
     if (s->cell.sub_lock) {
         return atomic_load_explicit((_Atomic int32_t*)&s->value.value.i32_val, memory_order_seq_cst);
     }
@@ -1775,6 +2056,7 @@ static HiLowScalar* hl_scalar_new_ref(HiLowValueType kind) {
     s->cell.refcount = 1;
     s->cell.kind = HL_CELL_SCALAR;  // Phase 5c: typed-teardown dispatch
     s->cell.sub_lock = NULL;        // Phase 5c: not shared (overridden by hl_scalar_new_i32_shared)
+    s->cell.shm = NULL;             // Phase 6a: not placed (overridden by hl_scalar_new_i32_placed)
     s->cell.watchers = NULL;
     s->cell.parents = NULL;
     s->cell.version = 0;
@@ -1918,8 +2200,14 @@ void hl_cell_set_i32(HiLowScalar* s, int32_t v) {
     // subscriber list) and always route through hl_cell_notify, which takes the
     // subscriber lock and snapshots safely (empty list → fires nothing, cheap).
     int32_t old;
-    bool shared = (s->cell.sub_lock != NULL);
-    if (shared) {
+    bool placed = (s->cell.shm != NULL);
+    bool shared = (s->cell.sub_lock != NULL);   // placed ⟹ shared (superset)
+    if (placed) {
+        // Phase 6a: store to the mapped slot and bump the epoch (release) — one
+        // publication point (axiom 3). Nothing pulls the epoch cross-process
+        // until 6b, but the write protocol is complete now.
+        old = hl_shm_exchange_i32(s->cell.shm, v);
+    } else if (shared) {
         old = atomic_exchange_explicit((_Atomic int32_t*)&s->value.value.i32_val, v, memory_order_seq_cst);
     } else {
         old = s->value.value.i32_val;
@@ -3110,6 +3398,7 @@ HiLowArray* hl_array_new(size_t elem_size, size_t initial_capacity, hl_elem_fn r
     arr->cell.refcount = 1;
     arr->cell.kind = HL_CELL_ARRAY;  // Phase 5c: typed-teardown dispatch
     arr->cell.sub_lock = NULL;       // Phase 5c: not shared
+    arr->cell.shm = NULL;            // Phase 6a: not placed (arrays are never placeable)
     arr->cell.watchers = NULL;
     arr->cell.parents = NULL;      // dead until 2d
     arr->cell.version = 0;         // dead until later phases

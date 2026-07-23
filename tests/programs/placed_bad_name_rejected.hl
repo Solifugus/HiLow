@@ -1,0 +1,5 @@
+// Phase 6a: a shared-segment name must be [A-Za-z0-9._-]+. A space is invalid.
+high program(): i32 {
+    shared("bad name!") let x: i32 = 0
+    return 0
+}

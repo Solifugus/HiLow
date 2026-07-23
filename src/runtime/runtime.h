@@ -14,6 +14,10 @@
 
 // Forward declarations
 typedef struct HiLowArray HiLowArray;
+// Phase 6a: a named POSIX shared-memory segment backing a `shared("name")`
+// (cross-process) scalar. Opaque here — only runtime.c touches its innards;
+// the cell holds a pointer and generated main.c never dereferences it.
+typedef struct HiLowShmSegment HiLowShmSegment;
 
 // Print functions for primitive types
 // Each function prints the value followed by a newline
@@ -246,6 +250,13 @@ typedef struct HiLowCell {
                                      // and marks the payload as atomic-access.
                                      // NULL for every non-shared cell (fast path
                                      // unchanged, no lock, no atomics).
+    HiLowShmSegment* shm;            // Phase 6a: non-NULL IFF this is a
+                                     // `shared("name")` (cross-process) cell.
+                                     // The payload lives in the mapped segment,
+                                     // not the inline value; the accessors read/
+                                     // write the mapped slot and bump the epoch.
+                                     // A placed cell is a superset of `shared`
+                                     // (sub_lock is also set). NULL otherwise.
 } HiLowCell;
 
 // Watcher value support (Phase 10-δ-α; subscription backrefs added Phase 2a)
@@ -498,6 +509,10 @@ typedef struct HiLowScalar {
 
 HiLowScalar* hl_scalar_new_i32(int32_t v);
 HiLowScalar* hl_scalar_new_i32_shared(int32_t v);  // Phase 5c: `shared let` i32
+// Phase 6a: `shared("seg_name") let` i32 — a cross-process scalar backed by a
+// named POSIX shm segment. First creator initializes to `init_value`; a later
+// attacher IGNORES init_value and observes the segment's current value (R-D).
+HiLowScalar* hl_scalar_new_i32_placed(const char* seg_name, int32_t init_value);
 void hl_scalar_retain(HiLowScalar* s);
 void hl_scalar_release(HiLowScalar* s);
 int32_t hl_scalar_get_i32(HiLowScalar* s);

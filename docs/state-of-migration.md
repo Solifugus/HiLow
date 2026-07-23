@@ -683,3 +683,64 @@ module-order nondeterminism).
   containers and `(deep)` across `shared` are deferred (rejected); plain
   `+= 1` on shared is a racy RMW (future prover warning), and the
   `(atomic-add)=` family is deferred.
+
+## Part I — Phase 6a landed (2026-07-23): cross-process `shared` by placement
+
+Governed by `docs/phase6-brief.md` (rulings R-A–R-E), NOT audit §6 (SUPERSEDED).
+Cross-process `shared` is a typed slot in a named POSIX shm segment mapped by
+every participant — **placement, not transport** (nothing serialized/sent). The
+"sendable check" landed as **placeability** rejection diagnostics, not a phase.
+Existing corpus byte-identical (322 compiling programs, 0 diffs vs 84f707b —
+every codegen change is gated on `shared_segment.is_some()`/`placed_vars`/
+`uses_placement`, all empty for a program without `shared("...")`).
+
+### I.1 Delivered
+- Surface/AST: `LetDecl.shared_segment: Option<String>`; parser accepts
+  `shared("name") let` (optional parenthesized string literal before `let`).
+  Bare `shared` unchanged (5c). Invariant `shared_segment.is_some() ⟹ is_shared`.
+- Placeability fence (codegen, next to the 5c i32 fence): a placed non-i32
+  declaration is rejected in placeability language (container → pointer-bearing;
+  watcher → watcher-bearing; function → pointer/env-bearing). Segment-name
+  validation `[A-Za-z0-9._-]+`, 1–64 chars.
+- Runtime: `HiLowCell.shm` (`HiLowShmSegment*`, non-NULL ⟺ placed). Versioned
+  header { magic, layout_version, abi_version, type_tag, payload_size,
+  init_state, epoch:u64 } + 8-aligned payload. `hl_shm_attach_i32` does
+  create-or-attach per R-D: `O_CREAT|O_EXCL` winner initializes and
+  release-publishes init-complete; loser attaches, bounded-waits (timeout →
+  startup error, exit 1), verifies every header field (mismatch → startup
+  error), observes, fires nothing. `/hilow.<name>`, 0600, persistent (no
+  unlink). Accessors gain a 3rd branch: placed → mapped-slot acquire-load /
+  exchange+epoch-bump(release); the write protocol is complete though nothing
+  pulls the epoch until 6b. Placed ⊃ shared (sub_lock also set — in-process
+  subscriber machinery intact). Header teardown detaches (munmap+close).
+- Codegen: `hl_scalar_new_i32_placed("seg", <init>)` for placed i32;
+  `uses_placement` → main.rs links `-lrt`.
+- Two-process harness (`tests/xproc_harness.rs` + `tests/xproc/share/{a,b}.hl`):
+  rewrites the segment name uniquely per run, compiles both halves, runs both
+  under valgrind in a controlled order, asserts both outputs+exit codes, unlinks
+  its segment. Both orderings (A-then-B, B-then-A) prove creator-initializes,
+  attacher-ignores-init, persistence, same-name sharing.
+- C-fork unit harness (`tests/shm_unit.rs` + `tests/shm_unit_harness.c`): the
+  header-mismatch (type/magic), init-timeout, and empty-name paths are
+  UNREACHABLE from HiLow (i32-only, and `""` does not lex), so they are proven
+  at the C level via a forged segment (`hl_shm_test_forge`, compiled only under
+  `-DHL_SHM_TEST_SUPPORT` — zero production footprint) and `fork()` exit-code
+  checks. 5 cases (happy attach, type mismatch, bad magic, timeout, empty name).
+
+### I.2 Adjudications / deviations (binding record)
+| # | Item | Resolution |
+|---|------|------------|
+| 6a-i | Where does the sendable/placeability check live? | Codegen, next to the 5c i32 fence (same precedent). Placed ⟹ i32-only; non-i32 gets placeability-worded diagnostics. Not a transitive call-site check — there is no `send`, so nothing to launder through a call (resolves the parked boundary-locality question: per-declaration fence). |
+| 6a-ii | Placed cell = superset of shared? | Yes. `hl_scalar_new_i32_placed` builds on `_shared` (gets sub_lock), so the in-process subscriber list stays cross-thread-safe; only the payload storage moves to the mapped slot. |
+| 6a-iii | "runs BOTH under valgrind in the gate lanes" | Interpreted as gate-equivalent valgrind rigor in a dedicated two-process harness. Cross-process fixtures cannot live under tests/programs/ (auto-discovered as standalone single-process); they live under tests/xproc/ and the harness orchestrates + valgrinds both halves. |
+| 6a-iv | Type-mismatch / timeout / empty-name tests | UNREACHABLE from HiLow source (only i32 is placeable; empty string literals do not lex — pre-existing). Proven at the C level (fork + forged segment). The empty-name codegen branch is defense-in-depth; the length rule (65-char name lexes) is pinned at the HiLow level (placed_long_name_rejected). |
+| 6a-v | Attacher ignores its initializer | R-D: `shared("n") let x = 5` in an attacher does NOT set 5 — the creator initialized; the attacher observes the current value. The init expression is still evaluated (side-effect parity) then ignored. Documented loudly (runtime comment + diagnostics reference). |
+| 6a-vi | Segment cleanup | Persistent by default (no unlink at detach — the separately-launched-programs model). The harness always unlinks its own segments; a leaked test segment is a harness bug. Cleanup policy proper is Phase 6c. |
+
+### I.3 Forward to 6b (delivery — NOT in 6a)
+- Nothing pulls the epoch cross-process yet. 6b: the declaring thread tracks
+  (segment, last_seen epoch, last_delivered value) and, at existing drain safe
+  points, acquire-loads the epoch; on advance, delivers locally per R3.
+  `(assigned)` fires on epoch advance (at-least-once, coalescible);
+  `(changed)` fires iff drain-time value ≠ last-delivered. Backoff polling; the
+  spec's Cross-Process Watchers example becomes a real 2-program fixture.

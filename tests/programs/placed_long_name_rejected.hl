@@ -1,0 +1,5 @@
+// Phase 6a: a shared-segment name must be at most 64 chars. This one is 65.
+high program(): i32 {
+    shared("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") let x: i32 = 0
+    return 0
+}

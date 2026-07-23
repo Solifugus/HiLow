@@ -65,7 +65,7 @@ fn compile_single_file(mut ast: TopLevel, output_path: &str) -> Result<(), Box<d
     let c_code = codegen.generate(&ast, &type_checker)
         .map_err(|e| format!("Code generation error: {}", e))?;
 
-    invoke_cc(c_code, output_path, codegen.threaded_mode())
+    invoke_cc(c_code, output_path, codegen.threaded_mode(), codegen.uses_placement())
 }
 
 fn compile_graph(abs_entry_path: &Path, entry_ast: TopLevel, output_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -97,10 +97,10 @@ fn compile_graph(abs_entry_path: &Path, entry_ast: TopLevel, output_path: &str) 
     let mut codegen = codegen::CodeGenerator::new();
     let c_code = codegen.generate_graph(&graph, &type_checker, abs_entry_path)?;
 
-    invoke_cc(c_code, output_path, codegen.threaded_mode())
+    invoke_cc(c_code, output_path, codegen.threaded_mode(), codegen.uses_placement())
 }
 
-fn invoke_cc(c_code: String, output_path: &str, threaded: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn invoke_cc(c_code: String, output_path: &str, threaded: bool, link_rt: bool) -> Result<(), Box<dyn std::error::Error>> {
     // Create a unique temporary directory per process to avoid race conditions
     let pid = std::process::id();
     let temp_dir = format!("/tmp/hilow_{}", pid);
@@ -134,6 +134,13 @@ fn invoke_cc(c_code: String, output_path: &str, threaded: bool) -> Result<(), Bo
     // unchanged (single-threaded corpus byte-identical).
     if threaded {
         cmd.arg("-DHILOW_THREADED");
+    }
+    // Phase 6a: a `shared("name")` program uses POSIX shm_open — link librt.
+    // No-op on modern glibc (shm_* live in libc); required on older libc.
+    // Reachable only from placed programs, so non-placement builds are
+    // link-command-identical.
+    if link_rt {
+        cmd.arg("-lrt");
     }
     let status = cmd
         .arg("-o")

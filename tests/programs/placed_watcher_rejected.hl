@@ -1,0 +1,7 @@
+// Phase 6a placeability fence: a watcher's identity is address-based, not
+// value-based — watcher-bearing values are not placeable.
+high program(): i32 {
+    let base: i32 = 0
+    shared("placed_watcher") let w = watcher((changed)base) { }
+    return 0
+}

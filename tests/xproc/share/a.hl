@@ -1,0 +1,10 @@
+// Phase 6a cross-process fixture (program A). Segment name `xproc_share` is
+// rewritten to a unique per-run name by the harness (tests/xproc_harness.rs).
+// As CREATOR: initializes the segment to 100, writes 105, prints 105.
+// As ATTACHER: ignores its init (100), reads the current shared value, adds 5.
+high program(): i32 {
+    shared("xproc_share") let v: i32 = 100
+    v += 5
+    print(v)
+    return 0
+}

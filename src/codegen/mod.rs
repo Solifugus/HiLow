@@ -228,6 +228,14 @@ pub struct CodeGenerator {
     /// construction uses the shared (atomic + subscriber-locked) constructor
     /// for these, and (deep)-on-shared is rejected for them.
     shared_vars: HashSet<String>,
+    /// Phase 6a: true iff the program contains a `shared("name") let` (a
+    /// cross-process placed scalar). Placement is a superset of `shared`, so
+    /// this also implies uses_shared. main.rs links -lrt when set.
+    uses_placement: bool,
+    /// Phase 6a: program-scope placed variable name → shm segment name. These
+    /// construct with hl_scalar_new_i32_placed("<segment>", <init>). A subset of
+    /// shared_vars (placement ⟹ shared).
+    placed_vars: HashMap<String, String>,
 }
 
 impl CodeGenerator {
@@ -276,6 +284,8 @@ impl CodeGenerator {
             async_counter: 0,
             uses_shared: false,
             shared_vars: HashSet::new(),
+            uses_placement: false,
+            placed_vars: HashMap::new(),
         }
     }
 
@@ -284,6 +294,13 @@ impl CodeGenerator {
     /// both main.c and runtime.c (atomic refcounts + atomic leak counters).
     pub fn threaded_mode(&self) -> bool {
         self.uses_async || self.uses_shared
+    }
+
+    /// Phase 6a: true iff the program uses `shared("name")` placement. main.rs
+    /// links -lrt (POSIX shm_open) when set — no-op on modern glibc, required on
+    /// older libc. Additions reachable only from placed programs.
+    pub fn uses_placement(&self) -> bool {
+        self.uses_placement
     }
 
     /// Phase 5b: recursively scan a block for an `async` statement. Runs once
@@ -340,6 +357,34 @@ impl CodeGenerator {
         body.items.iter().any(|item| {
             matches!(item, BlockItem::Statement(Statement::Let(l)) if l.is_shared)
         })
+    }
+
+    /// Phase 6a: does this program body declare a `shared("name") let`?
+    /// (Program-scope only — the 6a scope; matches where placed_vars is
+    /// populated.) Drives -lrt linkage.
+    fn program_body_has_placement(body: &ProgramBody) -> bool {
+        body.items.iter().any(|item| {
+            matches!(item, BlockItem::Statement(Statement::Let(l)) if l.shared_segment.is_some())
+        })
+    }
+
+    /// Phase 6a: a shared-segment name must be non-empty, at most 64 chars, and
+    /// drawn from [A-Za-z0-9._-] (it maps to the POSIX shm object /hilow.<name>;
+    /// the bound leaves headroom under NAME_MAX for the prefix, R-C). Returns a
+    /// human diagnostic on failure (mirrors the runtime's hl_shm_object_name).
+    fn validate_segment_name(seg: &str) -> Result<(), String> {
+        if seg.is_empty() {
+            return Err("the segment name is empty".to_string());
+        }
+        if seg.len() > 64 {
+            return Err(format!("the segment name is {} chars — the limit is 64", seg.len()));
+        }
+        if let Some(bad) = seg.chars().find(|c| {
+            !(c.is_ascii_alphanumeric() || *c == '.' || *c == '_' || *c == '-')
+        }) {
+            return Err(format!("the segment name contains an invalid character {:?} (allowed: letters, digits, '.', '_', '-')", bad));
+        }
+        Ok(())
     }
 
     /// Phase 3b: does the 3a analysis box the declaration at (name, pos)?
@@ -446,6 +491,10 @@ impl CodeGenerator {
             if let Some(body) = &p.body {
                 self.uses_async = Self::program_body_has_async(body);
                 self.uses_shared = Self::program_body_has_shared(body);
+                // Phase 6a: placement ⟹ shared (superset), so uses_shared is
+                // already true for a placed program; uses_placement additionally
+                // drives -lrt linkage.
+                self.uses_placement = Self::program_body_has_placement(body);
             }
         }
 
@@ -1283,6 +1332,12 @@ impl CodeGenerator {
                 if let_decl.is_shared {
                     if let LetPattern::Identifier(name, _) = &let_decl.pattern {
                         self.shared_vars.insert(name.clone());
+                        // Phase 6a: a `shared("seg") let` also records its
+                        // segment name — the boxed-scalar construction uses the
+                        // placed constructor for these.
+                        if let Some(seg) = &let_decl.shared_segment {
+                            self.placed_vars.insert(name.clone(), seg.clone());
+                        }
                     }
                 }
                 // Add variable type to variable_types so watchers can reference it
@@ -1572,6 +1627,10 @@ impl CodeGenerator {
         // Phase 5c scope fence: `shared` is limited to i32 scalars. Reject a
         // shared container (or any non-i32 shared scalar) with a clear diagnostic
         // — a subscription that can't be atomic/watchable is a trap, not silence.
+        // Phase 6a: a `shared("name")` (placed, cross-process) declaration gets
+        // the PLACEABILITY fence — the "sendable check" landed as diagnostics,
+        // not a phase (docs/phase6-brief.md §3-6a). Placeable = fixed-size,
+        // pointer-free, watcher-free, handle-free (axiom 1); today that is i32.
         if self.shared_vars.contains(name) {
             let resolved = if let Some(t) = ty {
                 Type::from_ast_type(t)
@@ -1580,11 +1639,40 @@ impl CodeGenerator {
             } else {
                 Type::Unknown
             };
+            let is_placed = self.placed_vars.contains_key(name);
             if !matches!(resolved, Type::I32) {
+                if is_placed {
+                    let reason = match &resolved {
+                        Type::DynamicArray(_) | Type::FixedArray(_, _) | Type::Object(_) | Type::String =>
+                            "it is a container — pointer-bearing (internal heap pointers are process-local and cannot be placed in a shared segment)",
+                        Type::Watcher =>
+                            "it is watcher-bearing (a watcher's identity is address-based, not value-based)",
+                        Type::Function(_, _) =>
+                            "it is a function/closure — pointer- and env-bearing",
+                        _ =>
+                            "only fixed-size, pointer-free scalar types are placeable",
+                    };
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("`shared(\"...\")` on '{}' of type {:?}: not placeable in a shared segment — {}", name, resolved, reason),
+                        phase: "Phase 6a: cross-process `shared` is limited to placeable scalars (i32 today). See docs/phase6-brief.md §3-6a (placeability fence).".to_string(),
+                    });
+                }
                 return Err(CodegenError::UnsupportedFeature {
                     feature: format!("`shared` on '{}' of type {:?}: shared containers and non-i32 shared scalars are not supported", name, resolved),
                     phase: "Phase 5c limits `shared` to i32 scalars — shared containers are explicitly rejected (the atomic payload matrix is i32 today, as in Phase 3b)".to_string(),
                 });
+            }
+            // Phase 6a: validate the segment name for a placed i32 (mirrors the
+            // runtime's defense-in-depth check; here it is a compile-time
+            // rejection so a reachable program never trips the runtime path).
+            if is_placed {
+                let seg = &self.placed_vars[name];
+                if let Err(msg) = Self::validate_segment_name(seg) {
+                    return Err(CodegenError::UnsupportedFeature {
+                        feature: format!("`shared(\"{}\")` on '{}': {}", seg, name, msg),
+                        phase: "Phase 6a: a shared-segment name must be [A-Za-z0-9._-]+, 1–64 chars (maps to POSIX shm object /hilow.<name>). See docs/phase6-brief.md R-C.".to_string(),
+                    });
+                }
             }
         }
         // Determine the type
@@ -1652,7 +1740,13 @@ impl CodeGenerator {
                     // subscriber list); everything else about a shared i32 is a
                     // normal boxed scalar (reads/writes are auto-atomic in the
                     // runtime when sub_lock is set).
-                    let ctor = if self.shared_vars.contains(name) {
+                    // Phase 6a: a `shared("seg")` scalar additionally binds a
+                    // mapped segment — the placed constructor takes the segment
+                    // name as its first argument, then the (creator-only) init.
+                    let placed_seg = self.placed_vars.get(name).cloned();
+                    let ctor = if placed_seg.is_some() {
+                        "hl_scalar_new_i32_placed"
+                    } else if self.shared_vars.contains(name) {
                         "hl_scalar_new_i32_shared"
                     } else {
                         "hl_scalar_new_i32"
@@ -1665,6 +1759,12 @@ impl CodeGenerator {
                         self.output.push_str(&format!("  {} = {}(", c_var_name, ctor));
                     } else {
                         self.output.push_str(&format!("  HiLowScalar* {} = {}(", c_var_name, ctor));
+                    }
+                    // Phase 6a: placed constructor's leading segment-name arg.
+                    // The name is validated ([A-Za-z0-9._-]) so it needs no C
+                    // string escaping.
+                    if let Some(seg) = &placed_seg {
+                        self.output.push_str(&format!("\"{}\", ", seg));
                     }
                     if let Some(ref initializer) = initializer {
                         let old_context = self.function_expr_context.clone();

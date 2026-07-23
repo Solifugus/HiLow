@@ -1,0 +1,6 @@
+// Phase 6a placeability fence: a container is pointer-bearing (internal heap
+// pointers are process-local) — not placeable in a shared segment.
+high program(): i32 {
+    shared("placed_container") let xs: [i32] = [1, 2, 3]
+    return 0
+}

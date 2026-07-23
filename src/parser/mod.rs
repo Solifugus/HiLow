@@ -311,6 +311,7 @@ impl Parser {
             initializer,
             is_export,
             is_shared: false,  // Phase 5c: module-level shared is out of scope
+            shared_segment: None, // Phase 6a: module-level placement out of scope too
             position: start_pos,
         })
     }
@@ -997,13 +998,41 @@ impl Parser {
     }
 
     fn parse_let_statement(&mut self) -> Result<Statement, ParseError> {
-        self.parse_let_statement_inner(false)
+        self.parse_let_statement_inner(false, None)
     }
 
     // Phase 5c: `shared let x: i32 = 0`. The memory-mode keyword `shared`
     // prefixes a `let`; it makes the variable atomic + cross-context watchable.
+    // Phase 6a: `shared("name") let x: i32 = 0` — an optional parenthesized
+    // string literal names a POSIX shm segment, making the variable
+    // cross-process (placement). Bare `shared` is unchanged (in-process,
+    // cross-thread). Charset/length of the name are validated at codegen with a
+    // placeability diagnostic; here we only require it be a string literal.
     fn parse_shared_let_statement(&mut self) -> Result<Statement, ParseError> {
         let shared_pos = self.advance()?.position; // consume 'shared'
+
+        let shared_segment = if self.check(&TokenKind::LeftParen) {
+            self.advance()?; // consume '('
+            let name = match &self.peek()?.kind {
+                TokenKind::StringLit(s) => {
+                    let s = s.clone();
+                    self.advance()?; // consume the string literal
+                    s
+                }
+                other => {
+                    return Err(ParseError::UnexpectedToken {
+                        expected: "a string-literal segment name in `shared(\"name\")`".to_string(),
+                        found: other.clone(),
+                        position: self.peek()?.position.clone(),
+                    });
+                }
+            };
+            self.expect_token(TokenKind::RightParen, "Expected ')' after the `shared(\"name\")` segment name")?;
+            Some(name)
+        } else {
+            None
+        };
+
         if !self.check(&TokenKind::Let) {
             return Err(ParseError::UnexpectedToken {
                 expected: "'let' after 'shared'".to_string(),
@@ -1011,10 +1040,10 @@ impl Parser {
                 position: shared_pos,
             });
         }
-        self.parse_let_statement_inner(true)
+        self.parse_let_statement_inner(true, shared_segment)
     }
 
-    fn parse_let_statement_inner(&mut self, is_shared: bool) -> Result<Statement, ParseError> {
+    fn parse_let_statement_inner(&mut self, is_shared: bool, shared_segment: Option<String>) -> Result<Statement, ParseError> {
         let start_pos = self.advance()?.position; // consume 'let'
 
         // Parse the let pattern using the shared method
@@ -1033,6 +1062,7 @@ impl Parser {
             initializer,
             is_export: false,  // Phase 11a-α: let statements in program body are never exported
             is_shared,
+            shared_segment,
             position: start_pos,
         }))
     }

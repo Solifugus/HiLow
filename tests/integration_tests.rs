@@ -6036,3 +6036,65 @@ fn test_shared_deep_rejected() {
         msg
     );
 }
+
+// ===================================================================
+// Phase 6a: placeability fence + segment-name validation for
+// `shared("name")` (cross-process placement). The "sendable check"
+// landed as rejection diagnostics (docs/phase6-brief.md §3-6a), not a
+// phase. Non-scalar placed declarations are rejected in placeability
+// language; invalid segment names are rejected too.
+// ===================================================================
+
+#[test]
+fn test_placed_container_rejected() {
+    let result = compile_program("tests/programs/placed_container_rejected.hl");
+    assert!(result.is_err(), "Expected `shared(\"...\")` on a container to fail (pointer-bearing, not placeable)");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("not placeable") && msg.contains("pointer-bearing"),
+        "Expected the placeability (pointer-bearing) diagnostic, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_placed_watcher_rejected() {
+    let result = compile_program("tests/programs/placed_watcher_rejected.hl");
+    assert!(result.is_err(), "Expected `shared(\"...\")` on a watcher to fail (watcher-bearing, not placeable)");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("not placeable") && msg.contains("watcher-bearing"),
+        "Expected the placeability (watcher-bearing) diagnostic, got: {}",
+        msg
+    );
+}
+
+#[test]
+fn test_placed_bad_name_rejected() {
+    let result = compile_program("tests/programs/placed_bad_name_rejected.hl");
+    assert!(result.is_err(), "Expected an invalid segment-name character to fail");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("invalid character"),
+        "Expected the invalid-character diagnostic, got: {}",
+        msg
+    );
+}
+
+// NOTE: `shared("")` (empty name) is rejected at the LEXER — empty string
+// literals do not lex in HiLow ("Unterminated string"), a pre-existing
+// behavior — so the codegen empty-name branch is unreachable from HiLow source.
+// It is pinned at the C level instead (tests/shm_unit_harness.c,
+// case_empty_name). The length rule below IS reachable from source (a 65-char
+// name lexes fine).
+#[test]
+fn test_placed_long_name_rejected() {
+    let result = compile_program("tests/programs/placed_long_name_rejected.hl");
+    assert!(result.is_err(), "Expected a segment name over 64 chars to fail");
+    let msg = result.unwrap_err();
+    assert!(
+        msg.contains("limit is 64"),
+        "Expected the name-length diagnostic, got: {}",
+        msg
+    );
+}

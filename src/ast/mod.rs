@@ -385,6 +385,10 @@ pub struct LetDecl {
     pub initializer: Option<Expression>,
     pub is_export: bool,            // Phase 11a-α: export modifier in module body
     pub is_shared: bool,           // Phase 5c: `shared let` — atomic + cross-context watchable
+    pub shared_segment: Option<String>, // Phase 6a: `shared("name") let` — the
+                                   // POSIX shm segment name for a cross-process
+                                   // placed scalar. Some(_) ⟹ is_shared == true
+                                   // (placement is a superset of shared).
     pub position: Position,
 }
 
