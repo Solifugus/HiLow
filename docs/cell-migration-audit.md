@@ -1059,18 +1059,22 @@ point of deleting-with-confidence.
 
 ### Phase 6 — process tier
 
-> **SUPERSEDED — pending the Phase 6 re-brief (annotated 2026-07-23).** With the
-> spec's process model (separately-launched programs; `shared` is the only
-> cross-process channel — `hilow-design.md` "Cross-Process Watchers") and the
-> current type universe, the 6a "sendable check" (what may be declared `shared`)
-> **already exists in full** as Phase 5c's scope fence (shared is scalar-only;
-> shared containers and `(deep)`-across-shared rejected — `state-of-migration.md`
-> §H.2). So 6a as a standalone phase dissolves. Phase 6 is being re-scoped as a
-> chat brief against tree truth (transport for shared scalars, shared
-> containers, process lifecycle — ordering TBD in the brief). **Do not implement
-> the bullets below as written**; they predate 5c and the surface ruling and
-> reference the never-built write-list check. They remain here only as the
-> pre-re-brief record.
+> **SUPERSEDED — re-brief ratified 2026-07-23: see `docs/phase6-brief.md`.**
+> With the spec's process model (separately-launched programs; `shared` is the
+> only cross-process channel — `hilow-design.md` "Cross-Process Watchers") and
+> the current type universe, the 6a "sendable check" (what may be declared
+> `shared`) **already exists in full** as Phase 5c's scope fence (shared is
+> scalar-only; shared containers and `(deep)`-across-shared rejected —
+> `state-of-migration.md` §H.2). So 6a as originally planned dissolved. The
+> governing plan is now **`docs/phase6-brief.md`** (rulings R-A–R-E):
+> cross-process `shared` via **placement** in named shm segments (not
+> transport/serialization — those concepts are retired); surface
+> `shared("name") let`; the "sendable check" lands as three placeability
+> rejection diagnostics; sub-phases 6a placement+attachment+two-process harness,
+> 6b delivery (epoch-pull at existing drain safe points), 6c lifecycle (sketch).
+> **Do not implement the bullets below as written** — they predate 5c and the
+> surface ruling and reference the never-built write-list check. They remain
+> here only as the pre-re-brief record.
 
 - **6a** Sendable check (compile-time, structurally like the write-list
   check): no raw pointers / watchers / open handles cross a process boundary.
