@@ -1047,7 +1047,30 @@ point of deleting-with-confidence.
   per-thread. *Gate: full suite + new concurrency tests (docs/concurrency-design.md
   scope).*
 
+  > **DESCOPED — this bullet was NOT built as written (annotated 2026-07-23).**
+  > Real Phase 5b (`bc51de4`) landed *minimal `async`* instead: pthread-spawned
+  > `async` blocks with heap-env captures and a threaded runtime mode. There is
+  > **no `spawn` construct, no `pid`, and no write-list check** in the tree —
+  > see the descope record and rationale in `docs/state-of-migration.md` §F
+  > (Phase 5b landed). The write-list model was never implemented (its only
+  > home is `docs/concurrency-design.md`, marked historical/non-canonical). Any
+  > later text here that says "structurally like the write-list check" has no
+  > referent in the codebase.
+
 ### Phase 6 — process tier
+
+> **SUPERSEDED — pending the Phase 6 re-brief (annotated 2026-07-23).** With the
+> spec's process model (separately-launched programs; `shared` is the only
+> cross-process channel — `hilow-design.md` "Cross-Process Watchers") and the
+> current type universe, the 6a "sendable check" (what may be declared `shared`)
+> **already exists in full** as Phase 5c's scope fence (shared is scalar-only;
+> shared containers and `(deep)`-across-shared rejected — `state-of-migration.md`
+> §H.2). So 6a as a standalone phase dissolves. Phase 6 is being re-scoped as a
+> chat brief against tree truth (transport for shared scalars, shared
+> containers, process lifecycle — ordering TBD in the brief). **Do not implement
+> the bullets below as written**; they predate 5c and the surface ruling and
+> reference the never-built write-list check. They remain here only as the
+> pre-re-brief record.
 
 - **6a** Sendable check (compile-time, structurally like the write-list
   check): no raw pointers / watchers / open handles cross a process boundary.

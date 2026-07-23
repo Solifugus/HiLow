@@ -8,6 +8,23 @@
 //
 // Requires valgrind to be installed; the gate fails loudly if it is not.
 // There is deliberately no silent skip.
+//
+// Phase 6 maintenance (2026-07-23): the gate is split into two lanes so the
+// common single-threaded corpus is not held hostage to a handful of slow
+// threaded fixtures:
+//   * valgrind_gate_single_threaded — every program that does NOT engage
+//     threaded_mode (no `async`, no `shared`). The bulk of the corpus; runs
+//     under plain valgrind, back near the pre-Phase-5 runtime.
+//   * valgrind_gate_threaded — the programs that DO engage threaded_mode.
+//     Run with --fair-sched=yes (without it, valgrind's serialized scheduler
+//     starves a producer thread behind a busy-wait for tens of seconds; with
+//     it, even the spin fixtures are sub-second). The spin-wait fixtures are
+//     additionally compiled at a REDUCED iteration/threshold N (env
+//     HILOW_GATE_SPIN_N, default GATE_SPIN_N_DEFAULT), injected by source
+//     rewrite before compilation — see SPIN_FIXTURES.
+// Routing is by source-token detection (is_threaded_source), so a newly added
+// threaded fixture auto-routes to the threaded lane rather than silently
+// reintroducing the slowdown in the fast lane.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,6 +80,119 @@ const REJECTION_FIXTURES: &[&str] = &[
 /// one (env, cell, delta) body ABI. EMPTY as of Phase 2c.)
 const KNOWN_MEMORY_BUGS: &[&str] = &[];
 
+/// Spin-wait threaded fixtures whose busy-wait loop is pathologically slow
+/// under valgrind's serialized scheduler. `--fair-sched=yes` (applied to the
+/// whole threaded lane) is the dominant fix; on top of it, these fixtures are
+/// compiled at a reduced iteration/threshold N to bound the instrumented work
+/// further. The gate's pass/fail invariant is memory-cleanliness, which is
+/// N-independent and order-insensitive by design, so reducing N does not
+/// weaken the check. (The separate integration tests compile the PRISTINE .hl
+/// at full N and verify actual output — that is where N matters.)
+///
+/// Each entry lists the exact literal substrings that carry the fixture's
+/// default N and their `{N}` templates. `str::replace` rewrites ALL
+/// occurrences (e.g. the three worker loops in shared_reactive_counter). If a
+/// listed substring is NOT present in the source, the gate FAILS — this keeps
+/// the table honest against fixture drift (mirrors REJECTION_FIXTURES).
+/// Paths relative to tests/programs/.
+const SPIN_FIXTURES: &[(&str, &[(&str, &str)])] = &[
+    (
+        "shared_reactive_counter.hl",
+        &[("counter >= 20", "counter >= {N}"), ("counter < 20", "counter < {N}")],
+    ),
+    (
+        "async_watch_threshold.hl",
+        &[("counter >= 5", "counter >= {N}"), ("i < 5", "i < {N}")],
+    ),
+];
+
+/// Reduced iteration/threshold applied to SPIN_FIXTURES under the gate,
+/// overridable via env HILOW_GATE_SPIN_N. Any N >= 1 preserves the invariant.
+const GATE_SPIN_N_DEFAULT: u32 = 4;
+
+fn gate_spin_n() -> u32 {
+    std::env::var("HILOW_GATE_SPIN_N")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(GATE_SPIN_N_DEFAULT)
+}
+
+/// A program engages threaded_mode (codegen `uses_async || uses_shared`) iff
+/// its source uses `async` or `shared`. Detected from source so a new threaded
+/// fixture routes to the threaded lane automatically. Line comments are
+/// stripped first so a fixture that merely mentions the keyword in prose is
+/// not misrouted (harmless if it were — it would just run in the slower lane).
+fn is_threaded_source(path: &Path) -> bool {
+    let src = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    src.lines().any(|line| {
+        let code = match line.split_once("//") {
+            Some((before, _)) => before,
+            None => line,
+        };
+        has_word(code, "async") || has_word(code, "shared")
+    })
+}
+
+/// Whole-word (identifier-boundary) match, so `shared` matches but a
+/// hypothetical `shared_thing` identifier does not.
+fn has_word(haystack: &str, word: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(word) {
+        let i = start + pos;
+        let before_ok = i == 0 || !is_ident_byte(bytes[i - 1]);
+        let after = i + word.len();
+        let after_ok = after >= bytes.len() || !is_ident_byte(bytes[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = i + 1;
+    }
+    false
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// If `program` is a spin fixture, materialize a reduced-N rewrite next to the
+/// binary and return its path (the caller compiles that instead). Returns the
+/// original path unchanged for non-spin programs. Errors if a listed
+/// substitution substring is missing (fixture drift) or the temp write fails.
+fn spin_rewrite_source(program: &Path, binary: &Path, n: u32) -> Result<PathBuf, String> {
+    let rel = program
+        .strip_prefix("tests/programs")
+        .unwrap_or(program)
+        .to_string_lossy()
+        .to_string();
+    let entry = SPIN_FIXTURES.iter().find(|(name, _)| rel == *name);
+    let (_, subs) = match entry {
+        Some(e) => e,
+        None => return Ok(program.to_path_buf()),
+    };
+    let mut src = fs::read_to_string(program)
+        .map_err(|e| format!("{}: could not read for spin rewrite: {}", program.display(), e))?;
+    for (needle, template) in *subs {
+        if !src.contains(needle) {
+            return Err(format!(
+                "{}: SPIN_FIXTURES substring {:?} not found — fixture drifted, update SPIN_FIXTURES",
+                program.display(),
+                needle
+            ));
+        }
+        let replacement = template.replace("{N}", &n.to_string());
+        src = src.replace(needle, &replacement);
+    }
+    let rewritten = binary.with_extension("spin.hl");
+    fs::write(&rewritten, src)
+        .map_err(|e| format!("{}: could not write spin rewrite: {}", program.display(), e))?;
+    Ok(rewritten)
+}
+
 fn collect_entries(dir: &Path, entries: &mut Vec<PathBuf>) {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -87,10 +217,11 @@ fn collect_entries(dir: &Path, entries: &mut Vec<PathBuf>) {
     }
 }
 
-fn valgrind_error_count(binary: &Path) -> Result<u32, String> {
+fn valgrind_error_count(binary: &Path, extra_args: &[&str]) -> Result<u32, String> {
     let output = Command::new("valgrind")
         .arg("--leak-check=full")
         .arg("--errors-for-leak-kinds=definite,indirect")
+        .args(extra_args)
         .arg(binary)
         .output()
         .map_err(|e| format!("failed to run valgrind: {}", e))?;
@@ -110,10 +241,11 @@ fn valgrind_error_count(binary: &Path) -> Result<u32, String> {
 }
 
 /// Last ~15 relevant valgrind lines for a failure report.
-fn valgrind_excerpt(binary: &Path) -> String {
+fn valgrind_excerpt(binary: &Path, extra_args: &[&str]) -> String {
     let output = Command::new("valgrind")
         .arg("--leak-check=full")
         .arg("--errors-for-leak-kinds=definite,indirect")
+        .args(extra_args)
         .arg(binary)
         .output();
     match output {
@@ -136,25 +268,20 @@ fn valgrind_excerpt(binary: &Path) -> String {
     }
 }
 
-#[test]
-fn valgrind_gate() {
-    // Preflight: valgrind must exist. No silent skip.
+fn require_valgrind() {
     let version = Command::new("valgrind").arg("--version").output();
     assert!(
         version.map(|o| o.status.success()).unwrap_or(false),
         "valgrind is required for the memory-safety gate (Phase 1.5b). \
          Install it (e.g. apt install valgrind) — the gate does not skip."
     );
+}
 
-    let mut entries: Vec<PathBuf> = Vec::new();
-    collect_entries(Path::new("tests/programs"), &mut entries);
-    entries.sort();
-    assert!(
-        entries.len() > 200,
-        "suspiciously few programs discovered ({}) — did tests/programs/ move?",
-        entries.len()
-    );
-
+/// Run one lane of the gate over `entries`. `threaded` selects the threaded
+/// behavior: --fair-sched=yes on every valgrind run (so a busy-wait producer
+/// is not starved by valgrind's serialized scheduler) and reduced-N source
+/// rewrites for SPIN_FIXTURES. Returns (clean-checked count, failures).
+fn run_lane(entries: Vec<PathBuf>, threaded: bool) -> (usize, Vec<String>) {
     let rejections: Vec<PathBuf> = REJECTION_FIXTURES
         .iter()
         .map(|r| Path::new("tests/programs").join(r))
@@ -163,6 +290,9 @@ fn valgrind_gate() {
         .iter()
         .map(|r| Path::new("tests/programs").join(r))
         .collect();
+
+    let extra_args: &[&str] = if threaded { &["--fair-sched=yes"] } else { &[] };
+    let spin_n = gate_spin_n();
 
     let work: Mutex<Vec<PathBuf>> = Mutex::new(entries);
     let failures: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -194,12 +324,30 @@ fn valgrind_gate() {
                         .replace(".hl", "")
                 ));
 
+                // Threaded lane: spin fixtures compile at reduced N via a
+                // rewritten source next to the binary (non-spin programs and
+                // the whole single-threaded lane compile the pristine source).
+                let source = if threaded {
+                    match spin_rewrite_source(&program, &binary, spin_n) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            failures.lock().unwrap().push(e);
+                            continue;
+                        }
+                    }
+                } else {
+                    program.clone()
+                };
+
                 let compile = Command::new("./target/debug/hilowc")
-                    .arg(&program)
+                    .arg(&source)
                     .arg("-o")
                     .arg(&binary)
                     .output()
                     .expect("failed to invoke hilowc");
+                if source != program {
+                    let _ = fs::remove_file(&source);
+                }
 
                 if is_rejection {
                     if compile.status.success() {
@@ -226,7 +374,7 @@ fn valgrind_gate() {
                 }
 
                 let is_known_bug = known_bugs.contains(&program);
-                match valgrind_error_count(&binary) {
+                match valgrind_error_count(&binary, extra_args) {
                     Ok(0) if is_known_bug => {
                         failures.lock().unwrap().push(format!(
                             "{}: UNEXPECTEDLY CLEAN — bug fixed? Remove it from KNOWN_MEMORY_BUGS",
@@ -242,7 +390,7 @@ fn valgrind_gate() {
                         *checked_count.lock().unwrap() += 1;
                     }
                     Ok(n) => {
-                        let excerpt = valgrind_excerpt(&binary);
+                        let excerpt = valgrind_excerpt(&binary, extra_args);
                         failures.lock().unwrap().push(format!(
                             "{}: {} valgrind error(s)\n{}",
                             program.display(),
@@ -259,15 +407,77 @@ fn valgrind_gate() {
         }
     });
 
-    let failures = failures.into_inner().unwrap();
-    let checked = checked_count.into_inner().unwrap();
+    (
+        checked_count.into_inner().unwrap(),
+        failures.into_inner().unwrap(),
+    )
+}
+
+/// Partition all discovered entry programs into (single-threaded, threaded)
+/// by source-token detection.
+fn partition_entries() -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut entries: Vec<PathBuf> = Vec::new();
+    collect_entries(Path::new("tests/programs"), &mut entries);
+    entries.sort();
+    assert!(
+        entries.len() > 200,
+        "suspiciously few programs discovered ({}) — did tests/programs/ move?",
+        entries.len()
+    );
+    entries.into_iter().partition(|p| !is_threaded_source(p))
+}
+
+#[test]
+fn valgrind_gate_single_threaded() {
+    require_valgrind();
+    let (single, _threaded) = partition_entries();
+    assert!(
+        single.len() > 200,
+        "suspiciously few single-threaded programs ({})",
+        single.len()
+    );
+    let (checked, failures) = run_lane(single, false);
     assert!(
         failures.is_empty(),
-        "valgrind gate: {} clean, {} FAILING:\n\n{}",
+        "valgrind gate (single-threaded lane): {} clean, {} FAILING:\n\n{}",
         checked,
         failures.len(),
         failures.join("\n\n")
     );
-    // Belt-and-suspenders: the gate must have actually checked programs.
-    assert!(checked > 200, "gate ran but checked only {} programs", checked);
+    // Belt-and-suspenders: the lane must have actually checked programs.
+    assert!(checked > 200, "single-threaded lane checked only {} programs", checked);
+}
+
+#[test]
+fn valgrind_gate_threaded() {
+    require_valgrind();
+    let (_single, threaded) = partition_entries();
+    // The threaded set is small but must not silently vanish (that would hide
+    // the async/shared fixtures from the memory gate entirely).
+    assert!(
+        threaded.len() >= 10,
+        "threaded lane found only {} programs — expected the async/shared fixtures",
+        threaded.len()
+    );
+    let run_count = threaded
+        .iter()
+        .filter(|p| {
+            let rel = p.strip_prefix("tests/programs").unwrap().to_string_lossy().to_string();
+            !REJECTION_FIXTURES.contains(&rel.as_str())
+        })
+        .count();
+    let (checked, failures) = run_lane(threaded, true);
+    assert!(
+        failures.is_empty(),
+        "valgrind gate (threaded lane): {} clean, {} FAILING:\n\n{}",
+        checked,
+        failures.len(),
+        failures.join("\n\n")
+    );
+    // Every non-rejection threaded fixture must have run clean under valgrind.
+    assert_eq!(
+        checked, run_count,
+        "threaded lane ran {} clean but expected {} runnable fixtures",
+        checked, run_count
+    );
 }

@@ -1,5 +1,16 @@
 # HiLow Concurrency Design — Notes from 2026-05-28 evening
 
+> **HISTORICAL / NON-CANONICAL (marked 2026-07-23).** This document is NOT a
+> source of truth (the sources of truth are `hilow-design.md` and
+> `development-plan.md`; the migration is governed by `cell-redesign-brief.md`
+> and `cell-migration-audit.md`). It records the `spawn` + explicit-write-list
+> model as it was sketched on 2026-05-28. **That model was never built.** Phase
+> 5 landed a different concurrency shape: threaded `async` blocks and `shared`
+> scalars (refcounted + atomic + cross-context watchable), with **no `spawn`
+> construct, no `pid`, and no write-list check** anywhere in the compiler. See
+> `state-of-migration.md` §F/§H for what actually shipped. Read this file only
+> for historical intent; do not implement against it.
+
 Status: design solved (load-bearing decisions made). Implementation phase is real future work, but the "what shape?" question is answered.
 
 ## The model in one paragraph
