@@ -1,57 +1,18 @@
+// test_phase7a_integration deleted 2026-07-23 (Phase 6a opening commit). It was
+// an #[ignore]d unit-style codegen-substring test superseded AT BIRTH: commit
+// 186bc9c, which added its ignore, also added the end-to-end fixtures
+// object_basic/object_assign/object_mixed_types. Its stale ignore reason
+// ("get_expression_type needs symbol table context") no longer holds — that
+// program compiles and runs today. It failed only because its assertions
+// demanded output the source never generated (hl_object_get_str: it never read
+// a string property; print_i32/print_str: it never printed). The string-read
+// codegen path it purported to cover (hl_object_get_str) is covered
+// end-to-end and superiorly by test_object_mixed_types_integration, which
+// reads person.name and asserts the program prints "Alice". See STATUS.md
+// (documented-ignores ledger) for the sizing.
+
 use hilowc::parser::Parser;
 use hilowc::typecheck::TypeChecker;
-use hilowc::codegen::CodeGenerator;
-
-#[test]
-#[ignore = "Codegen limitation: get_expression_type needs symbol table context"]
-fn test_phase7a_integration() {
-    let input = "high program(): i32 {
-        let point = { x: 10, y: 20 }
-        let x_val = point.x
-
-        point.x = 99
-        let new_x = point.x
-
-        let person = {
-            name: \"Alice\",
-            age: 30,
-            active: true
-        }
-
-        return 0
-    }";
-
-    // Parse
-    println!("Parsing...");
-    let parse_result = Parser::new(input).unwrap().parse();
-    assert!(parse_result.is_ok(), "Parse failed: {:?}", parse_result);
-    let ast = parse_result.unwrap();
-
-    // Type check
-    println!("Type checking...");
-    let mut type_checker = TypeChecker::new();
-    let typecheck_result = type_checker.check(&ast);
-    assert!(typecheck_result.is_ok(), "Type check failed: {:?}", typecheck_result);
-
-    // Code generation
-    println!("Generating code...");
-    let mut codegen = CodeGenerator::new();
-    let codegen_result = codegen.generate(&ast, &type_checker);
-    assert!(codegen_result.is_ok(), "Codegen failed: {:?}", codegen_result);
-
-    let c_code = codegen_result.unwrap();
-    println!("Generated C code:\n{}", c_code);
-
-    // Verify the generated code contains expected object operations
-    assert!(c_code.contains("hl_object_new()"), "Should create objects with hl_object_new");
-    assert!(c_code.contains("hl_object_set_i32"), "Should set integer properties");
-    assert!(c_code.contains("hl_object_set_str"), "Should set string properties");
-    assert!(c_code.contains("hl_object_set_bool"), "Should set boolean properties");
-    assert!(c_code.contains("hl_object_get_i32"), "Should get integer properties");
-    assert!(c_code.contains("hl_object_get_str"), "Should get string properties");
-    assert!(c_code.contains("print_i32"), "Should print integer values");
-    assert!(c_code.contains("print_str"), "Should print string values");
-}
 
 #[test]
 fn test_phase7a_missing_property_returns_nothing() {
