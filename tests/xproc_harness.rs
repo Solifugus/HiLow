@@ -1,157 +1,222 @@
-// Phase 6a: two-process harness for cross-process `shared("name")` placement
-// (docs/phase6-brief.md §3-6a — "the phase's real infrastructure investment").
+// Phase 6a/6b: two-process harness for cross-process `shared("name")` placement
+// (docs/phase6-brief.md §3-6a/§3-6b — "the phase's real infrastructure
+// investment"). Cross-process fixtures need programs sharing a segment; they
+// cannot live under tests/programs/ (the valgrind gate runs those standalone).
+// They live under tests/xproc/ and are orchestrated here: each fixture's
+// segment token `XSEG` is rewritten to a UNIQUE per-run prefix (hermeticity),
+// both/all halves compile, run under valgrind (gate-equivalent rigor), and the
+// harness ALWAYS unlinks every segment with that prefix (a leaked test segment
+// is a harness bug). Assertions are order-insensitive (5b discipline).
 //
-// Cross-process fixtures need TWO programs sharing one segment; they cannot live
-// under tests/programs/ (the valgrind gate auto-discovers those and runs each as
-// a standalone single-process program). They live under tests/xproc/ and are
-// orchestrated here: the harness rewrites the segment name to a UNIQUE per-run
-// value (hermeticity — the spin-rewrite pattern), compiles both halves, runs
-// them under valgrind in a controlled order, asserts both outputs + exit codes
-// + valgrind cleanliness, and ALWAYS unlinks its segment (a leaked test segment
-// is a harness bug). "Runs both under valgrind in the gate lanes" is realized
-// here as gate-equivalent valgrind rigor in a dedicated harness.
-//
-// The fixture pair (tests/xproc/share/{a,b}.hl) shares one i32:
-//   A: init 100, writes 105, prints 105   (creator) / ignores init, +5 (attacher)
-//   B: init 200, prints 200               (creator) / ignores init, reads (attacher)
-// Run A-then-B and B-then-A to cover: creator-initializes, attacher-ignores-init,
-// persistence (segment outlives the first process), and same-name sharing.
+// 6a fixtures (share/): sequential — creator initializes, attacher observes.
+// 6b fixtures: single-process dedup (dedup_same, dedup_cross) and concurrent
+// cross-process delivery (prodcons, watcher_exits) with a `ready` handshake so
+// the producer only writes once the consumer is watching (no startup race).
 
 use std::fs;
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 
-const PLACEHOLDER: &str = "xproc_share";
+const TOKEN: &str = "XSEG";
 
 fn require_valgrind() {
     let v = Command::new("valgrind").arg("--version").output();
     assert!(
         v.map(|o| o.status.success()).unwrap_or(false),
-        "valgrind is required for the Phase 6a cross-process harness — it does not skip."
+        "valgrind is required for the Phase 6a/6b cross-process harness — it does not skip."
     );
 }
 
-/// Rewrite the fixture's placeholder segment name to `seg`, write to a temp .hl,
-/// and compile it to `out_bin`. Panics on compile failure (fixtures must build).
-fn compile_with_seg(src: &str, seg: &str, out_bin: &Path) {
+fn unique_prefix(tag: &str) -> String {
+    format!("xp{}_{}", std::process::id(), tag)
+}
+
+/// Rewrite the fixture's `XSEG` token to `prefix` and compile to `out_bin`.
+fn compile_fixture(src: &str, prefix: &str, out_bin: &Path) {
     let source = fs::read_to_string(src).expect("read fixture");
-    assert!(
-        source.contains(PLACEHOLDER),
-        "fixture {} lost its `{}` placeholder — update the harness",
-        src, PLACEHOLDER
-    );
-    let rewritten = source.replace(PLACEHOLDER, seg);
+    assert!(source.contains(TOKEN), "fixture {} lost its `{}` token", src, TOKEN);
     let tmp_hl = out_bin.with_extension("hl");
-    fs::write(&tmp_hl, rewritten).expect("write rewritten fixture");
+    fs::write(&tmp_hl, source.replace(TOKEN, prefix)).expect("write rewritten fixture");
     let out = Command::new("./target/debug/hilowc")
-        .arg(&tmp_hl)
-        .arg("-o")
-        .arg(out_bin)
-        .output()
-        .expect("invoke hilowc");
+        .arg(&tmp_hl).arg("-o").arg(out_bin)
+        .output().expect("invoke hilowc");
     let _ = fs::remove_file(&tmp_hl);
-    assert!(
-        out.status.success(),
-        "compiling {} (seg {}) failed:\n{}",
-        src, seg, String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "compiling {} failed:\n{}", src, String::from_utf8_lossy(&out.stderr));
 }
 
-/// Run `bin` under valgrind. Returns (stdout, exit_code, valgrind_error_count).
-fn run_under_valgrind(bin: &Path) -> (String, i32, u32) {
-    let out = Command::new("valgrind")
+/// Remove every POSIX shm object /dev/shm/hilow.<prefix>* (Linux). Best-effort.
+fn unlink_prefix(prefix: &str) {
+    let needle = format!("hilow.{}", prefix);
+    if let Ok(rd) = fs::read_dir("/dev/shm") {
+        for e in rd.flatten() {
+            if e.file_name().to_string_lossy().starts_with(&needle) {
+                let _ = fs::remove_file(e.path());
+            }
+        }
+    }
+}
+
+fn valgrind_child(bin: &Path) -> Child {
+    Command::new("valgrind")
         .arg("--leak-check=full")
         .arg("--errors-for-leak-kinds=definite,indirect")
         .arg(bin)
-        .output()
-        .expect("invoke valgrind");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn valgrind")
+}
+
+/// Wait for a spawned valgrind child; return (stdout, exit_code, valgrind_errors).
+fn finish(child: Child, label: &str) -> (String, i32, u32) {
+    let out = child.wait_with_output().expect("wait valgrind child");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr);
     let mut errors = u32::MAX;
     for line in stderr.lines() {
         if let Some(idx) = line.find("ERROR SUMMARY: ") {
-            let rest = &line[idx + "ERROR SUMMARY: ".len()..];
-            errors = rest.split_whitespace().next().unwrap_or("").parse::<u32>().unwrap_or(u32::MAX);
+            errors = line[idx + 15..].split_whitespace().next().unwrap_or("").parse().unwrap_or(u32::MAX);
         }
     }
-    assert_ne!(errors, u32::MAX, "no valgrind ERROR SUMMARY for {}:\n{}", bin.display(), stderr);
-    // The valgrinded child's own exit code (valgrind passes it through).
-    let code = out.status.code().unwrap_or(-1);
-    (stdout, code, errors)
+    assert_ne!(errors, u32::MAX, "[{}] no valgrind ERROR SUMMARY:\n{}", label, stderr);
+    (stdout, out.status.code().unwrap_or(-1), errors)
 }
 
-fn unlink_segment(seg: &str) {
-    // POSIX shm objects surface at /dev/shm/<name> on Linux; the runtime maps
-    // "name" → "/hilow.<name>". Best-effort unlink (may not exist).
-    let path = format!("/dev/shm/hilow.{}", seg);
-    let _ = fs::remove_file(&path);
+fn assert_clean(label: &str, got: &(String, i32, u32), expected_stdout: &str) {
+    assert_eq!(got.0.trim(), expected_stdout, "[{}] stdout", label);
+    assert_eq!(got.1, 0, "[{}] exit code", label);
+    assert_eq!(got.2, 0, "[{}] valgrind errors", label);
 }
 
-fn unique_seg(tag: &str) -> String {
-    // No collisions across parallel test binaries / leftover runs. std::process
-    // id is stable within this test process; the tag disambiguates orderings.
-    format!("xproc_{}_{}", std::process::id(), tag)
+fn bin_path(tag: &str, which: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("hl_xproc_{}_{}_{}", std::process::id(), tag, which))
 }
 
-/// One ordering: compile A and B against a fresh unique segment, run `first`
-/// then `second` under valgrind, and assert. `first_out`/`second_out` are the
-/// expected stdout (trimmed) of whichever program runs first/second.
-fn run_ordering(tag: &str, first_src: &str, second_src: &str, first_out: &str, second_out: &str) {
-    let seg = unique_seg(tag);
-    unlink_segment(&seg); // pre-clean in case a prior crashed run leaked it
+// ---- 6a: sequential creator/attacher (share) --------------------------------
 
-    let dir = std::env::temp_dir();
-    let bin1 = dir.join(format!("hl_xproc_{}_{}_1", std::process::id(), tag));
-    let bin2 = dir.join(format!("hl_xproc_{}_{}_2", std::process::id(), tag));
-    compile_with_seg(first_src, &seg, &bin1);
-    compile_with_seg(second_src, &seg, &bin2);
-
-    // Sequential launch: `first` creates the segment, writes, and EXITS; the
-    // segment persists; `second` then attaches and observes the persisted value.
-    let (out1, code1, verr1) = run_under_valgrind(&bin1);
-    let (out2, code2, verr2) = run_under_valgrind(&bin2);
-
-    // Always unlink our segment + binaries, even if an assert below fails.
-    unlink_segment(&seg);
-    let _ = fs::remove_file(&bin1);
-    let _ = fs::remove_file(&bin2);
-
-    assert_eq!(out1.trim(), first_out, "[{}] first program stdout", tag);
-    assert_eq!(out2.trim(), second_out, "[{}] second program stdout", tag);
-    assert_eq!(code1, 0, "[{}] first program exit code", tag);
-    assert_eq!(code2, 0, "[{}] second program exit code", tag);
-    assert_eq!(verr1, 0, "[{}] first program valgrind errors", tag);
-    assert_eq!(verr2, 0, "[{}] second program valgrind errors", tag);
+fn run_share_ordering(tag: &str, first_src: &str, second_src: &str, first_out: &str, second_out: &str) {
+    let prefix = unique_prefix(tag);
+    unlink_prefix(&prefix);
+    let b1 = bin_path(tag, "1");
+    let b2 = bin_path(tag, "2");
+    compile_fixture(first_src, &prefix, &b1);
+    compile_fixture(second_src, &prefix, &b2);
+    // Sequential: `first` creates + writes + EXITS (segment persists); `second`
+    // then attaches and observes the persisted value.
+    let r1 = finish(valgrind_child(&b1), "first");
+    let r2 = finish(valgrind_child(&b2), "second");
+    unlink_prefix(&prefix);
+    let _ = fs::remove_file(&b1);
+    let _ = fs::remove_file(&b2);
+    assert_clean("first", &r1, first_out);
+    assert_clean("second", &r2, second_out);
 }
 
-// A-then-B: A creates (100 → writes 105, prints 105); segment persists at 105;
-// B attaches (ignores its init 200), reads the persisted 105, prints 105.
-// Proves: creator initializes + writes, persistence across process exit,
-// attacher ignores its own initializer and observes the shared value.
 #[test]
 fn xproc_share_a_then_b() {
     require_valgrind();
-    run_ordering(
-        "a_then_b",
-        "tests/xproc/share/a.hl",
-        "tests/xproc/share/b.hl",
-        "105",
-        "105",
-    );
+    run_share_ordering("a_then_b", "tests/xproc/share/a.hl", "tests/xproc/share/b.hl", "105", "105");
 }
 
-// B-then-A: B creates (200, prints 200); segment persists at 200; A attaches
-// (ignores its init 100), reads 200, adds 5, prints 205. Proves the creator/
-// attacher role is decided by launch order (whoever wins O_CREAT|O_EXCL), and
-// the attacher reads AND writes the same shared slot.
 #[test]
 fn xproc_share_b_then_a() {
     require_valgrind();
-    run_ordering(
-        "b_then_a",
-        "tests/xproc/share/b.hl",
-        "tests/xproc/share/a.hl",
-        "200",
-        "205",
+    run_share_ordering("b_then_a", "tests/xproc/share/b.hl", "tests/xproc/share/a.hl", "200", "205");
+}
+
+// ---- 6b: single-process dedup -----------------------------------------------
+
+fn run_single(tag: &str, src: &str, expected: &str) {
+    let prefix = unique_prefix(tag);
+    unlink_prefix(&prefix);
+    let b = bin_path(tag, "0");
+    compile_fixture(src, &prefix, &b);
+    let r = finish(valgrind_child(&b), tag);
+    unlink_prefix(&prefix);
+    let _ = fs::remove_file(&b);
+    assert_clean(tag, &r, expected);
+}
+
+// Three same-thread writes fire (changed) exactly once each; the pull adds
+// nothing (R1 exactness on a placed cell). Output "3".
+#[test]
+fn xproc_dedup_same_thread() {
+    require_valgrind();
+    run_single("dedup_same", "tests/xproc/dedup_same/prog.hl", "3");
+}
+
+// An async producer's writes are delivered to main by the epoch pull (not the
+// inbox — placed cross-thread skips it), no double. Output "done".
+#[test]
+fn xproc_dedup_cross_thread() {
+    require_valgrind();
+    run_single("dedup_cross", "tests/xproc/dedup_cross/prog.hl", "done");
+}
+
+// ---- 6b: concurrent cross-process delivery ----------------------------------
+
+/// Compile consumer+producer against a fresh unique prefix, run BOTH under
+/// valgrind concurrently, assert both, unlink. `ready`-handshake in the fixtures
+/// removes the startup race.
+fn run_concurrent(tag: &str, consumer_src: &str, producer_src: &str, cons_out: &str, prod_out: &str) {
+    let prefix = unique_prefix(tag);
+    unlink_prefix(&prefix);
+    let bc = bin_path(tag, "cons");
+    let bp = bin_path(tag, "prod");
+    compile_fixture(consumer_src, &prefix, &bc);
+    compile_fixture(producer_src, &prefix, &bp);
+    // Spawn both, THEN wait — they run in parallel (separate OS processes).
+    let cc = valgrind_child(&bc);
+    let pc = valgrind_child(&bp);
+    let rc = finish(cc, "consumer");
+    let rp = finish(pc, "producer");
+    unlink_prefix(&prefix);
+    let _ = fs::remove_file(&bc);
+    let _ = fs::remove_file(&bp);
+    assert_clean("consumer", &rc, cons_out);
+    assert_clean("producer", &rp, prod_out);
+}
+
+// Producer's remote write to the placed counter is delivered to the consumer's
+// watcher by the consumer's epoch pull; consumer observes the threshold.
+#[test]
+fn xproc_prodcons_delivery() {
+    require_valgrind();
+    run_concurrent(
+        "prodcons",
+        "tests/xproc/prodcons/consumer.hl",
+        "tests/xproc/prodcons/producer.hl",
+        "consumer observed threshold",
+        "producer done",
+    );
+}
+
+// The watcher process exits after one change; the producer completes its full
+// burst regardless (no cross-process coupling — R-B, no queues).
+#[test]
+fn xproc_watcher_exits_no_coupling() {
+    require_valgrind();
+    run_concurrent(
+        "watcher_exits",
+        "tests/xproc/watcher_exits/consumer.hl",
+        "tests/xproc/watcher_exits/producer.hl",
+        "consumer exits early",
+        "producer done",
+    );
+}
+
+// The spec's Cross-Process Watchers example (docs/hilow-design.md), realized as
+// two programs: the producer increments a named shared counter to 100; the
+// watcher program observes the crossing and prints "Done!". Enforces that the
+// spec example compiles and runs from this commit onward.
+#[test]
+fn xproc_spec_example_done() {
+    require_valgrind();
+    run_concurrent(
+        "spec_example",
+        "tests/xproc/spec_example/watcher.hl",
+        "tests/xproc/spec_example/producer.hl",
+        "Done!",
+        "",
     );
 }

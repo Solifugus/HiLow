@@ -1,0 +1,14 @@
+// Phase 6b DEDUP (same-thread, R1 exactness): three same-thread writes each fire
+// (changed) exactly once — the epoch pull at the print's safe point adds nothing
+// (last_seen was advanced to the last write). Segment name XSEG_c is rewritten
+// uniquely by the harness.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    let fires = 0
+    let w = watcher((changed)c) { fires += 1 }
+    c += 1
+    c += 1
+    c += 1
+    print(fires)
+    return 0
+}

@@ -2296,6 +2296,12 @@ impl CodeGenerator {
             // main-exit path runs at a time, so emitting on both is safe.)
             if self.uses_async {
                 self.output.push_str("  hl_async_join_all();\n");
+            }
+            // Phase 6b: the final drain also runs hl_placed_clear (release the
+            // placed-watch records' cells). A placement-only program (no async)
+            // still needs it, so gate on async OR placement — but NOT on bare
+            // 5c `shared` (no placement), keeping that corpus byte-identical.
+            if self.uses_async || self.uses_placement {
                 self.output.push_str("  hl_thread_final_drain();\n");
             }
 
@@ -2468,10 +2474,14 @@ impl CodeGenerator {
     /// the top of a loop body (brief §5b amendment). Reading the inbox-nonempty
     /// flag each iteration lets a pure-compute `loop { }` event loop drain its
     /// inbox (runtime-entry safe points alone never fire in a loop that does not
-    /// allocate). Emits NOTHING when the program has no `async` block, so the
-    /// single-threaded corpus is byte-identical.
+    /// allocate). Phase 6b: also emit when the program uses `shared("name")`
+    /// placement — a cross-process consumer spins on a threshold (`while (…) {}`)
+    /// with no allocation, and the back-edge is where its epoch pull runs. Emits
+    /// NOTHING otherwise (no `async`, no placement), so the existing corpus —
+    /// including 5c `shared`-without-async programs (no placement) — is
+    /// byte-identical.
     fn emit_loop_safepoint(&mut self) {
-        if self.uses_async {
+        if self.uses_async || self.uses_placement {
             self.output.push_str("    hl_thread_safepoint();\n");
         }
     }
@@ -7997,6 +8007,12 @@ impl CodeGenerator {
             // byte-identical.
             if self.uses_async {
                 self.output.push_str("  hl_async_join_all();\n");
+            }
+            // Phase 6b: the final drain also runs hl_placed_clear (release the
+            // placed-watch records' cells). A placement-only program (no async)
+            // still needs it, so gate on async OR placement — but NOT on bare
+            // 5c `shared` (no placement), keeping that corpus byte-identical.
+            if self.uses_async || self.uses_placement {
                 self.output.push_str("  hl_thread_final_drain();\n");
             }
 

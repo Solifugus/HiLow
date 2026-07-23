@@ -1,0 +1,13 @@
+// Phase 6b: the watcher process exits after observing a single change — it does
+// NOT wait for full production. Proves no cross-process coupling: the producer
+// is unaffected by the consumer leaving (R-B, no queues).
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    let seen = 0
+    let w = watcher((changed)c) { seen = 1 }
+    ready = 1
+    while (seen < 1) { }
+    print("consumer exits early")
+    return 0
+}

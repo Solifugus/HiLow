@@ -1,0 +1,24 @@
+// Phase 6b: the spec's Cross-Process Watchers example, watcher program. The
+// announcement is guarded by `announced` so it prints once regardless of how
+// many times (changed) fires — cross-process delivery COALESCES, so a threshold
+// watcher must be idempotent (it reasons about the current value at fire time,
+// never a fire count). The spec snippet shows `onCounter.end()` for the same
+// effect.
+high program(): i32 {
+    shared("XSEG_c") let counter: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    let done = 0
+    let announced = 0
+    let onCounter = watcher((changed)counter) {
+        if (counter >= 100) {
+            if (announced < 1) {
+                print("Done!")
+                announced = 1
+            }
+            done = 1
+        }
+    }
+    ready = 1
+    while (done < 1) { }
+    return 0
+}

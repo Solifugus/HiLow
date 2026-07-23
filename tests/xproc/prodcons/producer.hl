@@ -1,0 +1,10 @@
+// Phase 6b cross-process producer. Waits for the consumer's ready signal, then
+// writes the counter to the threshold.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    while (ready < 1) { }
+    c = 5
+    print("producer done")
+    return 0
+}

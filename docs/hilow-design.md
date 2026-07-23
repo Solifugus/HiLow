@@ -1764,29 +1764,40 @@ Each watcher looks at the situation when it fires and decides what to do — inc
 
 ### Cross-Process Watchers
 
-Variables marked `shared` can be watched across processes:
+A `shared("name")` variable names a shared-memory segment (`shared("name")`,
+Phase 6a). Two separately-launched programs that declare the same name share one
+typed slot; a write in one is observed by a watcher in the other. `shared`
+without a name stays in-process (cross-thread) only.
 
 ```hilow
-shared let counter = 0
-
-// Process 1
-async {
-  for (let i = 0; i < 100; i += 1) {
-    counter += 1
-  }
-}
-
-// Process 2
-watcher onCounter(counter) {
-  print(f"Counter: {counter}")
-  if (counter >= 100) {
-    print("Done!")
-    onCounter.end()
-  }
+// Process 1 (producer program)
+shared("counter") let counter = 0
+let i = 0
+while (i < 100) {
+  counter += 1
+  i += 1
 }
 ```
 
-The runtime handles the inter-process notification — the syntax is identical to single-process watchers.
+```hilow
+// Process 2 (watcher program)
+shared("counter") let counter = 0
+let done = 0
+
+watcher onCounter(counter) {
+  if (counter >= 100) {
+    print("Done!")
+    done = 1
+    onCounter.end()
+  }
+}
+// keep observing (draining at the loop back-edge) until the threshold
+while (done < 1) { }
+```
+
+The runtime handles the inter-process notification — the watcher syntax is
+identical to single-process watchers; only the `("name")` on the declaration
+opts the variable into the cross-process segment.
 
 **Consistency model.** Across processes, the runtime guarantees that at least one watcher fire occurs per *logical* change to a `shared` variable, but may **coalesce** rapid changes. If process 1 writes `counter` from 5 to 6 to 7 to 8 in quick succession, process 2's watcher may fire once with `counter=8` rather than three times with successive values. The body should not assume it sees every intermediate value when watching shared state; it should reason about the current value at the moment of fire.
 

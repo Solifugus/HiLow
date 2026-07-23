@@ -1,0 +1,14 @@
+// Phase 6b: the spec's Cross-Process Watchers example (design "Cross-Process
+// Watchers"), producer program — realized. Waits for the watcher's ready signal
+// (test-determinism; not shown in the illustrative spec snippet), then produces.
+high program(): i32 {
+    shared("XSEG_c") let counter: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    while (ready < 1) { }
+    let i = 0
+    while (i < 100) {
+        counter += 1
+        i += 1
+    }
+    return 0
+}

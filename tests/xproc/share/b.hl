@@ -2,7 +2,7 @@
 // As CREATOR: initializes the segment to 200, prints 200.
 // As ATTACHER: ignores its init (200), reads and prints the current shared value.
 high program(): i32 {
-    shared("xproc_share") let v: i32 = 200
+    shared("XSEG") let v: i32 = 200
     print(v)
     return 0
 }

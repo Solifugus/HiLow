@@ -1,0 +1,13 @@
+// Phase 6b cross-process consumer. Subscribes to the placed counter, signals
+// ready (so the producer only writes once we are watching — removes the startup
+// race), then blocks until its watcher observes the threshold.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    let done = 0
+    let w = watcher((changed)c) { if (c >= 5) { done = 1 } }
+    ready = 1
+    while (done < 1) { }
+    print("consumer observed threshold")
+    return 0
+}

@@ -1,0 +1,12 @@
+// Phase 6b DEDUP (cross-thread): an async producer writes the placed cell; main's
+// epoch pull (not the inbox — placed cross-thread skips it) delivers (changed),
+// setting done. Order-insensitive: main blocks until done.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    let done = 0
+    let w = watcher((changed)c) { if (c >= 3) { done = 1 } }
+    async { c = 1; c = 2; c = 3 }
+    while (done < 1) { }
+    print("done")
+    return 0
+}

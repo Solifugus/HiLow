@@ -744,3 +744,48 @@ every codegen change is gated on `shared_segment.is_some()`/`placed_vars`/
   `(assigned)` fires on epoch advance (at-least-once, coalescible);
   `(changed)` fires iff drain-time value ≠ last-delivered. Backoff polling; the
   spec's Cross-Process Watchers example becomes a real 2-program fixture.
+
+## Part J — Phase 6b landed (2026-07-23): cross-process DELIVERY
+
+The watch side of placement. The declaring thread keeps one record per watched
+placed cell — `{cell (retained), last_seen_epoch, last_delivered}`
+(HiLowThreadContext.placed_watches) — and, at the EXISTING drain safe points
+(runtime entries + loop back-edges), pulls: on epoch advance it delivers locally
+via the 5c in-process notify path. No new safe points. Existing corpus
+byte-identical (32 at-risk async/shared/loop programs diffed vs 6c530a8, 0 diffs;
+every codegen change gated on `uses_async || uses_placement`, placement being new
+syntax).
+
+### J.1 Delivered
+- Runtime: `HiLowThreadContext.placed_watches` (+ `idle_polls`). `hl_shm_epoch`
+  (acquire); `hl_shm_exchange_i32` returns the new epoch (so a same-thread writer
+  advances its record to exactly its own write). `hl_placed_watch_ensure` (on
+  subscribe, seeds last_seen/last_delivered = current), `hl_thread_pull_placed`
+  (safe points, with backoff), `hl_thread_pull_placed_once` (residual at final
+  drain), `hl_placed_clear` (final drain: free records + release cells).
+- The pull UNIFIES cross-thread-local and cross-process delivery:
+  `hl_notify_deliver` does NOT enqueue for a placed cell to a non-declaring
+  thread (`cell->shm && owner != self` → skip); that thread's own pull delivers.
+  Multi-thread-watching is thereby correct for free (each thread's pull fires
+  only its own watchers).
+- Dedup (protects R1 exactness): a same-thread write fires synchronously (R1)
+  and `hl_cell_set_i32` then advances this thread's record to the epoch it
+  produced — the pull skips it. Monotone epoch ⇒ never skips a real remote write.
+- Codegen: `emit_loop_safepoint` and the exit `hl_thread_final_drain` now also
+  fire under `uses_placement` (a placement-only consumer spins on a threshold
+  with no allocation; the back-edge is where its pull runs, and the final drain
+  releases the records). Join stays async-only.
+
+### J.2 Adjudications / deviations (binding record)
+| # | Item | Resolution |
+|---|------|------------|
+| 6b-i | Cross-thread-local (same-process) delivery to a placed cell: inbox or pull? | PULL. A placed cell's cross-thread notify skips the inbox; the declaring thread's epoch pull delivers — one path for every non-same-thread write, and multi-thread-watching correct for free. hl_inbox_fire_entry is untouched. |
+| 6b-ii | `(changed)` fire count on the pull path | Coalescible (R3): the pull may fire `(changed)` more than the minimum (e.g. it observes an intermediate value, then the residual final-drain pull delivers the rest). A threshold watcher MUST be idempotent — the spec-example fixture guards its announcement with a flag (the spec shows `onCounter.end()`). Fire count is NOT asserted anywhere. (Found live: an un-guarded spec fixture printed "Done!" twice under one interleaving — exactly the brief's warning.) |
+| 6b-iii | Backoff | `hl_thread_pull_placed`: sched_yield for the first 16 idle polls, then nanosleep in 50us steps capped at 1ms; reset on any delivery. Futex wait deferred (brief §6). Zero cost when `placed_watches == NULL`. |
+| 6b-iv | Residual delivery at exit | The final drain pulls once before clearing (mirrors the inbox's residual fire, 5b-vi) so a change published just before exit still reaches its watcher. |
+| 6b-v | Spec example's producer loop was C-style `for` (`for (let i=0; …)`), which HiLow does not implement (its `for` is iterator-form only) — the example never compiled. | Changed to a `while` loop in BOTH the spec text and the fixture, to satisfy the brief's "the example compiles as written". This exceeds the "one-token edit" the brief anticipated (the C-style-`for`-in-spec discrepancy is pre-existing and independent). FLAGGED for the owner — see the session debrief; only this one example's loop was touched, no other spec `for`. |
+
+### J.3 Forward to 6c (lifecycle — mini-brief after 6b)
+- Segment cleanup policy (persistent-by-default vs unlink-on-last-detach; crash
+  tolerance); attach/detach visibility; process liveness as a watchable
+  (pid-as-cell). Not designed before 6b's reality exists (the 4a lesson).

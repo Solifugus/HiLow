@@ -13,12 +13,25 @@
 #include <sys/stat.h>    // Phase 6a: fstat (attacher segment size), mode bits
 #include <unistd.h>      // Phase 6a: ftruncate/close, nanosleep companion
 #include <time.h>        // Phase 6a: nanosleep for the bounded init-wait backoff
+#include <sched.h>       // Phase 6b: sched_yield for the idle-pull backoff
 #include "runtime.h"
 
 // Phase 6a: forward decl — the placed-cell header teardown (hl_cell_release,
 // below) detaches the segment; the definition lives with the shm section next
 // to the scalar constructors. Only the opaque pointer type is needed here.
 static void hl_shm_detach(HiLowShmSegment* seg);
+
+// Phase 6b: per-declaring-thread bookkeeping for a watched cross-process
+// (placed) cell — one record per (thread, cell). Forward-declared here because
+// hl_cell_subscribe (record create), hl_thread_safepoint (pull), and
+// hl_thread_final_drain (teardown) all precede the shm section where the
+// bodies live (they need the segment epoch/value accessors). HiLowThreadContext
+// is already typedef'd in runtime.h.
+struct HiLowPlacedWatch;
+static void hl_placed_watch_ensure(HiLowCell* cell);     // on subscribe
+static void hl_thread_pull_placed(HiLowThreadContext* ctx); // at safe points (with backoff)
+static size_t hl_thread_pull_placed_once(HiLowThreadContext* ctx); // residual drain (no backoff)
+static void hl_placed_clear(HiLowThreadContext* ctx);    // at final drain
 
 // Phase 5b: threaded runtime mode. When the compiled program uses `async`
 // (or, later, `shared`), the compiler defines HILOW_THREADED for BOTH this
@@ -1031,6 +1044,14 @@ void hl_cell_subscribe(HiLowCell* c, int modifier, void* body_fn, void* env, HiL
         w->subs = sub;
     }
     hl_cell_sub_unlock(c);
+
+    // Phase 6b: subscribing to a cross-process (placed) cell registers a
+    // bookkeeping record on THIS (the declaring) thread so the pull can deliver
+    // remote/cross-thread changes. Idempotent (find-or-create) — a watcher with
+    // both (changed) and (assigned) subscribes twice but wants one record.
+    // Initialized to the current epoch/value: subscription observes the current
+    // value and fires nothing (only later changes fire).
+    if (c->shm) hl_placed_watch_ensure(c);
 }
 
 void hl_cell_unsubscribe_watcher(HiLowCell* c, HiLowWatcher* w) {
@@ -1227,6 +1248,11 @@ struct HiLowThreadContext {
     HiLowInbox inbox;
     uint64_t thread_id;                  // owner comparison / documented ordering
     struct HiLowThreadContext* reg_next; // global registry link
+    struct HiLowPlacedWatch* placed_watches; // Phase 6b: watched placed cells on
+                                         // THIS thread (NULL ⟺ none → the pull is
+                                         // a single pointer check, zero cost).
+    unsigned idle_polls;                 // Phase 6b: consecutive idle safe points
+                                         // (drives backoff; reset on any delivery).
 };
 
 // Global thread registry (mutex-guarded; off the hot path). Threads self-register
@@ -1370,8 +1396,12 @@ void hl_thread_safepoint(void) {
     if (hl_notify_depth != 0) return;
     HiLowThreadContext* ctx = hl_tls_ctx;
     if (!ctx) return;
-    if (atomic_load(&ctx->inbox.nonempty) == 0) return;
-    hl_thread_drain_inbox();
+    if (atomic_load(&ctx->inbox.nonempty) != 0) hl_thread_drain_inbox();
+    // Phase 6b: pull cross-process (placed) changes. Cheap when this thread
+    // watches no placed cells (one pointer check → return). A remote write does
+    // NOT touch the inbox nonempty flag, so this must run independently of the
+    // drain above.
+    if (ctx->placed_watches != NULL) hl_thread_pull_placed(ctx);
 }
 
 // Thread teardown: a final drain (axiom 6 — after this the inbox is empty), then
@@ -1382,6 +1412,11 @@ void hl_thread_final_drain(void) {
     HiLowThreadContext* ctx = hl_tls_ctx;
     if (!ctx) return;
     hl_thread_drain_inbox();
+    // Phase 6b: deliver any residual placed change one last time before clearing
+    // (residual delivery at end-of-world, mirroring the inbox's final drain —
+    // 5b-vi). A change published just before exit still reaches its watcher.
+    if (ctx->placed_watches != NULL) hl_thread_pull_placed_once(ctx);
+    hl_placed_clear(ctx);   // Phase 6b: free placed-watch records + release their cells
     pthread_mutex_lock(&hl_registry_lock);
     HiLowThreadContext** pp = &hl_registry;
     while (*pp && *pp != ctx) pp = &(*pp)->reg_next;
@@ -1519,6 +1554,15 @@ static void hl_notify_deliver(HiLowThreadContext* self, HiLowWatcher* state,
     HiLowThreadContext* owner = state->owner_ctx;
     if (owner == NULL || owner == self) {
         ((HiLowWatcherBody)body_fn)(env, cell, delta);
+    } else if (cell->shm != NULL) {
+        // Phase 6b: a cross-process (placed) cell is delivered to a non-declaring
+        // thread's watcher by THAT thread's epoch pull, not the inbox — this
+        // unifies cross-thread-local and cross-process delivery through the one
+        // pull path (and makes multi-thread-watching correct: each thread's pull
+        // fires only its own watchers). So do NOT enqueue here; the owner's pull
+        // observes the epoch bump this write produced. (A same-thread write,
+        // owner==self above, still fires synchronously — R1.)
+        return;
     } else {
         hl_inbox_enqueue(owner, state, cell, body_fn, env, event,
                          hl_delta_copy_for_queue(delta));
@@ -1816,12 +1860,21 @@ static int32_t hl_shm_load_i32(HiLowShmSegment* seg) {
     return atomic_load_explicit((_Atomic int32_t*)seg->payload, memory_order_acquire);
 }
 
+// Phase 6b: acquire-load the epoch (the watch side's advance signal). Pairs with
+// the writer's release increment below.
+static uint64_t hl_shm_epoch(HiLowShmSegment* seg) {
+    return atomic_load_explicit((_Atomic uint64_t*)&seg->header->epoch, memory_order_acquire);
+}
+
 // Store payload then bump the epoch, both release-ordered — the single
 // publication point (axiom 3). Returns the prior payload value (so the caller's
-// (changed) test works), like an exchange.
-static int32_t hl_shm_exchange_i32(HiLowShmSegment* seg, int32_t v) {
+// (changed) test works), like an exchange; `*out_new_epoch` (Phase 6b) receives
+// the epoch THIS write produced, so a same-thread writer can advance its own
+// bookkeeping to exactly its write (never past a concurrent remote write).
+static int32_t hl_shm_exchange_i32(HiLowShmSegment* seg, int32_t v, uint64_t* out_new_epoch) {
     int32_t old = atomic_exchange_explicit((_Atomic int32_t*)seg->payload, v, memory_order_release);
-    atomic_fetch_add_explicit((_Atomic uint64_t*)&seg->header->epoch, 1, memory_order_release);
+    uint64_t prev = atomic_fetch_add_explicit((_Atomic uint64_t*)&seg->header->epoch, 1, memory_order_release);
+    if (out_new_epoch) *out_new_epoch = prev + 1;
     return old;
 }
 
@@ -1995,7 +2048,127 @@ uint32_t hl_shm_test_magic(void)   { return HL_SHM_MAGIC; }
 uint32_t hl_shm_test_layout(void)  { return HL_SHM_LAYOUT_VERSION; }
 uint32_t hl_shm_test_abi(void)     { return HL_SHM_ABI_VERSION; }
 uint32_t hl_shm_test_type_i32(void){ return HL_SHM_TYPE_I32; }
+
+// Test-only: simulate a REMOTE write to a placed cell's segment — store payload
+// + bump epoch, WITHOUT any local notify (exactly what a write from another
+// process does to this process's view). Lets the shm harness drive the pull's
+// (changed)/(assigned)/ABA semantics deterministically from one process.
+void hl_shm_test_poke_i32(HiLowScalar* s, int32_t v) {
+    uint64_t ignore;
+    hl_shm_exchange_i32(s->cell.shm, v, &ignore);
+}
 #endif
+
+// ==========================================================================
+// Phase 6b: cross-process DELIVERY — the watch side of placement.
+// The write side (6a) already publishes payload + epoch. The declaring thread
+// keeps one record per watched placed cell and, at existing drain safe points,
+// pulls: on epoch advance it delivers locally per R3 (at-least-once, coalescing;
+// (changed) only if the value differs from the last delivered). The pull is the
+// single delivery path for every non-same-thread write (cross-thread-local AND
+// cross-process); same-thread writes fire synchronously (R1) and advance the
+// record so the pull skips them (dedup — protects R1 exactness).
+// ==========================================================================
+
+typedef struct HiLowPlacedWatch {
+    HiLowCell* cell;              // OWNED (retained) — valid for the pull's life
+    uint64_t   last_seen_epoch;   // highest epoch already delivered on this thread
+    int32_t    last_delivered;    // value at the last delivery ((changed) compare)
+    struct HiLowPlacedWatch* next;
+} HiLowPlacedWatch;
+
+static HiLowPlacedWatch* hl_placed_find(HiLowThreadContext* ctx, HiLowCell* cell) {
+    for (HiLowPlacedWatch* p = ctx->placed_watches; p; p = p->next) {
+        if (p->cell == cell) return p;
+    }
+    return NULL;
+}
+
+// On subscribe to a placed cell (declaring thread). Idempotent. Seeds the record
+// with the current epoch/value so subscription observes the current value and
+// fires nothing — only later changes fire.
+static void hl_placed_watch_ensure(HiLowCell* cell) {
+    HiLowThreadContext* ctx = hl_current_ctx();
+    if (hl_placed_find(ctx, cell)) return;
+    HiLowScalar* s = (HiLowScalar*)cell;
+    HiLowPlacedWatch* p = malloc(sizeof(HiLowPlacedWatch));
+    hl_cell_retain(cell);                       // own it across the record's life
+    p->cell = cell;
+    p->last_seen_epoch = hl_shm_epoch(cell->shm);
+    p->last_delivered = hl_shm_load_i32(cell->shm);
+    (void)s;
+    p->next = ctx->placed_watches;
+    ctx->placed_watches = p;
+}
+
+// A same-thread local write just delivered synchronously (R1) and produced
+// `new_epoch`/`value`. Advance THIS thread's record (if it watches the cell) so
+// the pull does not re-fire this write. Called from hl_cell_set_i32.
+static void hl_placed_mark_local_write(HiLowCell* cell, uint64_t new_epoch, int32_t value) {
+    HiLowThreadContext* ctx = hl_tls_ctx;
+    if (!ctx || !ctx->placed_watches) return;
+    HiLowPlacedWatch* p = hl_placed_find(ctx, cell);
+    if (!p) return;
+    p->last_seen_epoch = new_epoch;
+    p->last_delivered = value;
+}
+
+// The pull (safe points, notify_depth==0). For each watched placed cell, if the
+// epoch advanced, deliver: (changed) iff the value differs from last delivered,
+// then (assigned) unconditionally (epoch advanced). Returns the number of cells
+// that delivered (0 ⟹ idle → the caller backs off).
+static size_t hl_thread_pull_placed_once(HiLowThreadContext* ctx) {
+    size_t delivered = 0;
+    for (HiLowPlacedWatch* p = ctx->placed_watches; p; p = p->next) {
+        uint64_t epoch = hl_shm_epoch(p->cell->shm);
+        if (epoch <= p->last_seen_epoch) continue;   // dedup: already delivered
+        int32_t v = hl_shm_load_i32(p->cell->shm);
+        bool changed = (v != p->last_delivered);
+        // Advance BEFORE firing so a same-cell write inside the body (which would
+        // bump the epoch again) is not double-counted by this same pull.
+        p->last_seen_epoch = epoch;
+        p->last_delivered = v;
+        if (changed) hl_cell_notify(p->cell, HL_ARR_CHANGED, NULL);
+        hl_cell_notify(p->cell, HL_SCALAR_ASSIGNED, NULL);
+        delivered++;
+    }
+    return delivered;
+}
+
+// Idle backoff (brief §3-6b): a placed-watching thread that keeps finding
+// nothing (and has an empty inbox) yields, then sleeps up to a small cap, so a
+// consumer spinning on a threshold does not burn a core. Reset on any delivery.
+static void hl_thread_pull_placed(HiLowThreadContext* ctx) {
+    size_t delivered = hl_thread_pull_placed_once(ctx);
+    if (delivered > 0) {
+        ctx->idle_polls = 0;
+        return;
+    }
+    ctx->idle_polls++;
+    if (ctx->idle_polls < 16) {
+        sched_yield();
+    } else {
+        // Escalate to a bounded sleep, capped ~1ms. Latency tuning (futex wait)
+        // is deferred (brief §6).
+        long ns = (long)(ctx->idle_polls - 15) * 50000L;  // 50us steps
+        if (ns > 1000000L) ns = 1000000L;                 // cap 1ms
+        struct timespec ts = { 0, ns };
+        nanosleep(&ts, NULL);
+    }
+}
+
+// Final drain: free the records and release their cells (the retain taken in
+// ensure). After this the thread holds no placed references.
+static void hl_placed_clear(HiLowThreadContext* ctx) {
+    HiLowPlacedWatch* p = ctx->placed_watches;
+    while (p) {
+        HiLowPlacedWatch* next = p->next;
+        hl_cell_release_full(p->cell);
+        free(p);
+        p = next;
+    }
+    ctx->placed_watches = NULL;
+}
 
 void hl_scalar_retain(HiLowScalar* s) {
     if (s != NULL) {
@@ -2200,13 +2373,14 @@ void hl_cell_set_i32(HiLowScalar* s, int32_t v) {
     // subscriber list) and always route through hl_cell_notify, which takes the
     // subscriber lock and snapshots safely (empty list → fires nothing, cheap).
     int32_t old;
+    uint64_t new_epoch = 0;
     bool placed = (s->cell.shm != NULL);
     bool shared = (s->cell.sub_lock != NULL);   // placed ⟹ shared (superset)
     if (placed) {
         // Phase 6a: store to the mapped slot and bump the epoch (release) — one
-        // publication point (axiom 3). Nothing pulls the epoch cross-process
-        // until 6b, but the write protocol is complete now.
-        old = hl_shm_exchange_i32(s->cell.shm, v);
+        // publication point (axiom 3). Phase 6b: capture the epoch this write
+        // produced so a same-thread watcher advances its record to exactly here.
+        old = hl_shm_exchange_i32(s->cell.shm, v, &new_epoch);
     } else if (shared) {
         old = atomic_exchange_explicit((_Atomic int32_t*)&s->value.value.i32_val, v, memory_order_seq_cst);
     } else {
@@ -2220,6 +2394,11 @@ void hl_cell_set_i32(HiLowScalar* s, int32_t v) {
         }
         hl_cell_notify(&s->cell, HL_SCALAR_ASSIGNED, NULL);
     }
+    // Phase 6b: a placed cell's SAME-THREAD write delivered synchronously above
+    // (R1). Advance this thread's bookkeeping (if it watches the cell) so the
+    // pull does not re-fire this write. A cross-thread writer has no record here
+    // (no-op); the declaring thread's pull delivers that write via the epoch.
+    if (placed) hl_placed_mark_local_write(&s->cell, new_epoch, v);
 }
 
 // Reference-payload sets (Phase 3e-α). `v` arrives +1 (ADOPTED — callers
