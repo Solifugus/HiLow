@@ -1,0 +1,14 @@
+// Phase 6c crash robustness, case 3 (re-attach after FULL population turnover).
+// By the time this runs, every process that ever touched the segment is gone —
+// one killed violently, one exited normally — so for an interval the segment had
+// zero attachers. It still exists and still holds 42.
+//
+// This is ruling c1 made executable: persistence is SEMANTIC, not an artifact of
+// someone holding the segment open. Under an unlink-on-last-detach policy this
+// program would fail (it would create a fresh zeroed segment and print 0), which
+// is precisely why c1 rejects that policy.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    print(c)
+    return 0
+}

@@ -1,0 +1,22 @@
+// Phase 6c crash robustness, case 2 (survivor). Waits for the victim consumer to
+// attach, then writes a fixed number of increments. The harness SIGKILLs the
+// victim partway through this loop; the producer must be COMPLETELY unaffected
+// (R-B: placement has no queues and no back-pressure, so a peer's death cannot
+// block, slow, or fail a write). The write count is fixed, so the segment's
+// final value is deterministic and crash_consumer/fresh.hl can assert it exactly
+// — this asserts a WRITE count (ours, local, exact), never a fire count.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    while (ready < 1) { }
+    // 500000 increments runs ~1.5s under valgrind, so the harness's 400ms kill
+    // of the consumer lands solidly INSIDE this loop rather than after it — the
+    // point of the case is that the producer keeps writing across a peer's death.
+    let i = 0
+    while (i < 500000) {
+        c += 1
+        i += 1
+    }
+    print("producer done")
+    return 0
+}

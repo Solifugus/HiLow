@@ -1,0 +1,26 @@
+// Phase 6c crash robustness, case 1 / phase B (after the violent death). Runs
+// only AFTER the producer was SIGKILLed in the middle of its write loop — that
+// is, the segment was abandoned between an atomic payload publication and the
+// next epoch bump, with no unwinding and no detach.
+//
+// Three properties, all deterministic:
+//   attachable — reaching the first statement at all means the versioned header
+//     still verified; a corrupted or half-written header would have exited(1).
+//   no wedge   — this program HAS a watcher, so every back-edge of the loop runs
+//     a real epoch pull against a segment whose epoch will now never advance.
+//     The idle backoff must keep the loop progressing rather than blocking. A
+//     hang here is the failure this case exists to catch.
+//   value kept — the producer's last completed write is still there (c > 0). The
+//     exact value is timing-dependent and is deliberately NOT asserted.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    let fires = 0
+    let w = watcher((changed)c) { fires += 1 }
+    let i = 0
+    while (i < 200) {
+        i += 1
+    }
+    if (c > 0) { print("intact") }
+    if (c < 1) { print("EMPTY") }
+    return 0
+}

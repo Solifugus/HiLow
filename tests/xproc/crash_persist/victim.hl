@@ -1,0 +1,9 @@
+// Phase 6c crash robustness, case 3 (violent half of the turnover). Attaches,
+// signals ready, spins until SIGKILLed. Run without valgrind.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    ready = 1
+    loop { }
+    return 0
+}

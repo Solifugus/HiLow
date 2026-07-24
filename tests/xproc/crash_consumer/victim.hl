@@ -1,0 +1,11 @@
+// Phase 6c crash robustness, case 2 (victim). Attaches to the segment, signals
+// ready, then spins forever so the harness's SIGKILL lands while it is an
+// ATTACHED peer — the death of a reader must not disturb the writer. Run
+// without valgrind (see crash_producer/producer.hl for why).
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    ready = 1
+    loop { }
+    return 0
+}

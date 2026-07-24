@@ -1,0 +1,11 @@
+// Phase 6c crash robustness, case 2 (re-attach). Runs AFTER the victim was
+// SIGKILLed while attached. Proves the segment is still well-formed and
+// reusable: the versioned header still verifies (a failure here would exit(1)
+// with a startup error) and the payload holds exactly the producer's completed
+// write count — the violent death of an attached peer neither corrupted the
+// segment nor left it unattachable.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    print(c)
+    return 0
+}

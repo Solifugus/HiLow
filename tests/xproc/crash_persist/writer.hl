@@ -1,0 +1,10 @@
+// Phase 6c crash robustness, case 3 (orderly half of the turnover). Waits for
+// the victim to attach, writes a known value, and exits NORMALLY.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    while (ready < 1) { }
+    c = 42
+    print("wrote")
+    return 0
+}

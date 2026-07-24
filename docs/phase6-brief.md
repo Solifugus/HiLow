@@ -190,17 +190,52 @@ and single-threaded controls unchanged.
 **Expected diffs**: existing corpus untouched; runtime delivery
 additions + the spec edit.
 
-### 6c — Lifecycle (sketch only — mini-brief after 6b)
+### 6c — Lifecycle (mini-brief, ratified after 6b — supersedes the sketch)
 
-Scope to be adjudicated then, expected to include: segment cleanup
-policy (persistent-by-default vs unlink-on-last-detach, and what crash
-tolerance means for either — pid-table scan, robust-futex-style
-recovery, or explicit user-driven cleanup); attach/detach visibility;
-and process liveness **as a watchable** — the audit's pid-as-cell idea
-resurrected legitimately: attachment yields a handle whose aliveness
-is a cell, so process supervision becomes ordinary watcher code. That
-is the payoff that makes 6c worth its grit, and why it must not be
-designed before 6b's reality exists.
+The sketch that stood here proposed adjudicating cleanup policy,
+attach/detach visibility, and process-liveness-as-a-watchable. Seen
+against 6b's reality, most of that collapses: the lifecycle questions
+were already answered by decisions 6a/6b had to make, and the liveness
+feature needs a spec concept the language does not have. What is left
+is the part that was never tested — violent death.
+
+**Rulings**
+
+- **c1 — Persistence is SEMANTIC, not provisional.** Segments
+  outliving their processes is the feature, not an unresolved default.
+  It is already pinned by the 6a persistence fixture (A writes and
+  exits; B attaches later and observes). **Unlink-on-last-detach is
+  rejected**: it would break that pinned behavior.
+- **c2 — Cleanup is explicit and out-of-language.** No language
+  surface, no automatic reclamation. The deliverable is documentation
+  of the `/hilow.<name>` namespace and how to inspect and remove
+  segments.
+- **c3 — No new language surface in 6c.** Liveness-as-a-watchable
+  (pid-as-cell) is **deferred** until the spec gains a process-identity
+  concept — see §6.
+- **c4 — Placed-cell delivery bypasses the inbox, which is sound for
+  scalars only.** Recorded in §6 as a revisit precondition on shared
+  containers.
+
+**Deliverables** — crash-robustness fixtures are the phase's real
+content: SIGKILL the producer mid-write-loop (consumer observes only
+valid values, no corruption, no hang — atomic publication under violent
+death); SIGKILL the consumer (producer unaffected, segment reusable, a
+fresh consumer attaches and observes); both-exit-then-re-attach
+(persistence across full population turnover). All under the xproc
+harness, with every SURVIVING process valgrind-clean; the harness
+unlinks as always. Plus: the idempotency guidance note in the spec's
+Cross-Process Watchers; the cleanup documentation of c2; and the
+Phase 6 closure summary in STATUS and state-of-migration.
+
+**Why a killed process is not valgrinded.** A SIGKILLed process never
+reaches valgrind's `ERROR SUMMARY`, so its report cannot be evaluated.
+Victims run natively; every survivor is valgrinded exactly as before.
+
+**Expected diffs**: existing corpus untouched; new fixtures, harness
+crash support, and documentation only. No compiler or runtime change —
+6c asserts that what 6a/6b built already survives violent death, and
+the fixtures confirmed it did, with no code change required.
 
 ## 4. Placement and protocol axioms (one place)
 
@@ -244,7 +279,33 @@ designed before 6b's reality exists.
 ## 6. Deliberately deferred (recorded so no session pulls them in)
 
 - Shared containers — own phase; in-process design first; shm layout
-  only after that.
+  only after that. **Revisit precondition (ruling c4):** placed-cell
+  delivery bypasses the inbox entirely — a placed cell's cross-thread
+  notify does not enqueue; the declaring thread's epoch pull delivers
+  instead. That is sound because a placed scalar's whole value is
+  republished atomically on every write, so a late pull that observes
+  only the newest value has lost nothing but intermediate states, which
+  R3 already licenses it to lose. A container has no such property: an
+  epoch says *something changed* without saying what, and the delta
+  (which element, which key) cannot be reconstructed from the current
+  value. Shared containers therefore cannot simply inherit the pull —
+  they need either a per-element epoch scheme or a real cross-process
+  delta channel, and that choice must be made before any layout work.
+- Process liveness as a watchable (pid-as-cell) — **deferred by ruling
+  c3**, not abandoned. Rationale: the payoff is real (supervision
+  becomes ordinary watcher code), but it cannot be built without
+  language surface HiLow does not yet have. A liveness cell must be
+  *reachable* from a program, which means attachment has to yield a
+  process-identity value — a handle, a pid type, or a participants
+  collection — and the spec currently has no such concept, no syntax
+  for it, and no rule for what its type is. It also needs machinery
+  6a/6b deliberately avoided: a participants table in the segment
+  (registration on attach, and detection of departure WITHOUT a
+  cooperative detach, since 6c's own fixtures prove departures are
+  frequently violent), which reintroduces exactly the shared mutable
+  bookkeeping axiom 4 keeps out of the segment. Precondition for
+  revisiting: the spec gains a process-identity concept; then this is
+  scoped as its own phase, not folded into a lifecycle pass.
 - Multi-variable segments; segment namespacing/ACL refinements beyond
   0600 + documented per-user global namespace.
 - Blocking futex wait (beyond the noted single-cell possibility);

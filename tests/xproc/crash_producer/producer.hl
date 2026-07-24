@@ -1,0 +1,15 @@
+// Phase 6c crash robustness, case 1 (victim). Waits for the consumer's ready
+// signal, then writes the placed counter in an UNBOUNDED loop — it never exits
+// on its own, so the harness's SIGKILL is guaranteed to land mid-write-loop
+// (between an atomic payload publication and the next epoch bump). Run WITHOUT
+// valgrind: a SIGKILLed process never reaches valgrind's ERROR SUMMARY, and the
+// brief scopes the leak check to the SURVIVING processes.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    while (ready < 1) { }
+    loop {
+        c += 1
+    }
+    return 0
+}

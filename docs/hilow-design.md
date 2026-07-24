@@ -1801,6 +1801,66 @@ opts the variable into the cross-process segment.
 
 **Consistency model.** Across processes, the runtime guarantees that at least one watcher fire occurs per *logical* change to a `shared` variable, but may **coalesce** rapid changes. If process 1 writes `counter` from 5 to 6 to 7 to 8 in quick succession, process 2's watcher may fire once with `counter=8` rather than three times with successive values. The body should not assume it sees every intermediate value when watching shared state; it should reason about the current value at the moment of fire.
 
+**Write idempotent bodies.** Coalescing is an *at-least-once* guarantee, and the emphasis belongs on *at least*: the delivery count is not the change count in either direction. A cross-process watcher body may run more times than there were logical changes, so any body whose effect is not naturally repeatable must make itself repeatable.
+
+The common trap is a threshold. In the example above, `counter >= 100` is not a one-time event — it is a condition that stays true for every subsequent fire. Worse, a body can run twice for a *single* crossing: one delivery observes the crossing, and a later one delivers the epochs that were still outstanding when the first fired. Written naively, that prints `Done!` twice:
+
+```hilow
+// WRONG — the effect repeats
+watcher onCounter(counter) {
+  if (counter >= 100) {
+    print("Done!")      // may print more than once for one crossing
+  }
+}
+```
+
+Both fixes are ordinary code. Ending the subscription on the first success stops any further delivery:
+
+```hilow
+watcher onCounter(counter) {
+  if (counter >= 100) {
+    print("Done!")
+    onCounter.end()     // no further fires for this watcher
+  }
+}
+```
+
+Or guard the effect with state the body owns, which is the general form and also covers watchers that must keep observing:
+
+```hilow
+let announced = 0
+watcher onCounter(counter) {
+  if (counter >= 100) {
+    if (announced < 1) {
+      print("Done!")
+      announced = 1
+    }
+  }
+}
+```
+
+The rule generalizes: treat a cross-process watcher body the way you would treat a message handler that may see duplicates. Reading the current value, computing from it, and assigning a result are all naturally idempotent and need no guard. Incrementing a counter, appending to a log, or sending something outward are not, and do.
+
+#### Segment Lifetime and Cleanup
+
+A `shared("name")` declaration maps a POSIX shared-memory object named `/hilow.<name>`, created with mode `0600` — readable and writable only by the user who created it. The name is a single flat per-user namespace: two programs share state exactly when they use the same `name`, with no scoping by directory, package, or process tree. Choose names accordingly; a generic `"counter"` will collide with any other program of yours using `"counter"`.
+
+**Segments persist.** A segment lives until it is explicitly removed, not until its last user exits. This is deliberate and is what makes the feature work: a program can write a value, exit, and have a program started an hour later attach and read it. It also means the state survives a crash — if a process is killed outright, the segment and its value remain intact and the next process to attach sees them.
+
+The consequence is that cleanup is your responsibility. HiLow has no language surface for removing a segment, no automatic reclamation, and no reference counting across processes. A segment you no longer want is removed from outside the language. On Linux the objects are visible as ordinary files:
+
+```
+ls -l /dev/shm/hilow.*          # list every HiLow segment
+rm /dev/shm/hilow.counter       # remove the segment named "counter"
+rm /dev/shm/hilow.myapp.*       # remove a whole prefixed family
+```
+
+Removal unlinks the *name*. Processes already attached keep their existing mapping and continue to work; they are not disturbed. But the name is now free, so the next program to declare `shared("counter")` creates a brand-new, freshly initialized segment rather than joining the old one. Unlinking a live segment therefore silently splits its users into two groups, which is rarely what you want — remove segments when nothing is using them.
+
+Segments do not survive a reboot.
+
+Two practical habits follow. Prefix the names of segments belonging to one application (`"myapp.counter"`) so they can be listed and removed as a family. And in tests, always remove the segments you create: a leaked segment makes the next run of the same test attach to stale state instead of starting clean, which presents as an inexplicable failure. HiLow's own cross-process test harness unlinks every segment it creates, before and after each run, for exactly this reason.
+
 ### Conditions Inside Watchers
 
 A watcher fires whenever any subscribed value changes (per its modifiers). The body can guard its logic with ordinary conditionals:

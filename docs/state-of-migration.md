@@ -789,3 +789,99 @@ syntax).
 - Segment cleanup policy (persistent-by-default vs unlink-on-last-detach; crash
   tolerance); attach/detach visibility; process liveness as a watchable
   (pid-as-cell). Not designed before 6b's reality exists (the 4a lesson).
+- **Outcome (see Part K): the mini-brief kept only crash tolerance.** Cleanup
+  policy was already decided (persistence is semantic, c1); attach/detach
+  visibility and pid-as-cell were deferred for want of a spec concept (c3).
+
+## Part K — Phase 6c landed (2026-07-23): crash robustness; Phase 6 closure
+
+The mini-brief (ratified in chat, inlined into `docs/phase6-brief.md` §3-6c,
+replacing the sketch) found most of the sketch's scope already settled by
+decisions 6a/6b had to make. What remained untested was **violent death**, and
+that became the phase.
+
+**6c changed no compiler and no runtime code.** It asserts that what 6a/6b built
+already survives SIGKILL — and the fixtures confirmed it on the first run, with
+no fix required. This is a real result, not an empty phase: the crash properties
+were previously *believed*, and are now *pinned*.
+
+### K.1 Delivered
+- **Three crash-robustness fixture sets** under the xproc harness
+  (`tests/xproc/crash_producer|crash_consumer|crash_persist/`), harness grew
+  7 → **10**:
+  - `crash_producer` — the producer is SIGKILLed inside an unbounded write
+    loop. Two deterministic phases: (A) a consumer watching the LIVE producer
+    verifies no delivered value ever goes backwards (atomic publication), exiting
+    on a fire-count FLOOR (`fires >= 20`, assertable under R3) rather than an
+    exact count; (B) after the kill, a fresh survivor attaches — proving the
+    abandoned segment still verifies its header, still holds the last completed
+    write, and does not wedge the pull (it watches, so every loop back-edge runs
+    a real pull against an epoch that will never advance again).
+  - `crash_consumer` — an attached consumer is SIGKILLed 400ms into the
+    producer's 500000-write burst (burst measured at ~1.5s under valgrind, so
+    the kill provably lands mid-burst). The producer completes unaffected and a
+    fresh process then reads exactly `500000` — every write landed. R-B (no
+    queues, no back-pressure) made executable.
+  - `crash_persist` — full population turnover: one participant dies violently,
+    the other exits normally, and for an interval the segment has ZERO
+    attachers. It still holds `42`. This is ruling c1 made executable — under
+    unlink-on-last-detach this program would print `0`.
+- **Harness crash support**: `native_child` (victims run without valgrind — a
+  SIGKILLed process never reaches valgrind's `ERROR SUMMARY`, so its report
+  cannot be evaluated; every SURVIVOR is still valgrinded), and `kill_and_reap`,
+  which asserts the victim was **still running** before the SIGKILL — a victim
+  that exited on its own would silently void the crash scenario, so the test
+  fails loudly instead.
+- **Spec**: an idempotency guidance subsection in Cross-Process Watchers —
+  at-least-once means a body may run more times than there were changes; the
+  threshold double-fire found in 6b is the worked example, with both fixes
+  (`onCounter.end()` and a guard flag) shown. Plus a **Segment Lifetime and
+  Cleanup** subsection (ruling c2): the `/hilow.<name>` flat per-user namespace,
+  0600, why segments persist, `ls`/`rm` on `/dev/shm`, that unlinking a live
+  segment silently splits its users into two groups, and that segments do not
+  survive a reboot.
+- **Brief §6** gained the two deferral records with their real preconditions
+  (c3 liveness, c4 containers) — see K.2.
+
+### K.2 Adjudications / deviations (binding record)
+| # | Item | Resolution |
+|---|------|------------|
+| 6c-i | Cleanup policy | **Persistence is SEMANTIC** (c1), not a provisional default; unlink-on-last-detach REJECTED — it would break the 6a persistence fixture. Cleanup is explicit and out-of-language (c2): documented, not implemented. |
+| 6c-ii | Cleanup tooling: docs-only or a `hilow-shm` helper script? | **Docs-only** (decide-and-disclose). On Linux the entire operation is `ls`/`rm` against `/dev/shm`; a helper script would add an unversioned shell utility to the tree, and a second way to name segments, for no capability gain. |
+| 6c-iii | Victim processes are not valgrinded | A SIGKILLed process never reaches valgrind's `ERROR SUMMARY`, so `finish()` cannot evaluate it. The mini-brief scopes the leak check to SURVIVORS; victims run natively (also faster, so they are reliably deep in their work at kill time). Compensating control: `kill_and_reap` asserts the victim was still alive, so a victim that died early fails the test rather than passing it vacuously. |
+| 6c-iv | Case 1 originally used a fixed-iteration observation window sized to outlive the kill | REPLACED. The window was unworkable: `idle_polls` backoff is cumulative, so post-death each iteration sleeps ~1ms — a window large enough to survive the live phase (fast iterations) took ~30 minutes once the producer died. The tension is intrinsic (iteration cost differs ~100× between "peer alive" and "peer dead"), so timing tuning cannot fix it. Restructured into the two deterministic phases above, with NO sleeps: each fixture's own exit condition sequences the test. |
+| 6c-v | Liveness-as-a-watchable (pid-as-cell) | DEFERRED (c3), with the preconditions recorded in brief §6: it needs a spec process-identity concept (attachment must yield a reachable value with a type), and a segment participants table with departure detection that cannot assume a cooperative detach — which 6c's own fixtures prove, since departures are frequently violent. That table is exactly the shared mutable bookkeeping axiom 4 keeps out of the segment. |
+| 6c-vi | Shared containers revisit precondition | Recorded (c4): the pull is sound for scalars because a placed scalar's whole value is republished atomically, so a late pull loses only intermediate states — which R3 already licenses. A container has no such property: an epoch says *something* changed without saying *what*, and the delta cannot be reconstructed from the current value. Containers need a per-element epoch scheme or a real cross-process delta channel; that choice precedes any layout work. |
+
+### K.3 Phase 6 closure — the process tier
+**Guarantees.** A `shared("name")` scalar is a typed slot in a named POSIX shm
+segment, placed rather than transported. Every attach verifies a versioned
+header (mismatch = startup error). Every write is one release-ordered
+publication of payload + epoch; every remote observation begins with an
+acquire-ordered epoch load. Delivery to a remote watcher happens only on its
+declaring thread, only at its existing safe points, under R3 — the process tier
+adds a *source* of local deliveries, never a second delivery system. Participants
+are fully decoupled: a peer's death — including SIGKILL mid-write — cannot block,
+slow, corrupt, or fail another participant, and leaves the segment well-formed,
+valued, and attachable. Segments persist beyond every process that used them.
+
+**Explicitly NOT guaranteed.** No global cross-producer order. No fire counts —
+delivery is at-least-once and coalescing, so bodies must be idempotent. No
+automatic cleanup — segments are removed from outside the language, or not at
+all. No liveness surface — a process cannot watch another's aliveness. No shared
+containers, no multi-variable segments, no blocking futex wait, nothing
+cross-machine. Concurrency *proving* (racy-RMW warnings, `(atomic-add)=`) remains
+future work: `x += 1` on a shared scalar is still two atomic operations.
+
+### K.4 The cell migration is COMPLETE
+Phase 6c closes Phase 6, and Phase 6 is the last phase in
+`docs/cell-migration-audit.md` — **the audit has no successor**, so the migration
+track ends here. Phases 1, 1.5a–1.5e, 2a–2e, 3a–3e, 4a–4b, 5a–5c, 6a–6c: all
+landed.
+
+**This is a stop-and-report point, not an automatic advance.** The mini-brief
+said "phase line advances per the audit's next phase"; there is no such phase.
+Which `docs/development-plan.md` phase resumes is an owner decision. The one
+concrete outstanding pin is the sole remaining `#[ignore]`
+(unknown-with-options), destined for **development-plan Phase 9b (Time Type)** —
+that is the indicated candidate, not a ruling.

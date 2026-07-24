@@ -1,0 +1,30 @@
+// Phase 6c crash robustness, case 1 / phase A (live observation). Watches a
+// placed counter while its producer runs, and verifies the NO-CORRUPTION
+// property: every delivered value is >= the previously delivered one. The
+// producer only ever increments, so a decrease could only come from a torn read
+// or a half-published epoch — this is the atomic-publication check.
+//
+// It exits on a FIRE-COUNT FLOOR (`fires >= 20`), never an exact count: delivery
+// coalesces (R3), so "at least 20 deliveries have happened" is assertable while
+// "exactly N" is not. The producer's loop is unbounded, so this floor is always
+// reached and the consumer always terminates.
+//
+// The verdict is a property ("ok"), not a value: which value the counter holds
+// at any moment is timing-dependent.
+high program(): i32 {
+    shared("XSEG_c") let c: i32 = 0
+    shared("XSEG_r") let ready: i32 = 0
+    let last = 0
+    let bad = 0
+    let fires = 0
+    let w = watcher((changed)c) {
+        if (c < last) { bad = 1 }
+        last = c
+        fires += 1
+    }
+    ready = 1
+    while (fires < 20) { }
+    if (bad > 0) { print("CORRUPT") }
+    if (bad < 1) { print("ok") }
+    return 0
+}
